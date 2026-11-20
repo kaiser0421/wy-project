@@ -29,6 +29,8 @@ ignore = ["S101"]  # assert is fine in tests
 [tool.ruff.lint.per-file-ignores]
 "backend/tests/**" = ["S", "B011"]
 "backend/migrations/**" = ["E501"]
+# SQL built only from module-level constant column lists, never from input
+"backend/src/ticketing/api/routes/admin_users.py" = ["S608"]
 
 [tool.mypy]
 python_version = "3.12"

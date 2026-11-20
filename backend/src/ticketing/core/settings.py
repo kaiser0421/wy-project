@@ -38,7 +38,22 @@ class Settings(BaseSettings):
     secret_key: SecretStr = SecretStr(DEV_SECRET)
     payment_webhook_secret: SecretStr = SecretStr(DEV_SECRET)
     cookie_secure: bool = False
-    allowed_origins: tuple[str, ...] = ("http://localhost:8080",)
+    allowed_origins: tuple[str, ...] = ("http://localhost:8080", "http://127.0.0.1:8080")
+    session_idle_minutes: int = Field(default=30, ge=1)
+    session_absolute_hours: int = Field(default=12, ge=1)
+    csrf_key_version: int = Field(default=1, ge=1)
+
+    # --- password hashing (argon2id) --------------------------------------------------
+    argon2_time_cost: int = Field(default=2, ge=1)
+    argon2_memory_kib: int = Field(default=19456, ge=8192)
+    argon2_parallelism: int = Field(default=1, ge=1)
+    argon2_max_concurrency: int = Field(default=4, ge=1)
+
+    # --- rate limits (Redis fixed windows; all tunable for load tests) -------------------
+    rate_limit_login_per_email: int = Field(default=10, ge=1)  # per 15 min
+    rate_limit_login_per_ip: int = Field(default=50, ge=1)  # per minute
+    rate_limit_register_per_ip: int = Field(default=10, ge=1)  # per hour
+    rate_limit_login_global_per_s: int = Field(default=300, ge=1)
 
     # --- seed accounts ----------------------------------------------------------------
     seed_admin_email: str = "admin@example.com"
