@@ -1,0 +1,8 @@
+zone_code,row_label,seat_number
+A,R1,1
+A,R2
+A,=2+2,4
+UNKNOWN,R2,2
+A,R2,0
+A,R3,1
+a,r3,01

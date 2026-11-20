@@ -1,0 +1,5 @@
+[
+  {"zone_code": "A", "row_label": "R1", "seat_number": "1"},
+  {"zone_code": "a", "row_label": "r1", "seat_number": "001"},
+  {"zone_code": "A", "row_label": "R1", "seat_number": "2"}
+]
