@@ -100,7 +100,7 @@ async def release_order(
     seats = await conn.fetch(
         """UPDATE seats SET status='available', order_id=NULL, version=version+1,
                   updated_at=app_now()
-           WHERE order_id=$1 AND status=$2 RETURNING seat_idx, version""",
+           WHERE order_id=$1 AND status=$2 RETURNING id, seat_idx, version""",
         order_id,
         "sold" if expected == "refund_pending" else "held",
     )
@@ -110,6 +110,10 @@ async def release_order(
         order_id,
     )
     quantity = order["quantity"]
+    if len(seats) != quantity or {seat["id"] for seat in seats} != {
+        item["seat_id"] for item in items
+    }:
+        raise RuntimeError("Order release violates seat ownership invariants.")
     quota = await conn.fetchval(
         """UPDATE user_event_quota SET reserved=reserved-$3
            WHERE user_id=$1 AND event_id=$2 AND reserved >= $3 RETURNING reserved""",
@@ -117,8 +121,8 @@ async def release_order(
         order["event_id"],
         quantity,
     )
-    if len(seats) != quantity or len(items) != quantity or quota is None:
-        raise RuntimeError("Order release violates booking invariants.")
+    if quota is None:
+        raise RuntimeError("Order release violates quota invariants.")
     if expected == "pending_payment":
         await conn.execute(
             """INSERT INTO provider_cancellations (attempt_id, next_try_at)

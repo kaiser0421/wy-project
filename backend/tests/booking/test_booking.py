@@ -10,6 +10,7 @@ from tests.booking.support import assert_invariants, book, cancel, inventory, ra
 from tests.support import create_user, login
 from ticketing.booking import sweeper, test_hooks
 from ticketing.booking.idempotency import Claim, request_hash
+from ticketing.booking.orders import release_order
 from ticketing.core.db import create_pool
 from ticketing.core.service import ServiceContext
 
@@ -264,4 +265,36 @@ async def test_allocation_distinguishes_locked_inventory_from_sold_out(db, buyer
     sold_out = await book(second, event, "allocation-key", zone_code="A", quantity=1)
     assert sold_out.status_code == 409
     assert sold_out.json()["code"] == "insufficient-seats"
+    await assert_invariants(db)
+
+
+async def test_release_rolls_back_when_active_item_points_to_another_seat(db, buyers, test_clock):
+    (buyer,) = await buyers(1)
+    event, seats = await inventory(db, buyer.user_id, 2)
+    hold = await book(buyer, event, "hold-key", seat_ids=seats[:1])
+    assert hold.status_code == 201
+    order_id = await db.fetchval("SELECT id FROM orders")
+    await db.execute("UPDATE order_items SET seat_id=$2 WHERE order_id=$1", order_id, seats[1])
+    expires_at = await db.fetchval("SELECT expires_at FROM orders WHERE id=$1", order_id)
+    await test_clock.set(expires_at)
+
+    with pytest.raises(RuntimeError, match="seat ownership"):
+        async with db.transaction():
+            await release_order(db, order_id, "pending_payment", "expired")
+
+    assert await db.fetchval("SELECT status FROM orders WHERE id=$1", order_id) == "pending_payment"
+    assert await db.fetchval("SELECT id FROM seats WHERE order_id=$1", order_id) == seats[0]
+    assert (
+        await db.fetchval(
+            "SELECT seat_id FROM order_items WHERE order_id=$1 AND released_at IS NULL", order_id
+        )
+        == seats[1]
+    )
+    assert await db.fetchval("SELECT reserved FROM user_event_quota") == 1
+    assert await db.fetchval("SELECT count(*) FROM outbox") == 1
+
+    await db.execute("UPDATE order_items SET seat_id=$2 WHERE order_id=$1", order_id, seats[0])
+    async with db.transaction():
+        assert await release_order(db, order_id, "pending_payment", "expired") is not None
+    assert await db.fetchval("SELECT count(*) FROM outbox") == 2
     await assert_invariants(db)
