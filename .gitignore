@@ -1,0 +1,26 @@
+# 內部評分筆記，不入版控
+.review/
+
+# 本機工具狀態
+.claude/
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+
+# 環境與執行期資料
+.env
+data/
+*.log
+!docs/ai-defects.log
