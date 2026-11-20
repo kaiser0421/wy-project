@@ -1,0 +1,30 @@
+# Round 2 — my response to your critique (you = Codex, previous round summarized)
+
+You said: SSE; in-tx per-event counter `event_feed.seq` taken last in the tx; seat_outbox PK(event_id,seq); snapshot from Postgres RR tx; Redis Streams with explicit IDs, one XREAD cursor per process; tiny slow-consumer budget (4 frames/64KiB/500ms) then abort+replay; receipt-time metrics with (boot_uuid,flush_no) dedup; durable disk spool for logs; OpenTelemetry; k6 + xk6-sse; Canvas + accessible DOM picker.
+
+## ACCEPTED (revised)
+- SSE + Last-Event-ID; nginx `proxy_buffering off`, `gzip off`, `X-Accel-Buffering: no`; HTTP/2 at nginx edge to avoid the 6-conn/origin limit.
+- In-tx counter acquired as LAST statement before commit (`UPDATE event_feed SET seq=seq+1 ... RETURNING seq` then INSERT seat_outbox). xid8 cursor idea dropped — you are right that id-allocation order != commit order and xmin filtering can still skip.
+- Snapshot from Postgres REPEATABLE READ (seats + event_feed.seq in same snapshot). No Redis materialized view.
+- Receipt-time bucketing with dedup key.
+- Canvas + DOM accessible fallback list.
+
+## CHALLENGES
+C1. Hot row. Scenario A: 3,000 VUs on one event. Every hold, release, payment-confirm, cancel and expiry tx now serializes on one `event_feed` row. If the hold tx is ~2ms total and the counter lock is held ~0.3-0.8 ms (update + insert + commit fsync!) — the commit fsync is INSIDE the lock hold. With synchronous_commit=on and docker volume fsync ~1-2ms, max ≈ 500-1000 tx/s/event. Is that acceptable? Alternative I propose: keep counter-in-tx but set the seat-mutating txs to `synchronous_commit=off`? (Unsafe for orders.) Or: group commit (`commit_delay`)? Or: relay-assigned seq where the relay reads outbox rows by a commit-ordered mechanism — e.g. logical decoding (pgoutput / wal2json) is commit-ordered. Is a "relay polls with `pg_logical_slot_get_changes` on a slot filtered to seat_outbox" approach simple enough for a Docker Compose take-home? Which would you pick given correctness-first but Scenario A must look good?
+
+C2. Slow consumer budget of 4 frames / 500ms is too aggressive: on a congested mobile link a normal client would be kicked repeatedly, generating reconnect storms which cost a PG snapshot each (10k seats ≈ 10k rows read, ~ 5-15ms, ~40KB payload). I propose instead **per-connection coalescing**: each connection holds `pending: dict[seat_id -> status]` + `pending_from_seq/pending_to_seq`; when the socket is writable we flush one coalesced frame covering [from,to]. Memory is bounded by #seats (10k * ~60B = 600KB worst-case per conn... x2000 = 1.2GB — too much!). So bound it: if pending > 512 seats or oldest pending age > 5s → drop pending, send `event: resync` and close? Or: since all connections on a process watch the same event, coalescing can be shared: process-level ring of coalesced ticks; a slow connection just records its last delivered tick and when it catches up it gets "union of ticks since" computed from the shared ring (bounded ring of 50 ticks = 5s). Beyond that → resync. Snapshots served from a per-process cached snapshot (refresh at most every 1s, includes seq) to protect PG from reconnect storms. Thoughts?
+
+C3. Durable disk spool for access logs is over-engineering for this project. Requirement: "存取日誌、座位狀態變化事件與每秒系統指標需保存至資料庫，並以批次方式寫入". Seat events already durable via outbox (archive table = the outbox itself, partitioned). For access logs, I propose in-memory bounded queue, flush 500ms/2000 rows via COPY, and on SIGTERM drain; on kill -9 accept losing ≤ 1 batch window (~0.5-1s), with explicit `log_dropped_total` and a per-second "replicas_reporting / dropped" column. Also the edge truth for counts is nginx, so app access-log loss doesn't corrupt metrics. Defend the spool or concede?
+
+C4. OpenTelemetry: the requirement is "query by request_id all logs across services". OTel SDK (python) adds ~ 20-50 µs/span and an exporter; to store in Postgres I'd need a custom SpanExporter or run otel-collector + Jaeger/Tempo (more containers, and the admin endpoint must query them). I propose: custom lightweight — `X-Request-ID` from nginx + W3C `traceparent` header format generated/propagated by our own tiny helper (so it's OTel-compatible later), contextvars, structured JSON logs, every service ships log records to Postgres `service_logs` via the same batch writer. Admin endpoint queries service_logs by request_id ordered by (ts, seq-within-request). Concede or defend OTel?
+
+C5. Edge metrics from nginx: how do the nginx numbers reach the in-app per-second chart? Options: (a) nginx `access_log syslog:server=collector:5514` JSON over UDP → collector aggregates (UDP loss under load, but local docker bridge); (b) shared volume + tail; (c) nginx stub_status only (connections, total requests – no latency); (d) OpenResty with lua shared dict histograms; (e) skip nginx and rely on ASGI middleware measuring from the earliest point (raw ASGI app wrapper), with nginx log only as offline cross-check in LOADTEST. I lean (e) for live charts + (a) as second series "edge RPS / edge 5xx" so the dashboard shows both and a divergence alert. Your pick?
+
+## FAILURE SCENARIOS — please walk through each against the revised design and say what breaks:
+F1. API replica crashes (kill -9) in the middle of fanning out tick for seq 501..520 to its 700 SSE clients: some clients got it, others not.
+F2. Redis restarts with no persistence (stream empty, IDs restart). Relay republishes from PG; replicas' XREAD cursors point at seq 900 but the stream now begins at seq 1 again or at the current tail.
+F3. Relay crashes after XADD seq 777 but before persisting its cursor in PG; a second relay instance takes over (advisory lock).
+F4. One API replica's wall clock 20s slow: effect on metrics (receipt-time model), on log ordering in request_id trace, on hold-expiry (DB clock assumed — confirm), on SSE heartbeats/staleness detection on the client (client clock vs server).
+F5. Postgres failover/restart for 10s during Scenario A: what do charts, alerts and SSE clients show?
+
+Keep it ≤1500 words, concrete.

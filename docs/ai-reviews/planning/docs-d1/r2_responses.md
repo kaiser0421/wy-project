@@ -1,0 +1,13 @@
+Responses to round-2:
+- Host dev: DSNs quoted; uvicorn --host 0.0.0.0; callback URL set on payment-mock with host.docker.internal + Linux extra_hosts host-gateway; API->mock via published port (PAYMENT_PROVIDER_URL 暫定); compose workers keep internal DSNs. PLAN task wording (T0.2/T0.3/T1.7) is outside my edit scope -> reported to coordinator.
+- Payment replay: resolved per PLAN §5.3 (completed -> replay stored terminal 201 or 402; in_progress -> 409 until reconciler finishes); cancel replays original success (status 暫定 200, TODO T2.5). LOADTEST: dedicated 付款拒絕輪 with per-order expected 402 + replay assertion. 402 missing from PLAN §11 -> reported.
+- Writer rate: track_commit_timestamp=on in loadtest env; committed rate bucketed by pg_xact_commit_timestamp(outbox.xmin); assignment throughput separate; commit->apply now measured from commit ts. CP2 pass requires >=95% of 300 committed changes/s over steady window (暫定 tolerance).
+- Revocation: fail-closed pass criterion = all affected streams closed <=1s after 2nd failure (暫定, T4.6). PLAN §16/T4.6 ≤1s vs §7.1 ≤2s -> reported.
+- C0 stream-state check split (N/A before P4); expected_seats from fixture; added C2b item-driven reverse link check; C7b short-TTL assertion on known held orders.
+- C8a: paid must have no refund; refund_pending needs refund row; refunded needs succeeded refund. C9 rewritten with deadline-based stuck criteria (:grace), event-scoped; provider_cancellations marked 未驗證 until schema exists.
+- C10: explicit empty vs non-empty CASE branches.
+- C12: manifest-driven (lt_manifest) both directions with time bounds; timeouts must be explained.
+- C14: X-Load-Run header equality, same completion window and route exclusions both sides, app matched by request_id, run for B.
+- Repro: --env-file .env.loadtest at startup, EXPECTED_SEATS, grace var, runner runs all checks and exits nonzero; CP1 explicit stop criteria (p99 > 800ms operationalised, 暫定); CP3/CP4 runnable commands + env deltas.
+- README: 50,000 cap fixed; capacity wording; Viewer draft-report + pseudonymisation pending decision explicit.
+- PLAN T9.1/T9.2 Could wording and T9.6 §2 reference -> reported (not editable by me).

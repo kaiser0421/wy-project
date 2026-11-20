@@ -1,0 +1,18 @@
+Responses to Codex round-1 findings (numbers match your list):
+1 Fixed: k6 targets http://nginx (internal) / localhost:8080; per-VU cookie jar; sid by default, __Host-sid only with COOKIE_SECURE=true.
+2 Partly: README §4.3 now states api depends_on seed (completed_successfully); concrete seed emails/passwords/env names fixed in README §7 as a spec (coordinator decision); §5 rewritten with compose.dev.yaml port publishing, DSN env vars, PAYMENT_CALLBACK_URL via host.docker.internal (marked 暫定/TODO). nginx health route left TODO(T0.3).
+3 Fixed: §2.2 session provisioning via .env.loadtest relaxed login limit + pre-login + /auth/me validation; CP1 uses T2.x minimal seat list; CP2 writer uses order+cancel without payment. PLAN gap listed separately.
+4 Fixed: body-aware unexpected_rate; zone-sold-out-cached and 402 scoped to runs where enabled; checkout flow via payment-mock HTTP confirm (TBD T3.1); README §6 replay table per operation; payment replay contract ambiguity marked TODO(T3.2) and reported as PLAN issue (402 not in PLAN §11 status list).
+5 Fixed: 2% denominator, fresh key on payload change, VU-mode reporting, phase boundaries from per-second SQL sampling of available seats, never-sold-out reporting rule.
+6 Fixed: actual committed changes/s, steady-state TBD, slow-reader verification, commit->apply as upper bound (send->apply) + assigned_at->apply, coalescing/missing rules, three separate snapshot/stream latencies, writer HTTP metrics, establish/reconnect failures.
+7 Fixed: PG replay in recovery path; F3a restart (AOF) vs F3b generation loss; storm window 30s (暫定); revocation incl. role change, quiet streams, dropped Pub/Sub; 2 consecutive revalidation failures row. ≤1s (T4.6) vs ≤2s (§7.1) reported as PLAN inconsistency; doc uses ≤2s.
+8 Fixed: §2.4 rules — k6 UA/run-id population on access_logs, exclusions, collector drain, fail on empty, denominator = k6.
+9 Fixed: C0 precheck; C2/C3 null-safe + LEFT JOIN + event/zone link check; C4 historical count = quantity; C6 LEFT JOINs + zero-item orders; C7 uses app_now(), grace labelled, short-TTL run.
+10 Fixed: C8a/b/c split + C8d provider reconciliation; C9 scoped, states TBD, provider_cancellations noted as PLAN schema gap.
+11 Fixed: C10 requires stream-state row, compares max seq/assigned/delivered/Redis tail of current gen; C11 multiset EXCEPT ALL both ways excluding layout events; C13 hash at common (gen, layout_ver, seq) with canonical encoding. relay epoch location (event_stream_state in W8b vs relay_lease in §4) reported as PLAN issue.
+12 Fixed: C12 scoped to user+event, both directions, completed+201, time window; before 24h cleanup.
+13 Fixed: each CP has command, env delta, artifact path, pass criteria; CP1 p99 uses 800ms reference line (not hard fail — PLAN has no threshold, reported); CP2 actual writer rate; CP4 baseline vs export same-replica, SSE pending until P4; Could items marked optional with "未執行" rule.
+14 Fixed: loadtest/run.sh canonical, make wrappers thin/暫定; writer start; EVENT_ID/RUN_ID/T_START/T_END passed; psql via stdin.
+15 Fixed: capacity labelled estimate; 14s labelled modeled; applied-seq cursor; role matrix split; Viewer draft-report note; pagination cap; added PAYMENT_PROVIDER_DOWN/RECONCILER_DOWN/REFUND_STUCK.
+16 Noted; T9.6 reference is a PLAN issue.
+Also applied coordinator's PLAN v1.2 updates (export in api not worker, CP1 booking-only + sweeper throughput/W4, B distinct sessions/quiet/dropped Pub/Sub, snapshot shape + min_layout_ver, Viewer all reports, verify-all includes break-it, 402, cookie sid/__Host-sid, seed->api, Must/Should/Could, PAYMENT_CALLBACK_LAG from captured_at).
