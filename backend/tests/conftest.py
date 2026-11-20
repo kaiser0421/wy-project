@@ -11,13 +11,14 @@ import os
 import subprocess
 import sys
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import asyncpg
 import httpx
 import pytest
 from asgi_lifespan import LifespanManager
+from redis.asyncio import Redis
 from starlette.types import ASGIApp
 
 from tests.support import TestClock, install_test_clock
@@ -25,7 +26,7 @@ from ticketing.api.app import create_asgi_app
 from ticketing.core.settings import Settings
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-TEMPLATE_DB = "ticketing_template"
+TEMPLATE_DB = os.environ.get("TEST_TEMPLATE_DB", "ticketing_template")
 ADMIN_URL = os.environ.get("TEST_ADMIN_DATABASE_URL")
 
 
@@ -106,15 +107,29 @@ async def test_clock(db: asyncpg.Connection) -> TestClock:
     return await install_test_clock(db)
 
 
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+
 @pytest.fixture
-def settings(db_url: str) -> Settings:
-    return Settings(
-        app_env="test",
-        database_url=db_url,
-        redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
-        enable_test_hooks=True,
-        shutdown_drain_seconds=0,
-    )
+def settings_overrides() -> dict[str, object]:
+    """Override in a test module to tweak settings (e.g. rate limits)."""
+    return {}
+
+
+@pytest.fixture
+def settings(db_url: str, settings_overrides: dict[str, object]) -> Settings:
+    values: dict[str, object] = {
+        "app_env": "test",
+        "database_url": db_url,
+        "redis_url": REDIS_URL,
+        "enable_test_hooks": True,
+        "shutdown_drain_seconds": 0,
+        # Cheap hashes keep the suite fast; production parameters are covered by unit tests.
+        "argon2_time_cost": 1,
+        "argon2_memory_kib": 8192,
+    }
+    values.update(settings_overrides)
+    return Settings(**values)  # type: ignore[arg-type]
 
 
 @pytest.fixture
@@ -123,8 +138,31 @@ def asgi_app(settings: Settings) -> ASGIApp:
 
 
 @pytest.fixture
-async def client(asgi_app: ASGIApp) -> AsyncIterator[httpx.AsyncClient]:
+async def running_app(asgi_app: ASGIApp) -> AsyncIterator[ASGIApp]:
+    """The application with its lifespan started; Redis is flushed so limits start empty."""
+    flush = Redis.from_url(REDIS_URL)
+    try:
+        await flush.flushdb()
+    finally:
+        await flush.aclose()
     async with LifespanManager(asgi_app) as manager:  # type: ignore[arg-type]
-        transport = httpx.ASGITransport(app=manager.app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
-            yield c
+        yield manager.app
+
+
+@pytest.fixture
+def make_client(running_app: ASGIApp) -> Callable[[], httpx.AsyncClient]:
+    """Factory for independent clients (separate cookie jars) against the same app."""
+
+    def factory() -> httpx.AsyncClient:
+        transport = httpx.ASGITransport(app=running_app)
+        return httpx.AsyncClient(transport=transport, base_url="http://testserver")
+
+    return factory
+
+
+@pytest.fixture
+async def client(
+    make_client: Callable[[], httpx.AsyncClient],
+) -> AsyncIterator[httpx.AsyncClient]:
+    async with make_client() as c:
+        yield c
