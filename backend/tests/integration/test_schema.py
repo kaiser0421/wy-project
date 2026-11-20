@@ -12,6 +12,7 @@ import asyncpg
 import pytest
 
 from tests.conftest import run_alembic
+from ticketing.core.schema import SCHEMA_HEAD
 
 pytestmark = pytest.mark.integration
 
@@ -112,7 +113,7 @@ async def test_migration_round_trip(db_url: str) -> None:
     run_alembic(db_url, "upgrade", "head")
     conn = await asyncpg.connect(db_url)
     try:
-        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0001_baseline"
+        assert await conn.fetchval("SELECT version_num FROM alembic_version") == SCHEMA_HEAD
         assert await conn.fetchval("SELECT to_regclass('order_items')") is not None
     finally:
         await conn.close()

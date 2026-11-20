@@ -1,15 +1,9 @@
-"""Outbox relay: assigns per-event sequence numbers and delivers seat events to Redis Streams.
-
-P0 stub: heartbeat only. Implemented in T4.1.
-"""
+"""Outbox relay entrypoint (logic in ticketing.realtime.relay)."""
 
 from __future__ import annotations
 
-from ticketing.core.service import ServiceContext, run_background_service
-
-
-async def tick(_ctx: ServiceContext) -> None:
-    return None
+from ticketing.core.service import run_background_service
+from ticketing.realtime.relay import tick
 
 
 def main() -> None:

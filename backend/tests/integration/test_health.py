@@ -4,6 +4,8 @@ import httpx
 import pytest
 from starlette.types import ASGIApp
 
+from ticketing.core.schema import SCHEMA_HEAD
+
 pytestmark = pytest.mark.integration
 
 
@@ -18,7 +20,7 @@ async def test_ready_checks_database_redis_and_schema(client: httpx.AsyncClient)
     checks = response.json()["checks"]
     assert checks["postgres"] == "ok"
     assert checks["redis"] == "ok"
-    assert checks["schema"] == "0001_baseline"
+    assert checks["schema"] == SCHEMA_HEAD
 
 
 async def test_ready_reports_draining(client: httpx.AsyncClient, asgi_app: ASGIApp) -> None:

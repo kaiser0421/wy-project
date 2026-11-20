@@ -13,7 +13,17 @@ from starlette.types import ASGIApp
 from ticketing.api import health
 from ticketing.api.middleware import RequestContextMiddleware
 from ticketing.api.problems import install_problem_handlers
-from ticketing.api.routes import admin_users, auth
+from ticketing.api.routes import (
+    admin_users,
+    auth,
+    events,
+    imports,
+    monitoring,
+    orders,
+    payments,
+    reports,
+    seats,
+)
 from ticketing.auth.sessions import LastSeenRefresher
 from ticketing.core.db import create_pool
 from ticketing.core.http import create_http_client
@@ -22,6 +32,8 @@ from ticketing.core.passwords import PasswordHasher
 from ticketing.core.ratelimit import RateLimiter
 from ticketing.core.redis import create_redis
 from ticketing.core.settings import Settings, get_settings
+from ticketing.realtime import api_setup as realtime_setup
+from ticketing.telemetry import api_setup as telemetry_setup
 
 log = get_logger(__name__)
 
@@ -72,9 +84,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     install_problem_handlers(app)
-    app.include_router(health.router)
-    app.include_router(auth.router)
-    app.include_router(admin_users.router)
+    for module in (
+        health,
+        auth,
+        admin_users,
+        events,
+        imports,
+        reports,
+        orders,
+        payments,
+        seats,
+        monitoring,
+    ):
+        app.include_router(module.router)
+    telemetry_setup.install(app)
+    realtime_setup.install(app)
 
     def custom_openapi() -> dict[str, Any]:
         if app.openapi_schema:
