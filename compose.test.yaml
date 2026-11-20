@@ -1,0 +1,43 @@
+# Test stack: same PostgreSQL image and configuration as production (fsync on).
+#   make test   ->   docker compose -f compose.test.yaml run --rm tests
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: postgres
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    volumes:
+      - ./infra/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    tmpfs: [/var/lib/postgresql/data]
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U test -d postgres"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  tests:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: dev
+    environment:
+      APP_ENV: test
+      TEST_ADMIN_DATABASE_URL: postgresql://test:test@postgres:5432/postgres
+      REDIS_URL: redis://redis:6379/0
+      ENABLE_TEST_HOOKS: "true"
+    command: ["sh", "-c", "ruff check backend && ruff format --check backend && mypy backend/src && lint-imports && pytest -q"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
