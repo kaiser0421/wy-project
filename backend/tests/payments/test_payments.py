@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import orjson
@@ -468,4 +468,90 @@ async def test_reconciler_polls_when_callback_url_changes(db, test_clock, world,
     assert recovered.status_code == 201
     assert recovered.headers["Idempotent-Replayed"] == "true"
     assert recovered.json()["checkout_url"].endswith(original["intent_id"])
+    await assert_invariants(db)
+
+
+@pytest.mark.parametrize("lock_job", [False, True])
+async def test_cancellation_lock_timeout_does_not_skip_refunds(
+    db, settings, test_clock, world, monkeypatch, lock_job
+):
+    buyer, _, provider, ctx = world
+    now = await test_clock.advance(timedelta())
+    event, seats = await inventory(db, buyer.user_id, 3)
+    order_ids = []
+    checkouts = []
+    for index, seat in enumerate(seats):
+        hold = await book(buyer, event, f"order-key-{index}", seat_ids=[seat])
+        assert hold.status_code == 201
+        public_id = hold.json()["public_id"]
+        checkout = await start(buyer, public_id, f"payment-key-{index}")
+        assert checkout.status_code == 201
+        order_ids.append(public_id)
+        checkouts.append(checkout.json())
+
+    capture = await confirm(provider, checkouts[2])
+    assert (await callback(buyer, settings, capture)).json() == {"disposition": "accepted"}
+    for index, public_id in enumerate(order_ids):
+        assert (await cancel(buyer, public_id, f"cancel-key-{index}")).status_code == 200
+
+    blocked_attempt = UUID(checkouts[0]["attempt_id"])
+    original_cancel = Provider.cancel
+
+    async def cancel_with_lock(self, attempt_id):
+        if lock_job and attempt_id == blocked_attempt:
+            # The worker must have committed its claim before the retry write is blocked.
+            await db.fetchval(
+                "SELECT attempt_id FROM provider_cancellations WHERE attempt_id=$1 FOR UPDATE",
+                attempt_id,
+            )
+        return await original_cancel(self, attempt_id)
+
+    async with db.transaction():
+        await db.fetchval("SELECT id FROM orders WHERE public_id=$1 FOR UPDATE", UUID(order_ids[0]))
+        with monkeypatch.context() as patch:
+            patch.setattr(Provider, "cancel", cancel_with_lock)
+            await reconciler.tick(ctx)
+
+    blocked = await db.fetchrow(
+        "SELECT * FROM provider_cancellations WHERE attempt_id=$1", blocked_attempt
+    )
+    assert blocked["attempts"] == 1
+    if lock_job:
+        assert blocked["status"] == "pending"
+        assert blocked["lease_owner"] is not None
+        assert blocked["lease_until"] == now + timedelta(seconds=30)
+        await test_clock.advance(timedelta(seconds=30))
+    else:
+        assert blocked["status"] == "failed_retryable"
+        assert blocked["lease_owner"] is None
+        assert blocked["lease_until"] is None
+        assert blocked["next_try_at"] == now + timedelta(seconds=2)
+        await test_clock.advance(timedelta(seconds=2))
+
+    assert (
+        await db.fetchval(
+            "SELECT status FROM provider_cancellations WHERE attempt_id=$1",
+            UUID(checkouts[1]["attempt_id"]),
+        )
+        == "succeeded"
+    )
+    assert await db.fetchval("SELECT status FROM refunds") == "succeeded"
+    assert (
+        await db.fetchval("SELECT status FROM orders WHERE public_id=$1", UUID(order_ids[2]))
+        == "refunded"
+    )
+
+    await reconciler.tick(ctx)
+    assert (
+        await db.fetchval(
+            "SELECT status FROM provider_cancellations WHERE attempt_id=$1", blocked_attempt
+        )
+        == "succeeded"
+    )
+    assert (
+        await db.fetchval(
+            "SELECT attempts FROM provider_cancellations WHERE attempt_id=$1", blocked_attempt
+        )
+        == 2
+    )
     await assert_invariants(db)

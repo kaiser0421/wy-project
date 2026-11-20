@@ -165,28 +165,48 @@ async def _cancel_provider(
         return
     attempt_id = row["attempt_id"]
     applied = AppliedEvent()
-    succeeded = True
     try:
         intent = await provider.cancel(attempt_id)
-    except ProviderUnavailable:
-        succeeded = False
-        intent = None
-        log.warning("payment.cancel_retry", attempt_id=str(attempt_id))
-    async with transaction(ctx.db, ctx.settings) as conn:
-        if intent is not None and intent.event is not None:
-            applied = await apply_event(conn, intent.event)
-        elif succeeded:
-            await _close_intent(conn, row, attempt_id)
-        await conn.execute(
-            """UPDATE provider_cancellations SET status=$3,lease_owner=NULL,lease_until=NULL,
-                 next_try_at=app_now()+make_interval(secs=>$4)
-               WHERE attempt_id=$1 AND lease_owner=$2 AND status <> 'succeeded'""",
-            attempt_id,
-            owner,
-            "succeeded" if succeeded else "failed_retryable",
-            _retry_delay(row),
-        )
+        async with transaction(ctx.db, ctx.settings) as conn:
+            if intent is not None and intent.event is not None:
+                applied = await apply_event(conn, intent.event)
+            else:
+                await _close_intent(conn, row, attempt_id)
+            await conn.execute(
+                """UPDATE provider_cancellations SET status='succeeded',
+                     lease_owner=NULL,lease_until=NULL
+                   WHERE attempt_id=$1 AND lease_owner=$2 AND status <> 'succeeded'""",
+                attempt_id,
+                owner,
+            )
+    except Exception as exc:
+        log.warning("payment.cancel_failed", error=type(exc).__name__, attempt_id=str(attempt_id))
+        if isinstance(exc, ProviderUnavailable) or (
+            isinstance(exc, ProblemError) and exc.retryable
+        ):
+            await _retry_cancellation(ctx, owner, row)
+        return
     applied.record()
+
+
+async def _retry_cancellation(ctx: ServiceContext, owner: str, row: asyncpg.Record) -> None:
+    try:
+        async with transaction(ctx.db, ctx.settings) as conn:
+            await conn.execute(
+                """UPDATE provider_cancellations SET status='failed_retryable',
+                     lease_owner=NULL,lease_until=NULL,next_try_at=app_now()+make_interval(secs=>$3)
+                   WHERE attempt_id=$1 AND lease_owner=$2 AND status <> 'succeeded'""",
+                row["attempt_id"],
+                owner,
+                _retry_delay(row),
+            )
+    except Exception as exc:
+        # This transaction can also hit contention. The existing lease bounds the recovery wait.
+        log.warning(
+            "payment.cancel_reschedule_failed",
+            error=type(exc).__name__,
+            attempt_id=str(row["attempt_id"]),
+        )
 
 
 async def _clean_completed_keys(ctx: ServiceContext) -> None:
