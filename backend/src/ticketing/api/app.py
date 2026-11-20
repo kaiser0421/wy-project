@@ -4,20 +4,37 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
 from starlette.types import ASGIApp
 
 from ticketing.api import health
 from ticketing.api.middleware import RequestContextMiddleware
 from ticketing.api.problems import install_problem_handlers
+from ticketing.api.routes import admin_users, auth
+from ticketing.auth.sessions import LastSeenRefresher
 from ticketing.core.db import create_pool
 from ticketing.core.http import create_http_client
 from ticketing.core.logging import configure_logging, get_logger
+from ticketing.core.passwords import PasswordHasher
+from ticketing.core.ratelimit import RateLimiter
 from ticketing.core.redis import create_redis
 from ticketing.core.settings import Settings, get_settings
 
 log = get_logger(__name__)
+
+API_DESCRIPTION = """
+High-concurrency ticketing platform API.
+
+**Authentication** — `POST /api/v1/auth/login` sets an HttpOnly session cookie (`sid` on plain
+HTTP, `__Host-sid` with `COOKIE_SECURE=true`) and returns a `csrf_token`. Send it as the
+`X-CSRF-Token` header on every POST/PUT/PATCH/DELETE. `GET /api/v1/auth/me` returns it again.
+
+**Errors** — every error is `application/problem+json` (RFC 9457) with a stable `code`, a
+`retryable` flag and the `request_id` to quote when reporting problems.
+"""
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -30,10 +47,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.db = await create_pool(settings)
         app.state.redis = create_redis(settings)
         app.state.http = create_http_client(settings.payment_provider_url)
+        app.state.passwords = PasswordHasher(settings)
+        app.state.rate_limiter = RateLimiter(app.state.redis)
+        app.state.last_seen = LastSeenRefresher(app.state.db, settings)
+        app.state.last_seen.start()
         log.info("api.started", env=settings.app_env)
         try:
             yield
         finally:
+            await app.state.last_seen.stop()
+            app.state.passwords.close()
             await app.state.http.aclose()
             await app.state.redis.aclose()
             await app.state.db.close()
@@ -42,6 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="Ticketing Platform API",
         version="0.1.0",
+        description=API_DESCRIPTION,
         docs_url="/api/docs",
         redoc_url=None,
         openapi_url="/api/openapi.json",
@@ -49,6 +73,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     install_problem_handlers(app)
     app.include_router(health.router)
+    app.include_router(auth.router)
+    app.include_router(admin_users.router)
+
+    def custom_openapi() -> dict[str, Any]:
+        if app.openapi_schema:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title, version=app.version, description=app.description, routes=app.routes
+        )
+        schema.setdefault("components", {})["securitySchemes"] = {
+            "sessionCookie": {"type": "apiKey", "in": "cookie", "name": "sid"},
+            "csrfHeader": {"type": "apiKey", "in": "header", "name": "X-CSRF-Token"},
+        }
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = custom_openapi  # type: ignore[method-assign]
     return app
 
 

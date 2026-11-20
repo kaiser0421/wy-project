@@ -5,20 +5,25 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from ticketing.api.security import Public, SecureRouter
 from ticketing.core.schema import SCHEMA_HEAD
 
-router = APIRouter(prefix="/healthz", tags=["health"])
+router = SecureRouter(prefix="/healthz", tags=["health"])
 
 
-@router.get("/live", summary="Liveness probe")
+@router.get("/live", policy=Public("health"), summary="Liveness probe")
 async def live() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/ready", summary="Readiness probe (PostgreSQL, Redis, schema revision, draining)")
+@router.get(
+    "/ready",
+    policy=Public("health"),
+    summary="Readiness probe (PostgreSQL, Redis, schema revision, draining)",
+)
 async def ready(request: Request) -> JSONResponse:
     state = request.app.state
     checks: dict[str, Any] = {}
