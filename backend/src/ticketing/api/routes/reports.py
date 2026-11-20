@@ -21,7 +21,7 @@ from ticketing.api.routes.events import READ, Current, EventId, problems
 from ticketing.api.security import SecureRouter
 from ticketing.core.errors import ProblemError
 from ticketing.core.logging import get_logger
-from ticketing.events.access import EventActor
+from ticketing.events.access import EventActor, can_view
 from ticketing.reports.sales import (
     MIME,
     ExportCancelled,
@@ -61,6 +61,22 @@ class ReportResponse(FileResponse):
                 with CancelScope(shield=True):
                     await self.background()
             raise
+
+
+async def _authorize(request: Request, actor: EventActor, event_id: int) -> None:
+    """Reject forbidden or unknown events before taking an export slot.
+
+    The same rule is enforced again inside the workbook snapshot (reports.sales._event).
+    """
+    row = await request.app.state.db.fetchrow(
+        "SELECT owner_id, status::text AS status FROM events WHERE id = $1", event_id
+    )
+    if row is None or (
+        actor.role != "viewer" and not can_view(actor, row["owner_id"], row["status"])
+    ):
+        raise ProblemError(404, "not-found", "Event not found")
+    if actor.role == "user" and row["owner_id"] != actor.user_id:
+        raise ProblemError(403, "forbidden", "Users may only export reports for their own events")
 
 
 async def _export(request: Request, actor: EventActor, event_id: int, tz: ZoneInfo) -> Path:
@@ -146,7 +162,9 @@ async def sales(
         zone = ZoneInfo(tz)
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise ProblemError(422, "invalid-timezone", "Select a valid IANA timezone") from exc
-    path = await _export(request, EventActor(principal.user_id, principal.role), event_id, zone)
+    actor = EventActor(principal.user_id, principal.role)
+    await _authorize(request, actor, event_id)
+    path = await _export(request, actor, event_id, zone)
     return ReportResponse(
         path,
         media_type=MIME,

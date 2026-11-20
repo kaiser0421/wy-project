@@ -93,7 +93,12 @@ def _invalid() -> ProblemError:
 def _signature(secret: str, body: bytes, actor: EventActor, digest: bytes) -> bytes:
     return hmac.digest(
         secret.encode(),
-        b"event-list-v1\0" + body + actor.user_id.to_bytes(8, "big") + digest,
+        b"event-list-v2\0"
+        + body
+        + actor.user_id.to_bytes(8, "big")
+        + actor.role.encode()
+        + b"\0"
+        + digest,
         "sha256",
     )
 
