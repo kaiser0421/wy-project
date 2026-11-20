@@ -1,0 +1,70 @@
+[project]
+name = "ticketing-workspace"
+version = "0.1.0"
+description = "High-concurrency ticketing platform with real-time monitoring (workspace root)"
+requires-python = ">=3.12,<3.13"
+
+[tool.uv.workspace]
+members = ["backend", "paymock"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6.120",
+    "import-linter>=2.1",
+    "asgi-lifespan>=2.1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF", "SIM", "PT"]
+ignore = ["S101"]  # assert is fine in tests
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/**" = ["S", "B011"]
+"backend/migrations/**" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+mypy_path = ["backend/src", "paymock/src"]
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["asyncpg.*", "alembic.*", "orjson"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["backend/tests"]
+markers = [
+    "integration: requires PostgreSQL/Redis",
+    "slow: long-running resource tests",
+]
+
+[tool.importlinter]
+root_packages = ["ticketing"]
+
+[[tool.importlinter.contracts]]
+name = "core does not depend on application layers"
+type = "forbidden"
+source_modules = ["ticketing.core"]
+forbidden_modules = ["ticketing.api", "ticketing.worker", "ticketing.relay", "ticketing.collector", "ticketing.seed"]
+
+[[tool.importlinter.contracts]]
+name = "background services do not import the HTTP layer"
+type = "forbidden"
+source_modules = ["ticketing.worker", "ticketing.relay", "ticketing.collector"]
+forbidden_modules = ["ticketing.api"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ticketing", "paymock", "tests"]
