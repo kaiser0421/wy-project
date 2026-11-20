@@ -1,0 +1,16 @@
+No P0 findings in the reviewed files. Static review of PLAN.md §7 and the requested files. The 65 passing tests were user-reported.
+
+### P1
+
+1. [auth.py:86](backend/src/ticketing/api/routes/auth.py:86) Reusing `INVALID_CREDENTIALS` retains and grows its traceback across failed logins, keeping request frames and plaintext passwords in memory. Construct a fresh `ProblemError` at each raise.
+2. [auth.py:129](backend/src/ticketing/api/routes/auth.py:129) Requests rejected by the IP or email limit still spend the global login budget. Check the IP limit first and charge the global bucket only when the request is admitted to password verification.
+3. [auth.py:131](backend/src/ticketing/api/routes/auth.py:131) The hard per-email limit blocks valid sign-ins after ten attempts, contrary to §7.2. Apply a bounded progressive delay to failed credentials, including unknown emails, and keep valid sign-ins subject to the IP and global limits.
+4. [sessions.py:184](backend/src/ticketing/auth/sessions.py:184) The refresh batch can hold a target session row while waiting on the acting admin’s session. The admin transaction holds the actor’s session and waits to revoke the target’s, forming a deadlock. Select eligible refresh rows with `FOR NO KEY UPDATE SKIP LOCKED` in a CTE, then update only those rows. Add a regression test with both sessions queued.
+5. [security.py:159](backend/src/ticketing/api/security.py:159) Inherited `add_route`, `add_websocket_route`, and `mount` can register handlers outside the policy hook. Guard those entry points and attach policy metadata per route registration. Add an assembled-app test that walks mounts, includes HEAD and OPTIONS, and checks every route’s method, path, and enforced policy against an explicit matrix.
+
+### P2
+
+6. [auth.py:158](backend/src/ticketing/api/routes/auth.py:158) A rehash timeout or database error after commit leaves a live session whose cookie was never returned. Compute the replacement hash before opening the transaction, then update the hash and insert the session atomically after rechecking the account under lock. Use `FOR UPDATE` on the rehash path to avoid lock upgrades.
+7. [admin_users.py:60](backend/src/ticketing/api/routes/admin_users.py:60) `If-Match` accepts weak and unquoted tags. Compare the stripped header directly with the current strong `_etag(...)` under the row lock. Keep 428 for a missing header and return 412 for a mismatch. Test both malformed forms.
+8. [test_admin_users.py:128](backend/tests/integration/test_admin_users.py:128) The negative role test covers only listing. Parameterize list, detail, and PATCH for anonymous, Viewer, and User callers. Give authenticated PATCH callers valid CSRF and `If-Match` values, then assert rejected writes preserve role, active state, version, session state, and audit row count.
+9. [test_auth.py:96](backend/tests/integration/test_auth.py:96) The sequential disable test misses login racing with revocation. Add barrier-controlled tests for both transaction orders. Assert disable-first creates no session and login-first produces a session that the disable transaction revokes.

@@ -183,14 +183,19 @@ class LastSeenRefresher:
         try:
             await self._pool.execute(
                 """
-                UPDATE sessions
+                WITH eligible AS (
+                    SELECT id FROM sessions
+                    WHERE id = ANY($1::uuid[])
+                      AND revoked_at IS NULL
+                      AND abs_expires_at > now()
+                      AND idle_expires_at > now()
+                      AND last_seen_at <= now() - interval '60 seconds'
+                    FOR NO KEY UPDATE SKIP LOCKED  -- never wait on a revoking transaction
+                )
+                UPDATE sessions s
                 SET last_seen_at = now(),
-                    idle_expires_at = LEAST(abs_expires_at, now() + $2::interval)
-                WHERE id = ANY($1::uuid[])
-                  AND revoked_at IS NULL
-                  AND abs_expires_at > now()
-                  AND idle_expires_at > now()
-                  AND last_seen_at <= now() - interval '60 seconds'
+                    idle_expires_at = LEAST(s.abs_expires_at, now() + $2::interval)
+                FROM eligible WHERE s.id = eligible.id
                 """,
                 batch,
                 self._idle,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Annotated, Literal
 
@@ -83,9 +84,37 @@ def _set_session_cookie(response: Response, request: Request, token: str) -> Non
     )
 
 
-INVALID_CREDENTIALS = ProblemError(
-    401, "invalid-credentials", "Invalid credentials", "The email or password is incorrect."
-)
+_USER_COLUMNS = "SELECT email::text AS email, role::text AS role, is_active, password_hash "
+_LOCK_FOR_LOGIN = _USER_COLUMNS + "FROM users WHERE id = $1 FOR SHARE"
+_LOCK_FOR_REHASH = _USER_COLUMNS + "FROM users WHERE id = $1 FOR UPDATE"
+
+
+def invalid_credentials() -> ProblemError:
+    """A fresh error per failure (a shared instance would accumulate tracebacks)."""
+    return ProblemError(
+        401, "invalid-credentials", "Invalid credentials", "The email or password is incorrect."
+    )
+
+
+async def _penalize_failure(request: Request, email: str) -> None:
+    """Count a failed sign-in for this email and slow down repeated guessing.
+
+    Accounts are never locked (that would let anyone lock out a victim): after a few failures
+    each attempt waits progressively longer (capped), and a generous hard cap bounds guessing.
+    """
+    settings: Settings = request.app.state.settings
+    failures = await request.app.state.rate_limiter.count("login-fail", email, 900)
+    if failures > 3:
+        await asyncio.sleep(min(0.25 * 2 ** (failures - 4), 3.0))
+    if failures > settings.rate_limit_login_per_email:
+        raise ProblemError(
+            429,
+            "rate-limited",
+            "Too many requests",
+            "Too many failed sign-ins for this account; retry later.",
+            retryable=True,
+            headers={"Retry-After": "60"},
+        )
 
 
 @router.post(
@@ -126,42 +155,44 @@ async def login(body: Credentials, request: Request, response: Response) -> Sess
     state = request.app.state
     settings: Settings = state.settings
     limiter = state.rate_limiter
-    await limiter.hit("login-global", "all", settings.rate_limit_login_global_per_s, 1)
     await limiter.hit("login-ip", _client_ip(request), settings.rate_limit_login_per_ip, 60)
-    await limiter.hit("login-email", body.email, settings.rate_limit_login_per_email, 900)
+    if await limiter.count("login-fail", body.email, 900, increment=False) > (
+        settings.rate_limit_login_per_email
+    ):
+        await _penalize_failure(request, body.email)
+    # The global budget is charged only for requests admitted to password verification.
+    await limiter.hit("login-global", "all", settings.rate_limit_login_global_per_s, 1)
 
     user = await state.db.fetchrow(
         "SELECT id, password_hash FROM users WHERE email = $1", body.email
     )
     verified = await state.passwords.verify(user["password_hash"] if user else None, body.password)
     if not verified or user is None:
-        raise INVALID_CREDENTIALS
+        await _penalize_failure(request, body.email)
+        raise invalid_credentials()
+
+    # Rehash (parameters changed) is computed before the transaction and applied atomically
+    # with the session insert, so a failure cannot leave a session whose cookie was never sent.
+    new_hash = None
+    if state.passwords.needs_rehash(user["password_hash"]):
+        new_hash = await state.passwords.hash(body.password)
 
     async with acquire(state.db, settings.db_pool_acquire_timeout_s) as conn, conn.transaction():
         # Re-read under lock: the account may have been disabled or its password changed
         # while the hash was being verified; disable/role change take FOR UPDATE on this row.
-        locked = await conn.fetchrow(
-            "SELECT email::text AS email, role::text AS role, is_active, password_hash "
-            "FROM users WHERE id = $1 FOR SHARE",
-            user["id"],
-        )
+        locked = await conn.fetchrow(_LOCK_FOR_REHASH if new_hash else _LOCK_FOR_LOGIN, user["id"])
         if (
             locked is None
             or not locked["is_active"]
             or (locked["password_hash"] != user["password_hash"])
         ):
-            raise INVALID_CREDENTIALS
+            raise invalid_credentials()
+        if new_hash is not None:
+            await conn.execute(
+                "UPDATE users SET password_hash = $1 WHERE id = $2", new_hash, user["id"]
+            )
         session_id, token = await create_session(
             conn, user["id"], settings, _client_ip(request), request.headers.get("user-agent")
-        )
-
-    if state.passwords.needs_rehash(user["password_hash"]):
-        new_hash = await state.passwords.hash(body.password)
-        await state.db.execute(
-            "UPDATE users SET password_hash = $1 WHERE id = $2 AND password_hash = $3",
-            new_hash,
-            user["id"],
-            user["password_hash"],
         )
 
     _set_session_cookie(response, request, token)

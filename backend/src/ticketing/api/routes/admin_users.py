@@ -57,15 +57,15 @@ def _parse_if_match(value: str | None) -> int:
             "Precondition required",
             "Send If-Match with the user's current ETag.",
         )
-    raw = value.strip().removeprefix("W/").strip('"')
-    if not raw.startswith("v") or not raw[1:].isdigit():
+    raw = value.strip()
+    if not (raw.startswith('"v') and raw.endswith('"') and raw[2:-1].isdigit()):
         raise ProblemError(
             412,
             "precondition-failed",
             "Precondition failed",
             "If-Match must be an ETag returned by this API.",
         )
-    return int(raw[1:])
+    return int(raw[2:-1])
 
 
 _COLUMNS = "id, email::text AS email, role::text AS role, is_active, version"

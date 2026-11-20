@@ -21,11 +21,31 @@ return {current, ttl}
 """
 
 
+_PEEK = """
+local v = redis.call('GET', KEYS[1])
+if not v then return 0 end
+return tonumber(v)
+"""
+
+
 class RateLimiter:
     def __init__(self, redis: Redis, prefix: str = "rl") -> None:
         self._redis = redis
         self._prefix = prefix
         self._script = redis.register_script(_LUA)
+        self._peek = redis.register_script(_PEEK)
+
+    async def count(self, bucket: str, key: str, window_s: int, *, increment: bool = True) -> int:
+        """Increment (or just read) a windowed counter; fails closed with 503."""
+        redis_key = f"{self._prefix}:{bucket}:{key}"
+        try:
+            if increment:
+                value, _ttl = await self._script(keys=[redis_key], args=[window_s * 1000])
+            else:
+                value = await self._peek(keys=[redis_key])
+        except (RedisError, OSError, TimeoutError) as exc:
+            raise server_busy("Rate limiter unavailable, retry shortly.") from exc
+        return int(value)
 
     async def hit(
         self, bucket: str, key: str, limit: int, window_s: int, *, fail_closed: bool = True

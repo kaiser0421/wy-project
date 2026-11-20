@@ -203,3 +203,12 @@ class SecureRouter(APIRouter):
 
     def add_api_websocket_route(self, *_args: Any, **_kwargs: Any) -> None:
         raise TypeError("websocket routes must declare a policy (not supported yet)")
+
+    def add_route(self, *_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("plain Starlette routes bypass policies; use the secure decorators")
+
+    def add_websocket_route(self, *_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("plain websocket routes bypass policies")
+
+    def mount(self, *_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("mounted apps bypass policies")

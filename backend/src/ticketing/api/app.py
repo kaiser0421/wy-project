@@ -79,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="0.1.0",
         description=API_DESCRIPTION,
         docs_url="/api/docs",
+        swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
         redoc_url=None,
         openapi_url="/api/openapi.json",
         lifespan=lifespan,
