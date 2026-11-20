@@ -1,13 +1,11 @@
-"""Realtime schema changes.
+"""Index the oldest unassigned row for each event's stream progress.
 
 Revision ID: 0004_realtime
 Revises: 0003_events
 Create Date: 2026-11-21
-
-Owned by workstream C. Keep this revision even if it stays empty.
 """
 
-from alembic import op  # noqa: F401
+from alembic import op
 
 revision = "0004_realtime"
 down_revision = "0003_events"
@@ -16,8 +14,11 @@ depends_on = None
 
 
 def upgrade() -> None:
-    pass
+    op.execute(
+        "CREATE INDEX outbox_unassigned_event_age ON outbox (event_id, created_at) "
+        "WHERE seq IS NULL"
+    )
 
 
 def downgrade() -> None:
-    pass
+    op.execute("DROP INDEX outbox_unassigned_event_age")
