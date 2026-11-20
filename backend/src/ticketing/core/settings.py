@@ -76,6 +76,18 @@ class Settings(BaseSettings):
     # and let in-flight requests finish within Uvicorn's graceful timeout.
     shutdown_drain_seconds: float = Field(default=0.0, ge=0)
     payment_provider_url: str = "http://paymock:8000"
+    # Public base URL of the payment provider's checkout page (through nginx).
+    payment_checkout_base_url: str = "http://localhost:8080/pay"
+    # Where the API receives provider callbacks (payment-mock posts here).
+    payment_callback_url: str = "http://api:8000/api/v1/payments/callbacks"
+
+    # --- files -----------------------------------------------------------------------
+    import_dir: str = "/data/imports"
+    export_dir: str = "/data/exports"
+    import_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1)
+    import_max_rows: int = Field(default=100_000, ge=1)
+    export_disk_quota_bytes: int = Field(default=2 * 1024**3, ge=1)
+    nginx_log_dir: str = "/data/nginx-logs"
 
     # Test-only switch; production refuses to start if it is enabled.
     enable_test_hooks: bool = False
