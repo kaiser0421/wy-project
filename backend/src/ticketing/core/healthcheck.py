@@ -1,31 +1,31 @@
 """Container healthcheck for background services: is the service's heartbeat fresh?
 
 Usage: ticketing-healthcheck <service>   (exit 0 healthy, 1 unhealthy)
+
+Deliberately lightweight (no settings model, no asyncio): it runs every few seconds inside each
+container, so it must start fast even on a busy host.
 """
 
 from __future__ import annotations
 
-import asyncio
+import os
 import sys
 import time
 
-from ticketing.core.heartbeat import heartbeat_key
-from ticketing.core.redis import create_redis
-from ticketing.core.settings import get_settings
+from redis import Redis
 
 MAX_AGE_MS = 5_000
 
 
-async def _check(service: str) -> bool:
-    redis = create_redis(get_settings())
+def heartbeat_is_fresh(service: str, redis_url: str) -> bool:
+    client = Redis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2)
     try:
-        value = await redis.get(heartbeat_key(service))
+        value = client.get(f"hb:{service}")
     finally:
-        await redis.aclose()
-    if value is None:
+        client.close()
+    if not isinstance(value, bytes):
         return False
-    text = value.decode() if isinstance(value, bytes) else str(value)
-    _boot, _, stamp = text.partition(":")
+    _boot, _, stamp = value.decode().partition(":")
     return int(time.time() * 1000) - int(stamp) <= MAX_AGE_MS
 
 
@@ -34,7 +34,9 @@ def main() -> None:
         print("usage: ticketing-healthcheck <service>", file=sys.stderr)
         sys.exit(2)
     try:
-        healthy = asyncio.run(_check(sys.argv[1]))
+        healthy = heartbeat_is_fresh(
+            sys.argv[1], os.environ.get("REDIS_URL", "redis://redis:6379/0")
+        )
     except Exception:
         healthy = False
     sys.exit(0 if healthy else 1)

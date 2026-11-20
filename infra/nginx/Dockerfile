@@ -1,0 +1,12 @@
+# syntax=docker/dockerfile:1.7
+# Ingress image: builds the web UI and serves it with the API reverse-proxy configuration.
+FROM node:22-alpine AS web
+WORKDIR /web
+COPY frontend/package.json frontend/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
+FROM nginx:1.27-alpine
+COPY infra/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY --from=web /web/dist /usr/share/nginx/html

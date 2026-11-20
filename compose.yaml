@@ -124,8 +124,8 @@ services:
     command: ["ticketing-worker"]
     healthcheck:
       test: ["CMD", "ticketing-healthcheck", "worker"]
-      interval: 5s
-      timeout: 4s
+      interval: 10s
+      timeout: 10s
       retries: 6
       start_period: 10s
     stop_grace_period: 30s
@@ -138,8 +138,8 @@ services:
     command: ["ticketing-relay"]
     healthcheck:
       test: ["CMD", "ticketing-healthcheck", "relay"]
-      interval: 5s
-      timeout: 4s
+      interval: 10s
+      timeout: 10s
       retries: 6
       start_period: 10s
     stop_grace_period: 15s
@@ -152,8 +152,8 @@ services:
     command: ["ticketing-collector"]
     healthcheck:
       test: ["CMD", "ticketing-healthcheck", "collector"]
-      interval: 5s
-      timeout: 4s
+      interval: 10s
+      timeout: 10s
       retries: 6
       start_period: 10s
     stop_grace_period: 15s
@@ -187,12 +187,14 @@ services:
     restart: unless-stopped
 
   nginx:
-    image: nginx:1.27-alpine
+    image: ticketing-nginx:local
+    build:
+      context: .
+      dockerfile: infra/nginx/Dockerfile
     networks:
       default:
         ipv4_address: 172.28.0.200
     volumes:
-      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - nginx_logs:/data/logs
     ports: ["${HTTP_PORT:-8080}:8080"]
     ulimits:
