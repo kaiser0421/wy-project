@@ -27,6 +27,7 @@ ticketing-worker = "ticketing.worker.main:main"
 ticketing-relay = "ticketing.relay.main:main"
 ticketing-collector = "ticketing.collector.main:main"
 ticketing-seed = "ticketing.seed.main:main"
+ticketing-healthcheck = "ticketing.core.healthcheck:main"
 
 [build-system]
 requires = ["hatchling>=1.25"]

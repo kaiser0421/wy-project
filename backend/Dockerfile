@@ -33,8 +33,9 @@ CMD ["ticketing-api"]
 
 FROM builder AS dev-builder
 COPY backend/tests backend/tests
+COPY paymock/src paymock/src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --package ticketing --group dev
+    uv sync --frozen --all-packages --group dev
 
 FROM python:${PYTHON_VERSION}-slim AS dev
 ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
@@ -42,4 +43,5 @@ COPY --from=dev-builder /opt/venv /opt/venv
 WORKDIR /src
 COPY pyproject.toml uv.lock ./
 COPY backend backend
+COPY paymock paymock
 CMD ["pytest"]
