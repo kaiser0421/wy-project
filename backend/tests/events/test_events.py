@@ -205,6 +205,8 @@ async def test_cursor_expiry_and_lost_access(db, test_clock, make_client):
         await db.execute("UPDATE users SET role = 'viewer' WHERE id = $1", admin_id)
         denied = await client.get(EVENTS, params={"cursor": token, "limit": 1})
         assert denied.status_code == 409
+        # Restore the role so the next check isolates expiry (role is bound into the cursor).
+        await db.execute("UPDATE users SET role = 'admin' WHERE id = $1", admin_id)
         await test_clock.advance(timedelta(minutes=11))
         expired = await client.get(EVENTS, params={"cursor": token, "limit": 1})
         assert expired.status_code == 410
