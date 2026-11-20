@@ -1,0 +1,19 @@
+Booking double-claim proof on PostgreSQL 16.16
+
+Run with TEST_ADMIN_DATABASE_URL, REDIS_URL (DB 3), and TEST_TEMPLATE_DB=tpl_a set.
+$ .venv/bin/python -m pytest -v -rP -p no:cacheprovider \
+    backend/tests/booking/test_booking.py -k test_break_it
+
+normal uses the production strategy. indexed uses an unlocked read and unguarded
+write, so the partial unique index rejects the second claim. naive also drops that
+index in its test-local database clone. Both requests then get 201 on each seat.
+All three variants call the same SQL invariant assertion. The naive variant
+passes the test by catching the expected AssertionError shown below.
+
+backend/tests/booking/test_booking.py::test_break_it[normal] PASSED      [ 33%]
+backend/tests/booking/test_booking.py::test_break_it[indexed] PASSED     [ 66%]
+backend/tests/booking/test_booking.py::test_break_it[naive] PASSED       [100%]
+
+----------------------------- Captured stdout call -----------------------------
+Booking invariant violations: [{'invariant': 'seat active claims', 'id': 2}, {'invariant': 'seat active claims', 'id': 1}, {'invariant': 'seat active claims', 'id': 3}]
+======================= 3 passed, 9 deselected in 7.07s ========================
