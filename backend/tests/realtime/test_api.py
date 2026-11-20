@@ -1,0 +1,539 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from time import monotonic
+from typing import Any
+
+import asyncpg
+import httpx
+import pytest
+from starlette.types import ASGIApp, Message, Scope
+
+from tests.support import create_user, login
+from ticketing.auth.sessions import REVOKE_CHANNEL, revoke_session
+from ticketing.core.service import ServiceContext
+from ticketing.realtime import relay, stream
+from ticketing.realtime.client_model import apply_delta
+from ticketing.realtime.outbox import emit_layout_changed, emit_seat_changes
+from ticketing.realtime.snapshot import SnapshotCache
+
+pytestmark = pytest.mark.integration
+
+Observe = Callable[[bytes], Awaitable[None]]
+
+
+class Body(httpx.AsyncByteStream):
+    def __init__(self, queue: asyncio.Queue[bytes | None], task: asyncio.Task[None]) -> None:
+        self.queue = queue
+        self.task = task
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        while (chunk := await self.queue.get()) is not None:
+            yield chunk
+
+    async def aclose(self) -> None:
+        await asyncio.gather(self.task, return_exceptions=True)
+
+
+class StreamingTransport(httpx.AsyncBaseTransport):
+    """Adapt GET to ASGI with a bounded pipe. HTTPX ASGITransport buffers bodies to EOF."""
+
+    def __init__(self, app: ASGIApp, observe: Observe | None = None) -> None:
+        self.app = app
+        self.observe = observe
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=1)
+        started: asyncio.Future[Message] = asyncio.get_running_loop().create_future()
+        disconnected = asyncio.Event()
+
+        async def receive() -> Message:
+            await disconnected.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                started.set_result(message)
+            elif message["type"] == "http.response.body":
+                data = message.get("body", b"")
+                if data:
+                    if self.observe is not None:
+                        await self.observe(data)
+                    await queue.put(data)
+                if not message.get("more_body", False):
+                    await queue.put(None)
+
+        scope: Scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.4"},
+            "http_version": "1.1",
+            "method": request.method,
+            "headers": [(name.lower(), value) for name, value in request.headers.raw],
+            "scheme": request.url.scheme,
+            "path": request.url.path,
+            "raw_path": request.url.raw_path.split(b"?", 1)[0],
+            "query_string": request.url.query,
+            "server": (request.url.host, request.url.port),
+            "client": ("127.0.0.1", 1234),
+            "root_path": "",
+        }
+
+        async def run() -> None:
+            try:
+                await self.app(scope, receive, send)
+            except Exception as exc:
+                if not started.done():
+                    started.set_exception(exc)
+                raise
+
+        task = asyncio.create_task(run())
+
+        class ResponseBody(Body):
+            async def aclose(self) -> None:
+                disconnected.set()
+                # The simulated socket may be full when its client disconnects.
+                self.task.cancel()
+                await super().aclose()
+
+        try:
+            async with asyncio.timeout(3):
+                header = await started
+        except BaseException:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
+        return httpx.Response(
+            header["status"], headers=header["headers"], stream=ResponseBody(queue, task)
+        )
+
+
+@dataclass
+class Event:
+    id: int
+    order: int
+
+    @property
+    def seats(self) -> str:
+        return f"/api/v1/events/{self.id}/seats"
+
+    @property
+    def stream(self) -> str:
+        return f"/api/v1/events/{self.id}/seat-stream"
+
+
+@pytest.fixture
+async def event(db: asyncpg.Connection, client: httpx.AsyncClient) -> Event:
+    user = await create_user(db, "owner@example.com")
+    await login(client, "owner@example.com")
+    event_id = await db.fetchval(
+        """
+        INSERT INTO events (owner_id, title, category, venue, sales_start_at, sales_end_at,
+                            status, published_at)
+        VALUES ($1, 'Concert', 'Music', 'Arena', now(), now() + interval '1 day',
+                'published', now())
+        RETURNING id
+        """,
+        user,
+    )
+    zone = await db.fetchval(
+        "INSERT INTO zones (event_id, code, name, price_twd) "
+        "VALUES ($1,'A','Floor',1000) RETURNING id",
+        event_id,
+    )
+    await db.execute(
+        """
+        INSERT INTO seats (event_id, zone_id, row_label, seat_number, norm_key, sort_key, seat_idx)
+        VALUES ($1,$2,'R','1','A:R:1',0,0), ($1,$2,'R','2','A:R:2',1,7)
+        """,
+        event_id,
+        zone,
+    )
+    order = await db.fetchval(
+        "INSERT INTO orders (event_id, user_id, quantity) VALUES ($1,$2,1) RETURNING id",
+        event_id,
+        user,
+    )
+    return Event(event_id, order)
+
+
+async def change(db: asyncpg.Connection, event: Event, status: str, idx: int = 0) -> None:
+    async with db.transaction():
+        row = await db.fetchrow(
+            """
+            UPDATE seats SET status=$3::seat_status, order_id=$4, version=version+1
+            WHERE event_id=$1 AND seat_idx=$2
+            RETURNING version
+            """,
+            event.id,
+            idx,
+            status,
+            None if status == "available" else event.order,
+        )
+        await emit_seat_changes(db, event.id, [(idx, status, row["version"])])
+
+
+@dataclass
+class Received:
+    kind: str
+    seq: int | None
+    data: dict[str, Any]
+
+
+async def frames(response: httpx.Response) -> AsyncIterator[Received]:
+    fields: dict[str, str] = {}
+    async for line in response.aiter_lines():
+        if not line:
+            if "event" in fields:
+                yield Received(
+                    fields["event"],
+                    int(fields["id"]) if "id" in fields else None,
+                    json.loads(fields["data"]),
+                )
+            fields.clear()
+        elif not line.startswith(":"):
+            name, _, value = line.partition(":")
+            fields[name] = value.lstrip(" ")
+
+
+async def receive_kind(events: AsyncIterator[Received], kind: str) -> Received:
+    async with asyncio.timeout(3):
+        async for frame in events:
+            if frame.kind == kind:
+                return frame
+            assert frame.kind == "progress", frame
+    raise AssertionError("Stream closed before receiving " + kind)
+
+
+@asynccontextmanager
+async def open_stream(
+    app: ASGIApp,
+    client: httpx.AsyncClient,
+    event: Event,
+    resume: int | None = None,
+    observe: Observe | None = None,
+) -> AsyncIterator[AsyncIterator[Received]]:
+    headers = {} if resume is None else {"Last-Event-ID": str(resume)}
+    async with (
+        httpx.AsyncClient(
+            transport=StreamingTransport(app, observe),
+            base_url=str(client.base_url),
+            cookies=client.cookies,
+        ) as streaming,
+        streaming.stream("GET", event.stream, headers=headers) as response,
+    ):
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        yield frames(response)
+
+
+async def test_snapshot_and_delta_resume_end_to_end(
+    db: asyncpg.Connection,
+    client: httpx.AsyncClient,
+    running_app: ASGIApp,
+    event: Event,
+    relay_context: ServiceContext,
+) -> None:
+    snapshot = (await client.get(event.seats)).json()
+    compact = (await client.get(event.seats, params={"format": "compact"})).json()
+    assert snapshot["last_seq"] == compact["last_seq"] == 0
+    assert compact["status"] == "AA"
+    assert compact["versions"] == [0, 0]
+    assert [seat["idx"] for seat in compact["seats"]] == [0, 7]
+    assert snapshot["zones"] == [{"code": "A", "name": "Floor", "price_twd": 1000}]
+    async with open_stream(running_app, client, event, snapshot["last_seq"]) as events:
+        assert (await receive_kind(events, "progress")).data == {
+            "head": 0,
+            "oldest_unassigned_age_ms": 0,
+        }
+        await change(db, event, "held")
+        await relay.tick(relay_context)
+        held = await receive_kind(events, "delta")
+        assert held.seq == held.data["from"] == held.data["to"] == 1
+        assert held.data["changes"] == [[0, "held", 1]]
+        assert held.data["ts"]
+    await change(db, event, "available")
+    await relay.tick(relay_context)
+    async with open_stream(running_app, client, event, held.seq) as events:
+        released = await receive_kind(events, "delta")
+        assert released.seq == released.data["from"] == released.data["to"] == 2
+        assert released.data["changes"] == [[0, "available", 2]]
+        await change(db, event, "held")
+        await relay.tick(relay_context)
+        assert (await receive_kind(events, "delta")).seq == 3
+
+
+async def test_replay_live_handoff_during_writes(
+    db: asyncpg.Connection,
+    client: httpx.AsyncClient,
+    running_app: ASGIApp,
+    event: Event,
+    relay_context: ServiceContext,
+) -> None:
+    await change(db, event, "held")
+    await relay.tick(relay_context)
+    replay_started = asyncio.Event()
+    resume_writes = asyncio.Event()
+
+    async def pause_replay(data: bytes) -> None:
+        if data.startswith(b"id: 1\n"):
+            replay_started.set()
+            await resume_writes.wait()
+
+    async with open_stream(running_app, client, event, 0, pause_replay) as events:
+        async with asyncio.timeout(3):
+            await replay_started.wait()
+        async with relay_context.db.acquire() as conn:
+            await change(conn, event, "available")
+        await relay.tick(relay_context)
+        async with db.transaction():
+            await db.execute("UPDATE events SET layout_ver=2 WHERE id=$1", event.id)
+            await emit_layout_changed(db, event.id, 2)
+        await relay.tick(relay_context)
+        resume_writes.set()
+        assert (await receive_kind(events, "delta")).seq == 1
+        assert (await receive_kind(events, "delta")).seq == 2
+        layout = await receive_kind(events, "layout")
+        assert layout.seq == 3
+        assert layout.data == {"layout_ver": 2}
+        latest = (await client.get(event.seats, params={"min_layout_ver": 2})).json()
+        assert latest["layout_ver"] == 2
+        assert latest["last_seq"] == 3
+
+
+async def test_snapshot_version_beats_older_unassigned_outbox_row(
+    db: asyncpg.Connection,
+    client: httpx.AsyncClient,
+    running_app: ASGIApp,
+    event: Event,
+    relay_context: ServiceContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await change(db, event, "held")
+    await change(db, event, "available")
+    snapshot = (await client.get(event.seats)).json()
+    state = {seat["idx"]: (seat["status"], seat["version"]) for seat in snapshot["seats"]}
+    async with open_stream(running_app, client, event, snapshot["last_seq"]) as events:
+        progress = await receive_kind(events, "progress")
+        assert progress.data["head"] == 0
+        assert progress.data["oldest_unassigned_age_ms"] > 0
+        monkeypatch.setattr(relay, "BATCH_SIZE", 1)
+        await relay.tick(relay_context)
+        delta = await receive_kind(events, "delta")
+        assert delta.seq == 1
+        assert delta.data["changes"] == [[0, "held", 1]]
+        assert (
+            apply_delta(
+                state,
+                0,
+                delta.data,
+            )
+            == 1
+        )
+        assert state[0] == ("available", 2)
+
+
+async def test_slow_connection_resyncs_and_fast_peer_keeps_receiving(
+    db: asyncpg.Connection,
+    client: httpx.AsyncClient,
+    running_app: ASGIApp,
+    event: Event,
+    relay_context: ServiceContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(stream, "WRITE_TIMEOUT_S", 0.3)
+    blocked = asyncio.Event()
+
+    async def stall_data(data: bytes) -> None:
+        if data.startswith(b"id:"):
+            blocked.set()
+            await asyncio.Future()
+
+    async with (
+        open_stream(running_app, client, event, 0, stall_data) as slow,
+        open_stream(running_app, client, event, 0) as fast,
+    ):
+        await receive_kind(slow, "progress")
+        await receive_kind(fast, "progress")
+        await change(db, event, "held")
+        await relay.tick(relay_context)
+        assert (await receive_kind(fast, "delta")).seq == 1
+        resync = await receive_kind(slow, "resync")
+        assert blocked.is_set()
+        assert resync.data == {"reason": "write-timeout"}
+        with pytest.raises(StopAsyncIteration):
+            await anext(slow)
+        await change(db, event, "available")
+        await relay.tick(relay_context)
+        assert (await receive_kind(fast, "delta")).seq == 2
+
+
+@pytest.mark.parametrize("mode", ["pubsub", "dropped", "expired", "inactive"])
+async def test_invalid_session_closes_stream(
+    db: asyncpg.Connection,
+    client: httpx.AsyncClient,
+    running_app: ASGIApp,
+    asgi_app: ASGIApp,
+    event: Event,
+    relay_context: ServiceContext,
+    mode: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pubsub = mode == "pubsub"
+    state = asgi_app.fastapi.state  # type: ignore[attr-defined]
+    rechecks = asyncio.Event()
+    live_sessions = state.seat_revocations._live_sessions
+
+    async def observe(ids: list[Any]) -> set[Any]:
+        result = await live_sessions(ids)
+        rechecks.set()
+        return result
+
+    if pubsub:
+        # Keep the backstop out of the Pub/Sub test without stopping the listener.
+        async def wait_forever(_: list[Any]) -> set[Any]:
+            await asyncio.Future()
+            raise AssertionError("unreachable")
+
+        monkeypatch.setattr(state.seat_revocations, "_live_sessions", wait_forever)
+    else:
+        monkeypatch.setattr(state.seat_revocations, "_live_sessions", observe)
+
+    async with open_stream(running_app, client, event) as events:
+        await receive_kind(events, "progress")
+        assert state.sse_active_connections() == 1
+        session_id = await db.fetchval("SELECT id FROM sessions")
+        if pubsub:
+            async with asyncio.timeout(2):
+                while (  # noqa: ASYNC110
+                    dict(await relay_context.redis.pubsub_numsub(REVOKE_CHANNEL)).get(
+                        REVOKE_CHANNEL.encode(), 0
+                    )
+                    < 1
+                ):
+                    await asyncio.sleep(0.01)  # Redis subscription can only be observed by polling
+        else:
+            async with asyncio.timeout(2):
+                await rechecks.wait()
+        if mode == "expired":
+            await db.execute(
+                "UPDATE sessions SET idle_expires_at=app_now() WHERE id=$1", session_id
+            )
+        elif mode == "inactive":
+            await db.execute("UPDATE users SET is_active=false")
+        else:
+            assert await revoke_session(db, session_id, "logout")
+        started = monotonic()
+        if pubsub:
+            await relay_context.redis.publish(REVOKE_CHANNEL, json.dumps([str(session_id)]))
+        async with asyncio.timeout(2):
+            async for remaining in events:
+                assert remaining.kind == "progress"
+        assert monotonic() - started < 2
+    assert state.sse_active_connections() == 0
+
+
+async def test_snapshot_visibility_and_layout_bypass(
+    db: asyncpg.Connection,
+    client: httpx.AsyncClient,
+    make_client: Callable[..., httpx.AsyncClient],
+    event: Event,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This event can be seeded as draft even though orders exist in the test fixture.
+    await db.execute("UPDATE events SET status='draft', published_at=NULL WHERE id=$1", event.id)
+    await create_user(db, "viewer@example.com", role="viewer")
+    reads = 0
+    snapshot_read = SnapshotCache._read
+
+    async def count_read(cache: SnapshotCache, event_id: int) -> Any:
+        nonlocal reads
+        reads += 1
+        return await snapshot_read(cache, event_id)
+
+    monkeypatch.setattr(SnapshotCache, "_read", count_read)
+    monkeypatch.setattr("ticketing.realtime.snapshot._CACHE_TTL_S", 60.0)
+    assert (await client.get(event.seats)).status_code == 200
+    assert (await client.get(event.seats)).status_code == 200
+    assert reads == 1
+    async with make_client() as other:
+        assert (await other.get(event.seats)).status_code == 401
+        await login(other, "viewer@example.com")
+        assert (await other.get(event.seats)).status_code == 404
+        assert (await other.get(event.stream)).status_code == 404
+    await db.execute("UPDATE events SET layout_ver=2 WHERE id=$1", event.id)
+    updated = await client.get(event.seats, params={"min_layout_ver": 2})
+    assert updated.json()["layout_ver"] == 2
+    assert reads == 2
+
+
+async def test_openapi_documents_stream_content_and_errors(client: httpx.AsyncClient) -> None:
+    paths = (await client.get("/api/openapi.json")).json()["paths"]
+    operation = paths["/api/v1/events/{event_id}/seat-stream"]["get"]
+    assert set(operation["responses"]["200"]["content"]) == {"text/event-stream"}
+    assert "progress" in operation["description"]
+    assert "Last-Event-ID" in operation["description"]
+    assert operation["responses"]["404"]["content"]["application/problem+json"]["example"] == {
+        "status": 404,
+        "code": "not-found",
+    }
+    assert operation["security"] == [{"sessionCookie": []}]
+
+
+async def test_missing_replay_row_sends_resync_and_closes(
+    db: asyncpg.Connection,
+    client: httpx.AsyncClient,
+    running_app: ASGIApp,
+    event: Event,
+    relay_context: ServiceContext,
+) -> None:
+    await change(db, event, "held")
+    await change(db, event, "available")
+    await relay.tick(relay_context)
+    await db.execute("DELETE FROM outbox WHERE event_id=$1 AND seq=1", event.id)
+    async with open_stream(running_app, client, event, 0) as events:
+        assert (await receive_kind(events, "resync")).data == {"reason": "replay-unavailable"}
+        with pytest.raises(StopAsyncIteration):
+            await anext(events)
+
+
+async def test_two_failed_rechecks_close_all_local_streams(
+    client: httpx.AsyncClient,
+    running_app: ASGIApp,
+    asgi_app: ASGIApp,
+    event: Event,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revocations = asgi_app.fastapi.state.seat_revocations  # type: ignore[attr-defined]
+    failures = 0
+    second_started = asyncio.Event()
+    release_second = asyncio.Event()
+
+    async def fail(ids: list[Any]) -> set[Any]:
+        nonlocal failures
+        assert len(ids) == 1
+        failures += 1
+        if failures == 2:
+            second_started.set()
+            await release_second.wait()
+        raise TimeoutError
+
+    monkeypatch.setattr(revocations, "_live_sessions", fail)
+    async with (
+        open_stream(running_app, client, event) as first,
+        open_stream(running_app, client, event) as second,
+    ):
+        await receive_kind(first, "progress")
+        await receive_kind(second, "progress")
+        async with asyncio.timeout(3):
+            await second_started.wait()
+            assert revocations.active == 2
+            release_second.set()
+            for events in (first, second):
+                async for remaining in events:
+                    assert remaining.kind == "progress"
+    assert failures == 2
+    assert revocations.active == 0
