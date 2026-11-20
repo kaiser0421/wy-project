@@ -10,7 +10,7 @@ import asyncpg
 
 from ticketing.booking.database import fence, transaction
 from ticketing.booking.idempotency import Claim, Result, finish_payment
-from ticketing.booking.orders import visible_order
+from ticketing.booking.orders import release_order, visible_order
 from ticketing.core.errors import ProblemError, server_busy
 from ticketing.core.settings import Settings
 from ticketing.payments.callbacks import (
@@ -19,6 +19,7 @@ from ticketing.payments.callbacks import (
     inconsistent_event,
     lock_payment,
     payment_declined,
+    payment_paid,
 )
 from ticketing.payments.models import Checkout, PaymentAttempt
 from ticketing.payments.provider import Intent, Provider, ProviderUnavailable
@@ -47,14 +48,16 @@ async def _begin(
     claim: Claim,
 ) -> Attempt | Result:
     order = await visible_order(conn, public_id, claim.user_id, lock=True)
-    decision_at = await conn.fetchval("SELECT app_now()")
-    if order["status"] != "pending_payment" or decision_at >= order["expires_at"]:
+    if order["status"] != "pending_payment":
         raise ProblemError(409, "order-not-payable", "Order no longer accepts payment")
     row = await conn.fetchrow(
         """SELECT * FROM payment_attempts WHERE order_id=$1
-           AND status IN ('creating','awaiting_customer','captured')""",
+           AND status IN ('creating','awaiting_customer','captured') FOR NO KEY UPDATE""",
         order["id"],
     )
+    decision_at = await conn.fetchval("SELECT app_now()")
+    if decision_at >= order["expires_at"]:
+        raise ProblemError(409, "order-not-payable", "Order no longer accepts payment")
     if row is None:
         row = await conn.fetchrow(
             """INSERT INTO payment_attempts
@@ -65,12 +68,38 @@ async def _begin(
             order["expires_at"],
         )
     attempt = Attempt.from_row(row)
+    result = _current_result(order, row)
+    await claim.save(conn, result, resource_ref=attempt.id)
+    return result if result is not None else attempt
+
+
+def _current_result(order: asyncpg.Record, row: asyncpg.Record) -> Result | None:
+    if order["status"] == "paid":
+        return payment_paid(order["public_id"], order["paid_at"])
+    if order["status"] != "pending_payment" or row["status"] not in (
+        "creating",
+        "awaiting_customer",
+    ):
+        return payment_declined(order["public_id"])
     if row["checkout_url"] is not None:
-        result = checkout(attempt, row["checkout_url"])
-        await claim.save(conn, result, resource_ref=attempt.id)
-        return result
-    await claim.save(conn, resource_ref=attempt.id)
-    return attempt
+        return checkout(Attempt.from_row(row), row["checkout_url"])
+    if row["status"] != "creating":
+        raise RuntimeError("Active payment attempt has no checkout.")
+    return None
+
+
+async def _expire_hold(
+    conn: asyncpg.Connection, order: asyncpg.Record
+) -> tuple[asyncpg.Record, AppliedEvent]:
+    """Provider calls and lock waits can outlast the hold. Sample only under both locks."""
+    if order["status"] == "pending_payment":
+        decision_at = await conn.fetchval("SELECT app_now()")
+        if decision_at >= order["expires_at"]:
+            released = await release_order(conn, order["id"], "pending_payment", "expired")
+            if released is None:
+                raise server_busy()
+            return released, AppliedEvent(event_id=order["event_id"], expired=True)
+    return order, AppliedEvent()
 
 
 async def finalize_attempt(
@@ -78,10 +107,13 @@ async def finalize_attempt(
     settings: Settings,
     attempt: Attempt,
     intent: Intent,
-    claim: Claim | None = None,
 ) -> Result:
-    """Finalize the durable checkout response for every key bound to this intent."""
-    if intent.amount_twd != attempt.amount_twd or intent.expires_at != attempt.expires_at:
+    """Apply provider observations and resolve the checkout against current merchant state."""
+    if (intent.merchant_payment_id, intent.amount_twd, intent.expires_at) != (
+        attempt.id,
+        attempt.amount_twd,
+        attempt.expires_at,
+    ):
         raise inconsistent_event()
     applied = AppliedEvent()
     async with transaction(pool, settings) as conn:
@@ -89,20 +121,16 @@ async def finalize_attempt(
         if intent.event is not None:
             applied = await apply_event(conn, intent.event)
         order, row = await lock_payment(conn, attempt.order_id, attempt.id)
-        url = row["checkout_url"]
-        if url is not None:
-            result = checkout(attempt, url)
-        elif intent.intent_id is not None and (
-            (row["status"] == "creating" and order["status"] == "pending_payment")
-            or row["status"] == "captured"
-        ):
+        order, expiry = await _expire_hold(conn, order)
+        result = _current_result(order, row)
+        if result is None:
+            if intent.status != "open" or intent.intent_id is None:
+                raise inconsistent_event()
             url = f"{settings.payment_checkout_base_url.rstrip('/')}/{intent.intent_id}"
             updated = await conn.fetchval(
                 """UPDATE payment_attempts SET provider_intent_id=$2,checkout_url=$3,
-                       status=CASE WHEN status='creating' THEN 'awaiting_customer' ELSE status END,
-                       updated_at=app_now()
-                   WHERE id=$1 AND status IN ('creating','captured') AND checkout_url IS NULL
-                   RETURNING id""",
+                       status='awaiting_customer',updated_at=app_now()
+                   WHERE id=$1 AND status='creating' AND checkout_url IS NULL RETURNING id""",
                 attempt.id,
                 str(intent.intent_id),
                 url,
@@ -110,16 +138,9 @@ async def finalize_attempt(
             if updated is None:
                 raise RuntimeError("Locked attempt could not be finalized.")
             result = checkout(attempt, url)
-        else:
-            result = payment_declined(order["public_id"])
         await finish_payment(conn, attempt.id, result)
-        if claim is not None:
-            # A callback or another API request can complete this key before txn2.
-            stored = await claim.completed_result(conn)
-            if stored is None:
-                raise RuntimeError("Payment key could not be completed.")
-            result = stored
     applied.record()
+    expiry.record()
     return result
 
 
@@ -131,19 +152,35 @@ async def create_payment(
     public_id: UUID,
     claim: Claim,
 ) -> Result:
+    expiry = AppliedEvent()
     async with transaction(pool, settings) as conn:
         await fence(conn, session_id, claim.user_id)
-        prior = await claim.check(conn)
-        if prior is not None:
-            return prior
-        work = await _begin(conn, public_id, claim)
+        attempt_id = await claim.payment_ref(conn)
+        if attempt_id is None:
+            work = await _begin(conn, public_id, claim)
+        else:
+            visible = await visible_order(conn, public_id, claim.user_id)
+            order, row = await lock_payment(conn, visible["id"], attempt_id)
+            order, expiry = await _expire_hold(conn, order)
+            current = _current_result(order, row)
+            if current is not None:
+                await finish_payment(conn, attempt_id, current)
+                work = current
+            else:
+                work = Attempt.from_row(row)
+    expiry.record()
     if isinstance(work, Result):
-        return work
-    try:
-        intent = await provider.create(work.id, work.amount_twd, work.expires_at)
-        return await finalize_attempt(pool, settings, work, intent, claim)
-    except ProviderUnavailable as exc:
-        raise server_busy("Payment provider outcome is pending. Retry using the same key.") from exc
+        result = work
+    else:
+        try:
+            intent = await provider.create(work.id, work.amount_twd, work.expires_at)
+            result = await finalize_attempt(pool, settings, work, intent)
+        except ProviderUnavailable as exc:
+            raise server_busy(
+                "Payment provider outcome is pending. Retry using the same key."
+            ) from exc
+    result.replayed = attempt_id is not None
+    return result
 
 
 async def list_attempts(

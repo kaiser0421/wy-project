@@ -16,6 +16,16 @@ class ProviderUnavailable(Exception):
     """The provider outcome is unknown. Recovery must reuse the merchant identifier."""
 
 
+def _intent_key_reused(response: httpx.Response) -> bool:
+    if response.status_code != 409:
+        return False
+    try:
+        problem = response.json()
+    except ValueError:
+        return False
+    return isinstance(problem, dict) and problem.get("code") == "intent-key-reused"
+
+
 class Intent(BaseModel):
     intent_id: UUID | None
     merchant_payment_id: UUID
@@ -86,6 +96,9 @@ class Provider:
             )
         except ProviderUnavailable as exc:
             cause = exc.__cause__
+            if isinstance(cause, httpx.HTTPStatusError) and _intent_key_reused(cause.response):
+                # A lost create response can predate a callback URL configuration change.
+                return await self.poll(merchant_id)
             if isinstance(cause, httpx.HTTPStatusError) and cause.response.status_code == 402:
                 # A definitive create rejection can safely free the chargeable slot.
                 return Intent(
