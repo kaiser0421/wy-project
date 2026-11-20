@@ -1,13 +1,228 @@
-"""Payment reconciler, refunds and provider cancellations.
-
-Owned by workstream A. Called repeatedly by the background service runner.
-"""
+"""Recover provider calls and drain durable refund and cancellation work."""
 
 from __future__ import annotations
 
+import asyncio
+from uuid import UUID, uuid4
+
+import asyncpg
+
+from ticketing.booking.database import transaction
+from ticketing.booking.idempotency import finish_payment
+from ticketing.booking.orders import release_order
+from ticketing.core.errors import ProblemError
+from ticketing.core.http import create_http_client
+from ticketing.core.logging import get_logger
 from ticketing.core.service import ServiceContext
+from ticketing.payments.attempts import Attempt, finalize_attempt
+from ticketing.payments.callbacks import AppliedEvent, apply_event, lock_payment, payment_declined
+from ticketing.payments.provider import Provider, ProviderUnavailable
+
+log = get_logger(__name__)
+_BATCH_SIZE = 12
+
+
+async def _due_attempts(ctx: ServiceContext) -> list[asyncpg.Record]:
+    async with transaction(ctx.db, ctx.settings) as conn:
+        rows: list[asyncpg.Record] = await conn.fetch(
+            """WITH due AS (
+                 SELECT p.id FROM payment_attempts p
+                 WHERE COALESCE(p.last_polled_at, p.updated_at) <=
+                       (SELECT app_now()-interval '15 seconds')
+                   AND (status IN ('creating','awaiting_customer')
+                        OR (status='captured' AND checkout_url IS NULL))
+                   AND (status<>'captured' OR EXISTS (
+                     SELECT 1 FROM idempotency_keys k WHERE k.operation='create-payment'
+                       AND k.status='in_progress' AND k.resource_ref=p.id::text
+                   ))
+                 ORDER BY COALESCE(p.last_polled_at,p.updated_at),p.id
+                 LIMIT $1 FOR NO KEY UPDATE SKIP LOCKED
+               )
+               UPDATE payment_attempts p SET last_polled_at=app_now() FROM due
+               WHERE p.id=due.id RETURNING p.*""",
+            _BATCH_SIZE,
+        )
+    return rows
+
+
+async def _recover_attempt(ctx: ServiceContext, provider: Provider, row: asyncpg.Record) -> None:
+    if ctx.stop.is_set():
+        return
+    attempt = Attempt.from_row(row)
+    try:
+        if row["status"] == "creating":
+            intent = await provider.create(attempt.id, attempt.amount_twd, attempt.expires_at)
+        else:
+            intent = await provider.poll(attempt.id)
+        await finalize_attempt(ctx.db, ctx.settings, attempt, intent)
+    except (ProviderUnavailable, ProblemError) as exc:
+        log.warning("payment.attempt_retry", error=type(exc).__name__, attempt_id=str(attempt.id))
+
+
+async def _claim_refunds(ctx: ServiceContext, owner: str) -> list[asyncpg.Record]:
+    async with transaction(ctx.db, ctx.settings) as conn:
+        rows: list[asyncpg.Record] = await conn.fetch(
+            """WITH due AS (
+                 SELECT id FROM refunds
+                 WHERE status <> 'succeeded' AND next_try_at <= (SELECT app_now())
+                   AND (lease_until IS NULL OR lease_until <= app_now())
+                 ORDER BY next_try_at,id LIMIT $2 FOR NO KEY UPDATE SKIP LOCKED
+               )
+               UPDATE refunds r SET attempts=r.attempts+1,
+                 lease_owner=$1, lease_until=app_now()+interval '30 seconds'
+               FROM due, payment_captures c
+               WHERE r.id=due.id AND r.provider_capture_id=c.provider_capture_id
+               RETURNING r.id,r.attempts,r.reason,c.provider_capture_id,c.amount_twd,c.order_id""",
+            owner,
+            _BATCH_SIZE,
+        )
+    return rows
+
+
+def _retry_delay(row: asyncpg.Record) -> int:
+    attempts: int = row["attempts"]
+    return min(300, 1 << min(attempts, 9))
+
+
+async def _refund(
+    ctx: ServiceContext,
+    provider: Provider,
+    owner: str,
+    row: asyncpg.Record,
+) -> None:
+    if ctx.stop.is_set():
+        return
+    succeeded = True
+    try:
+        await provider.refund(row["id"], row["provider_capture_id"], row["amount_twd"])
+    except ProviderUnavailable:
+        succeeded = False
+        log.warning("payment.refund_retry", refund_id=str(row["id"]))
+    async with transaction(ctx.db, ctx.settings) as conn:
+        # Cancellation and refund confirmation both lock order -> refund -> seats.
+        if succeeded and row["reason"] == "order_cancelled":
+            await conn.fetchval(
+                "SELECT id FROM orders WHERE id=$1 FOR NO KEY UPDATE", row["order_id"]
+            )
+        changed = await conn.fetchval(
+            """UPDATE refunds SET status=$3,lease_owner=NULL,lease_until=NULL,
+                 updated_at=app_now(),next_try_at=app_now()+make_interval(secs=>$4)
+               WHERE id=$1 AND lease_owner=$2 AND status <> 'succeeded' RETURNING id""",
+            row["id"],
+            owner,
+            "succeeded" if succeeded else "failed_retryable",
+            _retry_delay(row),
+        )
+        if changed is not None and succeeded and row["reason"] == "order_cancelled":
+            released = await release_order(conn, row["order_id"], "refund_pending", "refunded")
+            if released is None:
+                raise RuntimeError("Refunded order could not release its seats.")
+
+
+async def _claim_cancellations(ctx: ServiceContext, owner: str) -> list[asyncpg.Record]:
+    async with transaction(ctx.db, ctx.settings) as conn:
+        rows: list[asyncpg.Record] = await conn.fetch(
+            """WITH due AS (
+                 SELECT attempt_id FROM provider_cancellations
+                 WHERE status <> 'succeeded' AND next_try_at <= (SELECT app_now())
+                   AND (lease_until IS NULL OR lease_until <= app_now())
+                 ORDER BY next_try_at,attempt_id LIMIT $2 FOR NO KEY UPDATE SKIP LOCKED
+               )
+               UPDATE provider_cancellations c SET attempts=c.attempts+1,
+                 lease_owner=$1, lease_until=app_now()+interval '30 seconds'
+               FROM due, payment_attempts p WHERE c.attempt_id=due.attempt_id AND p.id=c.attempt_id
+               RETURNING c.attempt_id,c.attempts,p.order_id,p.amount_twd,p.expires_at""",
+            owner,
+            _BATCH_SIZE,
+        )
+    return rows
+
+
+async def _close_intent(
+    conn: asyncpg.Connection,
+    row: asyncpg.Record,
+    attempt_id: UUID,
+) -> None:
+    order, _ = await lock_payment(conn, row["order_id"], attempt_id)
+    changed = await conn.fetchval(
+        """UPDATE payment_attempts SET status='abandoned',updated_at=app_now()
+           WHERE id=$1 AND status IN ('creating','awaiting_customer')
+             AND NOT EXISTS (SELECT 1 FROM payment_captures WHERE attempt_id=$1)
+           RETURNING id""",
+        attempt_id,
+    )
+    if changed is not None:
+        await finish_payment(conn, attempt_id, payment_declined(order["public_id"]))
+
+
+async def _cancel_provider(
+    ctx: ServiceContext,
+    provider: Provider,
+    owner: str,
+    row: asyncpg.Record,
+) -> None:
+    if ctx.stop.is_set():
+        return
+    attempt_id = row["attempt_id"]
+    applied = AppliedEvent()
+    succeeded = True
+    try:
+        intent = await provider.cancel(attempt_id)
+    except ProviderUnavailable:
+        succeeded = False
+        intent = None
+        log.warning("payment.cancel_retry", attempt_id=str(attempt_id))
+    async with transaction(ctx.db, ctx.settings) as conn:
+        if intent is not None and intent.event is not None:
+            applied = await apply_event(conn, intent.event)
+        elif succeeded:
+            await _close_intent(conn, row, attempt_id)
+        await conn.execute(
+            """UPDATE provider_cancellations SET status=$3,lease_owner=NULL,lease_until=NULL,
+                 next_try_at=app_now()+make_interval(secs=>$4)
+               WHERE attempt_id=$1 AND lease_owner=$2 AND status <> 'succeeded'""",
+            attempt_id,
+            owner,
+            "succeeded" if succeeded else "failed_retryable",
+            _retry_delay(row),
+        )
+    applied.record()
+
+
+async def _clean_completed_keys(ctx: ServiceContext) -> None:
+    async with transaction(ctx.db, ctx.settings) as conn:
+        await conn.execute(
+            """WITH old AS (
+                 SELECT user_id,key FROM idempotency_keys
+                 WHERE status='completed' AND updated_at<(SELECT app_now()-interval '24 hours')
+                 ORDER BY updated_at LIMIT 200 FOR UPDATE SKIP LOCKED
+               )
+               DELETE FROM idempotency_keys k USING old
+               WHERE k.user_id=old.user_id AND k.key=old.key""",
+        )
 
 
 async def tick(ctx: ServiceContext) -> None:
-    """Run one bounded iteration. Must not raise for expected conditions."""
-    return None
+    if ctx.stop.is_set():
+        return
+    owner = str(uuid4())
+    async with create_http_client(ctx.settings.payment_provider_url) as http:
+        provider = Provider(http, ctx.settings)
+        attempts = await _due_attempts(ctx)
+        async with asyncio.TaskGroup() as work:
+            for row in attempts:
+                work.create_task(_recover_attempt(ctx, provider, row))
+        if ctx.stop.is_set():
+            return
+        cancellations = await _claim_cancellations(ctx, owner)
+        async with asyncio.TaskGroup() as work:
+            for row in cancellations:
+                work.create_task(_cancel_provider(ctx, provider, owner, row))
+        if ctx.stop.is_set():
+            return
+        refunds = await _claim_refunds(ctx, owner)
+        async with asyncio.TaskGroup() as work:
+            for row in refunds:
+                work.create_task(_refund(ctx, provider, owner, row))
+    if not ctx.stop.is_set():
+        await _clean_completed_keys(ctx)
