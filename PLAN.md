@@ -1,10 +1,12 @@
 # 高併發活動搶票與即時監控平台 — 開發計畫（Production Readiness Plan）
 
-> 版本：v1.2（2026-11-20）・狀態：**Pre-coding，待確認後開始實作**
+> 版本：v1.3（2026-11-21）・狀態：**實作中**（P0、P1 完成；P2–P8 平行開發中）
 > 來源：`requirement.txt` 全文 + 3 個平行研究 session（各自與 Codex 進行 3 輪批判/反駁/紅隊審查）後綜合裁決；v1.1 已納入 Codex 對整份計畫的完整度/品質審查（4 個 P0、5 個 P1、1 個 P2 全數修正，見 §19.3）。
 > 所有效能數字在實測前皆為「假設/目標」，實測值寫入 `LOADTEST.md`。
 
 ---
+
+> **v1.3 範圍調整**：為在交付期限內完成全部需求，部分機制改為較簡單但仍滿足需求的版本：即時推送改由各 API 程序輪詢 PostgreSQL 已指派序號的 outbox（不使用 Redis Streams、generation、epoch fencing）；告警收斂為 6 條核心規則；金流移除 provider_revision 等額外狀態；匯入移除重試 API。分頁物化快照、日誌 tail + checkpoint、50 萬筆 Excel、A/B 壓測與破壞驗證維持完整。完整對照見 `docs/development/workstreams.md` §4；以下章節中與其衝突之處以該文件為準。
 
 ## 0. 目標與設計原則
 
