@@ -1,0 +1,47 @@
+SHELL := /bin/bash
+COMPOSE := docker compose
+TEST_COMPOSE := docker compose -p ticketing-test -f compose.test.yaml
+
+.PHONY: help up down logs ps test test-fast lint fmt typecheck smoke verify-all clean
+
+help:  ## Show available targets
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
+
+up:  ## Build and start every service (same as: docker compose up -d --build)
+	$(COMPOSE) up -d --build
+
+down:  ## Stop services (keeps volumes)
+	$(COMPOSE) down
+
+logs:  ## Follow service logs
+	$(COMPOSE) logs -f --tail=100
+
+ps:  ## Show service status
+	$(COMPOSE) ps
+
+test:  ## Run the full test suite (lint, types, unit, integration) against PostgreSQL 16
+	$(TEST_COMPOSE) build tests
+	$(TEST_COMPOSE) run --rm -T tests; status=$$?; $(TEST_COMPOSE) down -v --remove-orphans; exit $$status
+
+test-fast:  ## Unit tests only, on the host (no Docker)
+	uv run pytest backend/tests/unit -q
+
+lint:  ## Lint and import contracts
+	uv run ruff check backend paymock
+	uv run ruff format --check backend paymock
+	uv run lint-imports
+
+fmt:  ## Auto-format
+	uv run ruff format backend paymock
+	uv run ruff check --fix backend paymock
+
+typecheck:  ## mypy --strict
+	uv run mypy backend/src paymock/src
+
+smoke:  ## Start the stack and verify migrate/seed exit 0, 3 healthy API replicas, ingress working
+	./scripts/smoke.sh
+
+verify-all: test smoke  ## Full verification (extended in later milestones)
+
+clean:  ## Stop services and delete volumes
+	$(COMPOSE) down -v --remove-orphans

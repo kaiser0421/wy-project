@@ -1,0 +1,197 @@
+# One-command startup:  docker compose up -d --build
+# Every variable has a working development default; see .env.example to override.
+
+x-backend-env: &backend-env
+  APP_ENV: ${APP_ENV:-development}
+  # Runtime services use the least-privilege role; only `migrate` connects as the schema owner.
+  DATABASE_URL: postgresql://${APP_DB_USER:-ticketing_app}:${APP_DB_PASSWORD:-ticketing_app}@postgres:5432/${POSTGRES_DB:-ticketing}
+  APP_DB_USER: ${APP_DB_USER:-ticketing_app}
+  # Only nginx may supply X-Forwarded-* headers.
+  FORWARDED_ALLOW_IPS: 172.28.0.200
+  REDIS_URL: redis://redis:6379/0
+  SECRET_KEY: ${SECRET_KEY:-dev-insecure-change-me}
+  PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-dev-insecure-change-me}
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@example.com}
+  SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-Admin#Dev2026!}
+  SEED_USER_EMAIL: ${SEED_USER_EMAIL:-user@example.com}
+  SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-User#Dev2026!}
+  SEED_VIEWER_EMAIL: ${SEED_VIEWER_EMAIL:-viewer@example.com}
+  SEED_VIEWER_PASSWORD: ${SEED_VIEWER_PASSWORD:-Viewer#Dev2026!}
+  HOLD_TTL_SECONDS: ${HOLD_TTL_SECONDS:-600}
+  DB_POOL_MAX: ${DB_POOL_MAX:-10}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_DIR: /data/logs
+  PAYMENT_PROVIDER_URL: http://paymock:8000
+
+x-backend: &backend
+  image: ticketing-backend:local
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+    target: runtime
+  environment: *backend-env
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  volumes:
+    - app_logs:/data/logs
+    - imports:/data/imports
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ticketing}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ticketing}
+      POSTGRES_DB: ${POSTGRES_DB:-ticketing}
+      APP_DB_USER: ${APP_DB_USER:-ticketing_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-ticketing_app}
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./infra/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./infra/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    ports: ["127.0.0.1:5432:5432"]
+    shm_size: 256mb
+    healthcheck:
+      # TCP probe: the socket-only probe can pass during the temporary init server.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
+    volumes: [redis_data:/data]
+    ports: ["127.0.0.1:6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *backend-env
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ticketing}:${POSTGRES_PASSWORD:-ticketing}@postgres:5432/${POSTGRES_DB:-ticketing}
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  seed:
+    <<: *backend
+    command: ["ticketing-seed"]
+    restart: "no"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  api:
+    <<: *backend
+    command: ["ticketing-api"]
+    deploy:
+      replicas: 3
+      resources:
+        limits: {memory: 512m}
+    ulimits:
+      nofile: {soft: 65536, hard: 65536}
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz/ready', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      seed: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  worker:
+    <<: *backend
+    command: ["ticketing-worker"]
+    stop_grace_period: 30s
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+  relay:
+    <<: *backend
+    command: ["ticketing-relay"]
+    stop_grace_period: 15s
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+  collector:
+    <<: *backend
+    command: ["ticketing-collector"]
+    stop_grace_period: 15s
+    volumes:
+      - app_logs:/data/logs
+      - imports:/data/imports
+      - nginx_logs:/data/nginx-logs:ro
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+  paymock:
+    image: ticketing-paymock:local
+    build:
+      context: .
+      dockerfile: paymock/Dockerfile
+    environment:
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-dev-insecure-change-me}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz/live', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    networks:
+      default:
+        ipv4_address: 172.28.0.200
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx_logs:/data/logs
+    ports: ["${HTTP_PORT:-8080}:8080"]
+    ulimits:
+      nofile: {soft: 65536, hard: 65536}
+    depends_on:
+      api: {condition: service_healthy}
+      paymock: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz/live"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+          ip_range: 172.28.0.0/25  # dynamic addresses stay below .128; nginx is pinned at .200
+
+volumes:
+  pg_data:
+  redis_data:
+  app_logs:
+  nginx_logs:
+  imports:
