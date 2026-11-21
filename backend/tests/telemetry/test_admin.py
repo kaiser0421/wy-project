@@ -183,7 +183,7 @@ async def test_admin_metric_history_streams_and_openapi(
     assert response.status_code == 200, response.text
     (item,) = response.json()["items"]
     assert item["req_total"] == 10
-    assert item["error_rate"] == 0.2
+    assert item["error_rate"] == 0.1  # 5xx only; 4xx are client/business outcomes
 
     cookie = f"sid={client.cookies['sid']}"
     headers, frame = await first_frame(running_app, BASE + "/metrics/stream", cookie)

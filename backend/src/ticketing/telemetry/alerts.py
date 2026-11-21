@@ -40,13 +40,13 @@ SELECT extract(epoch FROM $1::timestamptz - created_at)::double precision
 FROM outbox WHERE seq IS NULL AND created_at < $1::timestamptz - interval '5 seconds'
 ORDER BY created_at LIMIT 1
 """
+# Capture records and the provider's capture timestamp commit together, so lag is measured on
+# committed observations: how long after the provider captured did we record it (callback or poll).
 CALLBACK_LAG = """
-SELECT extract(epoch FROM $1::timestamptz - a.provider_captured_at)::double precision
-FROM payment_attempts a JOIN orders o ON o.id = a.order_id
-WHERE a.status = 'awaiting_customer' AND o.status = 'pending_payment'
-  AND a.provider_captured_at < $1::timestamptz - interval '30 seconds'
-  AND NOT EXISTS (SELECT 1 FROM payment_captures c WHERE c.attempt_id = a.id)
-ORDER BY a.provider_captured_at LIMIT 1
+SELECT extract(epoch FROM max(recorded_at - captured_at))::double precision
+FROM payment_captures
+WHERE recorded_at > $1::timestamptz - interval '60 seconds'
+  AND recorded_at - captured_at > interval '30 seconds'
 """
 EDGE = """
 SELECT coalesce(sum(req_total), 0) AS requests, coalesce(sum(err_5xx), 0) AS failures,

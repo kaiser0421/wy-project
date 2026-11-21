@@ -93,9 +93,15 @@ async def test_rule_fires_and_resolves(
                 )
                 await evaluate(db, missing)
                 assert not await db.fetchval("SELECT id FROM alert_events WHERE rule_id = $1", rule)
+                attempt = await db.fetchval("SELECT id FROM payment_attempts")
                 await db.execute(
-                    "UPDATE payment_attempts SET provider_captured_at = $1",
-                    now - timedelta(seconds=31),
+                    """INSERT INTO payment_captures (provider_capture_id, attempt_id, order_id,
+                            amount_twd, disposition, captured_at, recorded_at)
+                       VALUES ('cap-lag', $1, $2, 200, 'accepted', $3, $4)""",
+                    attempt,
+                    order,
+                    now - timedelta(seconds=45),
+                    now,
                 )
     else:
         expected_scope = "relay"
@@ -110,6 +116,7 @@ async def test_rule_fires_and_resolves(
 
     await db.execute("DELETE FROM metrics_1s")
     await db.execute("DELETE FROM business_1s")
+    await db.execute("DELETE FROM payment_captures")
     await db.execute("UPDATE orders SET status = 'expired' WHERE status = 'pending_payment'")
     await evaluate(db, set())
     assert (

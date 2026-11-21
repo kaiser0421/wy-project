@@ -237,7 +237,7 @@ _METRICS_HISTORY = """
 SELECT ts, source, scope, req_total, err_4xx, err_5xx, status_classes,
        p50_ms, p95_ms, p99_ms, conns_active, conns_sse, clock_skew_ms, completeness,
        late_or_missing,
-       (err_4xx::double precision + err_5xx) / nullif(req_total, 0) AS error_rate
+       err_5xx::double precision / nullif(req_total, 0) AS error_rate
 FROM metrics_1s WHERE ts >= $1 AND ts < $2 AND ($3::text IS NULL OR source = $3)
   AND scope = $4
 ORDER BY ts, source
@@ -246,9 +246,19 @@ _LATEST_METRICS = """
 SELECT ts, source, scope, req_total, err_4xx, err_5xx, status_classes,
        p50_ms, p95_ms, p99_ms, conns_active, conns_sse, clock_skew_ms, completeness,
        late_or_missing,
-       (err_4xx::double precision + err_5xx) / nullif(req_total, 0) AS error_rate
+       err_5xx::double precision / nullif(req_total, 0) AS error_rate
 FROM metrics_1s WHERE ts = $1 AND scope = 'all'
 """
+_LATEST_EDGE = """
+SELECT ts, source, scope, req_total, err_4xx, err_5xx, status_classes,
+       p50_ms, p95_ms, p99_ms, conns_active, conns_sse, clock_skew_ms, completeness,
+       late_or_missing,
+       err_5xx::double precision / nullif(req_total, 0) AS error_rate
+FROM metrics_1s
+WHERE source = 'edge' AND scope = 'all' AND ts <= $1 AND ts > $1 - interval '10 seconds'
+ORDER BY ts DESC LIMIT 1
+"""
+
 _ALERT_LIST = """
 SELECT * FROM alert_events
 WHERE ($1::text IS NULL OR state = $1) AND ($2::bigint IS NULL OR id < $2)
@@ -383,7 +393,13 @@ async def _latest_metrics(request: Request) -> MetricFrame:
         ts = await conn.fetchval(
             "SELECT date_trunc('second', clock_timestamp()) - interval '1 second'"
         )
-        rows = await conn.fetch(_LATEST_METRICS, ts)
+        rows = list(await conn.fetch(_LATEST_METRICS, ts))
+        if not any(row["source"] == "edge" for row in rows):
+            # Edge seconds finalize after nginx log ingestion plus a grace period, so the newest
+            # second usually has no edge row yet; show the latest finalized edge second instead.
+            edge = await conn.fetchrow(_LATEST_EDGE, ts)
+            if edge is not None:
+                rows.append(edge)
         business = await conn.fetch("SELECT * FROM business_1s WHERE ts = $1 ORDER BY event_id", ts)
     by_source = {row["source"]: Metric.model_validate(dict(row)) for row in rows}
     app = by_source.get("app")

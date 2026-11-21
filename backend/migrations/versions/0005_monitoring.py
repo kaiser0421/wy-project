@@ -51,7 +51,7 @@ CREATE INDEX alert_events_cooldown ON alert_events (rule_id, scope, updated_at D
 CREATE INDEX monitoring_outbox_age ON outbox (created_at) WHERE seq IS NULL;
 
 -- A provider poll timestamp alone gives no evidence that money was captured.
-ALTER TABLE payment_attempts ADD COLUMN provider_captured_at timestamptz;
+-- provider_captured_at itself is added by 0002_booking.
 CREATE INDEX monitoring_capture_attempt ON payment_captures (attempt_id);
 CREATE INDEX monitoring_provider_capture ON payment_attempts (provider_captured_at)
   WHERE provider_captured_at IS NOT NULL AND status = 'awaiting_customer';
@@ -137,7 +137,6 @@ ALTER TABLE metrics_1s DROP COLUMN status_classes, DROP COLUMN clock_skew_ms;
 ALTER TABLE telemetry_producers DROP COLUMN heartbeat_at, DROP COLUMN wall_skew_ms,
   DROP COLUMN latest_sse;
 ALTER TABLE telemetry_ingest DROP COLUMN delay_sample_ms;
-ALTER TABLE payment_attempts DROP COLUMN provider_captured_at;
 ALTER TABLE alert_events DROP COLUMN updated_at, DROP COLUMN fired_at;
 """
 
