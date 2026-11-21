@@ -1,4 +1,4 @@
-import type { Alert, EventInfo, ImportJob, Metric, Order, RecentLog, Role, Seat, SeatChange, Session, Zone } from "./api";
+import type { AdminOrder, Alert, EventInfo, ImportJob, Metric, Order, OrderStatus, RecentLog, Role, Seat, SeatChange, Session, Zone } from "./api";
 
 const now = Date.now();
 const iso = (time: number) => new Date(time).toISOString();
@@ -22,6 +22,8 @@ const users = (["admin", "user", "viewer"] as const).map((role, index) => ({
   id: index + 1, role, email: `${role}@demo.test`, is_active: true, version: 1,
 }));
 const orders = new Map<string, Order>();
+const orderDetails = new Map<string, Pick<AdminOrder, "buyer_email" | "quantity" | "created_at">>();
+const cancellations = new Map<string, Order>();
 const bookings = new Map<string, string>();
 const jobs = new Map<string, { data: ImportJob; started: number }>();
 const revisions = new Map<string | number, number>();
@@ -109,10 +111,10 @@ function currentSession(): Session | undefined {
   return user ? { user, csrf_token: "local-demo" } : undefined;
 }
 
-function orderState(order: Order, status: string): void {
+function orderState(order: Order, status: OrderStatus): void {
   order.status = status;
   const changed = order.items?.flatMap(item => seats.filter(seat => seat.id === item.seat_id)) ?? [];
-  for (const seat of changed) seat.status = status === "paid" ? "sold" : "available";
+  for (const seat of changed) seat.status = status === "paid" || status === "refund_pending" ? "sold" : "available";
   if (changed.length) update(changed);
 }
 
@@ -143,6 +145,7 @@ function book(event: EventInfo, init: RequestInit): Response {
   chosen.forEach(seat => { seat.status = "held"; });
   update(chosen);
   orders.set(id, order);
+  orderDetails.set(id, { buyer_email: currentSession()!.user.email, quantity: chosen.length, created_at: iso(Date.now()) });
   bookings.set(key, id);
   return json(order);
 }
@@ -235,14 +238,46 @@ export function mock(resource: string, init: RequestInit): Response {
     if (response) return response;
   }
   if (path === "/orders") return list([...orders.values()].reverse());
+  if (path === "/admin/orders") {
+    if (session.user.role !== "admin") return problem(403, "forbidden", "Admin access is required.");
+    const filters = url.searchParams;
+    const after = filters.get("cursor");
+    const newest = [...orders.values()].reverse().map(order => ({
+      public_id: order.id, event_id: order.event_id, event_title: order.event_title,
+      status: order.status, total_twd: order.total_twd, expires_at: order.expires_at,
+      ...orderDetails.get(order.id)!,
+    }));
+    const start = after ? newest.findIndex(order => order.public_id === after) + 1 : 0;
+    const email = filters.get("buyer_email")?.toLowerCase() ?? "";
+    const from = Date.parse(filters.get("created_from") ?? "");
+    const to = Date.parse(filters.get("created_to") ?? "");
+    const matching = newest.slice(start).filter(order => {
+      const created = Date.parse(order.created_at);
+      return (!filters.has("event_id") || filters.get("event_id") === String(order.event_id))
+        && (!filters.has("status") || filters.get("status") === order.status)
+        && order.buyer_email.toLowerCase().startsWith(email)
+        && !(created < from || created > to);
+    });
+    return json({
+      items: matching.slice(0, 50),
+      next_cursor: matching.length > 50 ? matching[49]!.public_id : null,
+    });
+  }
   if (path.startsWith("/orders/")) {
     const [, , id, action] = path.split("/");
     const order = id ? orders.get(id) : undefined;
     if (!order) return problem(404, "not-found", "Order not found.");
     if (order.status === "pending_payment" && Date.parse(order.expires_at ?? "") <= Date.now()) orderState(order, "expired");
     if (action === "cancel") {
-      orderState(order, "cancelled");
-      return empty();
+      const key = `${session.user.id}:${id}:${new Headers(init.headers).get("Idempotency-Key")}`;
+      const replay = cancellations.get(key);
+      if (replay) return json(replay);
+      if (order.status !== "pending_payment" && order.status !== "paid") {
+        return problem(409, "order-not-cancellable", "Order cannot be cancelled.");
+      }
+      orderState(order, order.status === "paid" ? "refund_pending" : "cancelled");
+      cancellations.set(key, { ...order });
+      return json(order);
     }
     if (action === "payments") {
       setTimeout(() => { if (order.status === "pending_payment") orderState(order, "paid"); }, 1500);
