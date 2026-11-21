@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal
 
 import asyncpg
 import orjson
-from fastapi import Depends, Path, Query, Request
+from fastapi import Depends, Path, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import AwareDatetime, BaseModel, Field, JsonValue
 
@@ -299,6 +299,7 @@ ORDER BY request_id LIMIT $2
 )
 async def metrics(
     request: Request,
+    response: Response,
     from_ts: Annotated[
         AwareDatetime,
         Query(alias="from", description="Inclusive UTC start.", examples=[EXAMPLE_TS]),
@@ -327,6 +328,7 @@ async def metrics(
     state = request.app.state
     async with acquire(state.db, state.settings.db_pool_acquire_timeout_s) as conn:
         rows = await conn.fetch(_METRICS_HISTORY, from_ts, to_ts, source, scope)
+    response.headers["Cache-Control"] = "private, no-store"
     return MetricSeries(items=[Metric.model_validate(dict(row)) for row in rows])
 
 
@@ -380,7 +382,7 @@ def _event_stream(
 ) -> EventStream:
     return EventStream(
         _stream(request, event, load),
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={"Cache-Control": "private, no-store", "X-Accel-Buffering": "no"},
     )
 
 
@@ -575,6 +577,7 @@ async def request_logs(
         ),
     ],
     request: Request,
+    response: Response,
     include_linked: Annotated[
         bool,
         Query(description="Include service logs for directly linked requests.", examples=[True]),
@@ -604,6 +607,7 @@ async def request_logs(
     lags = [entry.ingest_lag_ms for entry in service_logs]
     if access_log:
         lags.append(access_log.ingest_lag_ms)
+    response.headers["Cache-Control"] = "private, no-store"
     return RequestLogs(
         request_id=request_id,
         access_log=access_log,

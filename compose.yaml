@@ -11,6 +11,7 @@ x-backend-env: &backend-env
   REDIS_URL: redis://redis:6379/0
   SECRET_KEY: ${SECRET_KEY:-dev-insecure-change-me}
   PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-dev-insecure-change-me}
+  PAYMENT_PROVIDER_TOKEN: ${PAYMENT_PROVIDER_TOKEN:-dev-provider-token-change-me}
   COOKIE_SECURE: ${COOKIE_SECURE:-false}
   SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@example.com}
   SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-Admin#Dev2026!}
@@ -172,6 +173,9 @@ services:
       dockerfile: paymock/Dockerfile
     environment:
       PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-dev-insecure-change-me}
+      APP_ENV: ${APP_ENV:-development}
+      PAYMENT_PROVIDER_TOKEN: ${PAYMENT_PROVIDER_TOKEN:-dev-provider-token-change-me}
+      PAYMOCK_CALLBACK_URL: ${PAYMOCK_CALLBACK_URL:-http://api:8000/api/v1/payments/callbacks}
       PAYMOCK_STORE_PATH: /data/paymock/store.sqlite3
     volumes:
       - paymock_data:/data/paymock
@@ -196,7 +200,7 @@ services:
         ipv4_address: 172.28.0.200
     volumes:
       - nginx_logs:/data/logs
-    ports: ["${HTTP_PORT:-8080}:8080"]
+    ports: ["${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-8080}:8080"]
     ulimits:
       nofile: {soft: 65536, hard: 65536}
     depends_on:

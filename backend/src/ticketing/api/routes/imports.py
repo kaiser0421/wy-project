@@ -272,6 +272,7 @@ async def errors(job_id: JobId, request: Request, principal: Current) -> FileRes
         return FileResponse(
             path,
             filename=f"{job_id}-errors.csv",
+            headers={"Cache-Control": "private, no-store"},
             media_type="text/csv",
             background=BackgroundTask(path.unlink, missing_ok=True),
         )

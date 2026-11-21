@@ -14,12 +14,15 @@ from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEV_SECRET = "dev-insecure-change-me"  # noqa: S105 - sentinel compared against, never used in prod
+DEV_PROVIDER_TOKEN = "dev-provider-token-change-me"  # noqa: S105 - development sentinel
 DEV_PASSWORDS = frozenset({"Admin#Dev2026!", "User#Dev2026!", "Viewer#Dev2026!"})
 DEV_DB_PASSWORDS = frozenset({"", "ticketing", "ticketing_app", "postgres", "test"})
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=None, extra="ignore", frozen=True)
+    model_config = SettingsConfigDict(
+        env_file=None, extra="ignore", frozen=True, hide_input_in_errors=True
+    )
 
     app_env: Literal["development", "test", "production"] = "development"
     service_name: str = "api"
@@ -37,6 +40,7 @@ class Settings(BaseSettings):
     # --- security ---------------------------------------------------------------------
     secret_key: SecretStr = SecretStr(DEV_SECRET)
     payment_webhook_secret: SecretStr = SecretStr(DEV_SECRET)
+    payment_provider_token: SecretStr = SecretStr(DEV_PROVIDER_TOKEN)
     cookie_secure: bool = False
     allowed_origins: tuple[str, ...] = ("http://localhost:8080", "http://127.0.0.1:8080")
     session_idle_minutes: int = Field(default=30, ge=1)
@@ -78,8 +82,6 @@ class Settings(BaseSettings):
     payment_provider_url: str = "http://paymock:8000"
     # Public base URL of the payment provider's checkout page (through nginx).
     payment_checkout_base_url: str = "http://localhost:8080/pay"
-    # Where the API receives provider callbacks (payment-mock posts here).
-    payment_callback_url: str = "http://api:8000/api/v1/payments/callbacks"
 
     # --- files -----------------------------------------------------------------------
     import_dir: str = "/data/imports"
@@ -93,7 +95,15 @@ class Settings(BaseSettings):
     enable_test_hooks: bool = False
 
     @model_validator(mode="after")
-    def _production_guards(self) -> Settings:
+    def _security_guards(self) -> Settings:
+        provider_token = self.payment_provider_token.get_secret_value()
+        if (
+            not provider_token.strip()
+            or provider_token == self.payment_webhook_secret.get_secret_value()
+        ):
+            raise ValueError(
+                "PAYMENT_PROVIDER_TOKEN must be nonempty and distinct from PAYMENT_WEBHOOK_SECRET"
+            )
         if self.app_env != "production":
             return self
         problems: list[str] = []
@@ -101,6 +111,8 @@ class Settings(BaseSettings):
             problems.append("SECRET_KEY must be set to a non-default value")
         if self.payment_webhook_secret.get_secret_value() in {DEV_SECRET, ""}:
             problems.append("PAYMENT_WEBHOOK_SECRET must be set to a non-default value")
+        if provider_token in {DEV_PROVIDER_TOKEN, DEV_SECRET}:
+            problems.append("PAYMENT_PROVIDER_TOKEN must be set to a non-default value")
         for name in ("seed_admin_password", "seed_user_password", "seed_viewer_password"):
             value: SecretStr = getattr(self, name)
             if value.get_secret_value() in DEV_PASSWORDS:

@@ -10,9 +10,10 @@ import uuid
 from typing import Annotated, Literal
 
 import orjson
-from fastapi import Depends, Header, Query, Request, Response
+from fastapi import Depends, Header, Path, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from ticketing.api.problems import problem_responses
 from ticketing.api.security import Principal, Roles, SecureRouter, current_principal
 from ticketing.auth.sessions import lock_live_session, publish_revocations, revoke_user_sessions
 from ticketing.core.context import current_request_id
@@ -23,26 +24,36 @@ router = SecureRouter(prefix="/api/v1/admin/users", tags=["admin"])
 ADMIN = Roles("admin", name="admin")
 
 Role = Literal["admin", "user", "viewer"]
+UserId = Annotated[int, Path(description="Account ID.", examples=[42])]
+_READ_ERRORS = {
+    401: ("unauthenticated",),
+    403: ("forbidden",),
+    422: ("validation-failed",),
+    500: ("internal-error",),
+    503: ("server-busy",),
+}
 
 
 class AdminUserOut(BaseModel):
-    id: int
-    email: str
-    role: Role
-    is_active: bool
-    version: int
+    id: int = Field(description="User ID.", examples=[42])
+    email: str = Field(description="Account email.", examples=["user@example.com"])
+    role: Role = Field(description="Assigned role.", examples=["user"])
+    is_active: bool = Field(description="Whether the account can sign in.", examples=[True])
+    version: int = Field(description="Revision used in the ETag.", examples=[1])
 
 
 class AdminUserPage(BaseModel):
-    items: list[AdminUserOut]
-    next_cursor: str | None = Field(description="Pass as `cursor` to fetch the next page")
+    items: list[AdminUserOut] = Field(description="Users on this page.", examples=[[]])
+    next_cursor: str | None = Field(description="Cursor for the next page.", examples=["42"])
 
 
 class AdminUserPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role: Role | None = None
-    is_active: bool | None = None
+    role: Role | None = Field(default=None, description="New assigned role.", examples=["viewer"])
+    is_active: bool | None = Field(
+        default=None, description="Enable or disable sign-in.", examples=[False]
+    )
 
 
 def _etag(version: int) -> str:
@@ -71,11 +82,23 @@ def _parse_if_match(value: str | None) -> int:
 _COLUMNS = "id, email::text AS email, role::text AS role, is_active, version"
 
 
-@router.get("", policy=ADMIN, response_model=AdminUserPage, summary="List users (keyset paging)")
+@router.get(
+    "",
+    policy=ADMIN,
+    response_model=AdminUserPage,
+    summary="List users",
+    description=(
+        "Administrators can read accounts in ascending ID order. Retrying is safe. "
+        "Each page shows the records visible when queried."
+    ),
+    responses=problem_responses(_READ_ERRORS),
+)
 async def list_users(
     request: Request,
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
-    cursor: Annotated[int | None, Query(ge=0, description="Last id from the previous page")] = None,
+    limit: Annotated[int, Query(ge=1, le=100, description="Page size.", examples=[50])] = 50,
+    cursor: Annotated[
+        int | None, Query(ge=0, description="Last ID on the prior page.", examples=[42])
+    ] = None,
 ) -> AdminUserPage:
     state = request.app.state
     async with acquire(state.db, state.settings.db_pool_acquire_timeout_s) as conn:
@@ -89,8 +112,15 @@ async def list_users(
     return AdminUserPage(items=items, next_cursor=next_cursor)
 
 
-@router.get("/{user_id}", policy=ADMIN, response_model=AdminUserOut, summary="Get one user")
-async def get_user(user_id: int, request: Request, response: Response) -> AdminUserOut:
+@router.get(
+    "/{user_id}",
+    policy=ADMIN,
+    response_model=AdminUserOut,
+    summary="Get one user",
+    description="Administrators can safely retry this read of an account and its current ETag.",
+    responses=problem_responses({**_READ_ERRORS, 404: ("not-found",)}),
+)
+async def get_user(user_id: UserId, request: Request, response: Response) -> AdminUserOut:
     state = request.app.state
     async with acquire(state.db, state.settings.db_pool_acquire_timeout_s) as conn:
         row = await conn.fetchrow(
@@ -107,15 +137,32 @@ async def get_user(user_id: int, request: Request, response: Response) -> AdminU
     "/{user_id}",
     policy=ADMIN,
     response_model=AdminUserOut,
-    summary="Change a user's role or active state (requires If-Match)",
+    summary="Change a user's role or active state",
+    description=(
+        "Administrators can update another account using its current ETag. If concurrent edits "
+        "change the version first, the stale request returns 412. Matching values are a no-op. "
+        "An actual change revokes all sessions for the account."
+    ),
+    responses=problem_responses(
+        {
+            **_READ_ERRORS,
+            403: ("forbidden", "csrf-failed", "origin-not-allowed"),
+            404: ("not-found",),
+            409: ("self-modification", "last-admin"),
+            412: ("precondition-failed",),
+            428: ("precondition-required",),
+        }
+    ),
 )
 async def patch_user(
-    user_id: int,
+    user_id: UserId,
     body: AdminUserPatch,
     request: Request,
     response: Response,
     principal: Annotated[Principal, Depends(current_principal)],
-    if_match: Annotated[str | None, Header()] = None,
+    if_match: Annotated[
+        str | None, Header(description="Current account ETag.", examples=['"v1"'])
+    ] = None,
 ) -> AdminUserOut:
     expected_version = _parse_if_match(if_match)
     if body.role is None and body.is_active is None:

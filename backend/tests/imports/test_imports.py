@@ -42,6 +42,7 @@ async def test_sql_validation_and_error_csv(db, client, worker, mode):
     ) == (6, 1, 5, 100)
     response = await client.get(f"{path}/errors.csv")
     assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "private, no-store"
     rows = list(csv.DictReader(StringIO(response.text)))
     assert [(row["line"], row["reason"]) for row in rows] == [
         ("2", "duplicate_in_file"),

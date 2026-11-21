@@ -10,6 +10,7 @@ import asyncpg
 from fastapi import Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ticketing.api.problems import problem_responses
 from ticketing.api.security import (
     Authenticated,
     Principal,
@@ -26,6 +27,13 @@ from ticketing.core.errors import ProblemError
 from ticketing.core.settings import Settings
 
 router = SecureRouter(prefix="/api/v1/auth", tags=["auth"])
+_RETRY_ERRORS = {503: ("server-busy",), 500: ("internal-error",)}
+_CREDENTIAL_ERRORS = {
+    **_RETRY_ERRORS,
+    403: ("origin-not-allowed",),
+    422: ("validation-failed",),
+    429: ("rate-limited",),
+}
 _EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,189}\.[^@\s]{2,63}$")
 
 
@@ -36,8 +44,12 @@ def normalize_email(value: str) -> str:
 class Credentials(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    email: str = Field(min_length=3, max_length=254, examples=["user@example.com"])
-    password: str = Field(min_length=1, max_length=256)
+    email: str = Field(
+        min_length=3, max_length=254, description="Account email.", examples=["user@example.com"]
+    )
+    password: str = Field(
+        min_length=1, max_length=256, description="Account password.", examples=["Example-Pass-1"]
+    )
 
     @field_validator("email")
     @classmethod
@@ -49,18 +61,29 @@ class Credentials(BaseModel):
 
 
 class Registration(Credentials):
-    password: str = Field(min_length=10, max_length=128, description="10 to 128 characters")
+    password: str = Field(
+        min_length=10,
+        max_length=128,
+        description="New account password.",
+        examples=["Example-Pass-1"],
+    )
 
 
 class UserOut(BaseModel):
-    id: int
-    email: str
-    role: Literal["admin", "user", "viewer"]
+    id: int = Field(description="User ID.", examples=[42])
+    email: str = Field(description="Normalized account email.", examples=["user@example.com"])
+    role: Literal["admin", "user", "viewer"] = Field(description="Current role.", examples=["user"])
 
 
 class SessionOut(BaseModel):
-    user: UserOut
-    csrf_token: str = Field(description="Send as X-CSRF-Token on POST/PUT/PATCH/DELETE")
+    user: UserOut = Field(
+        description="Authenticated user.",
+        examples=[{"id": 42, "email": "user@example.com", "role": "user"}],
+    )
+    csrf_token: str = Field(
+        description="Session-bound token to send as X-CSRF-Token on writes.",
+        examples=["session-csrf-token-example"],
+    )
 
 
 def _csrf(settings: Settings, session_id: object) -> str:
@@ -122,7 +145,12 @@ async def _penalize_failure(request: Request, email: str) -> None:
     policy=Public("register"),
     status_code=201,
     summary="Create a User account",
+    description=(
+        "Anyone using an allowed browser origin may register. Concurrent attempts for the same "
+        "email can create only one account. Reusing a registered email returns 409."
+    ),
     response_model=UserOut,
+    responses=problem_responses({**_CREDENTIAL_ERRORS, 409: ("email-taken",)}),
 )
 async def register(body: Registration, request: Request) -> UserOut:
     check_origin(request)
@@ -149,7 +177,12 @@ async def register(body: Registration, request: Request) -> UserOut:
     "/login",
     policy=Public("login"),
     response_model=SessionOut,
-    summary="Sign in; sets the session cookie and returns the CSRF token",
+    summary="Sign in and set the session cookie",
+    description=(
+        "An active user with valid credentials can sign in from an allowed browser origin. "
+        "Each successful request creates its own session, including concurrent sign-ins."
+    ),
+    responses=problem_responses({**_CREDENTIAL_ERRORS, 401: ("invalid-credentials",)}),
 )
 async def login(body: Credentials, request: Request, response: Response) -> SessionOut:
     check_origin(request)
@@ -209,7 +242,19 @@ async def login(body: Credentials, request: Request, response: Response) -> Sess
     "/logout",
     policy=Authenticated("logout"),
     status_code=204,
-    summary="Sign out; the session cookie stops working immediately",
+    summary="Revoke the current session",
+    description=(
+        "Any signed-in user can revoke their current session with a CSRF token. Concurrent "
+        "requests can revoke a session only once. A retry with the revoked cookie returns 401."
+    ),
+    response_model=None,
+    responses=problem_responses(
+        {
+            **_RETRY_ERRORS,
+            401: ("unauthenticated",),
+            403: ("csrf-failed", "origin-not-allowed"),
+        }
+    ),
 )
 async def logout(
     request: Request,
@@ -235,7 +280,9 @@ async def logout(
     "/me",
     policy=Authenticated("me"),
     response_model=SessionOut,
-    summary="Current user and the session's CSRF token",
+    summary="Get the current user and CSRF token",
+    description="Any signed-in user can read their current identity. Reads are safe to retry.",
+    responses=problem_responses({**_RETRY_ERRORS, 401: ("unauthenticated",)}),
 )
 async def me(
     request: Request,

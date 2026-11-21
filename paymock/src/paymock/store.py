@@ -75,9 +75,10 @@ def _intent(row: sqlite3.Row) -> Intent:
 
 
 class Store:
-    def __init__(self, path: Path, delay_s: float) -> None:
+    def __init__(self, path: Path, delay_s: float, callback_url: str) -> None:
         self.path = path
         self.delay_s = delay_s
+        self.callback_url = callback_url
 
     def initialize(self) -> None:
         with closing(sqlite3.connect(self.path, timeout=5)) as conn:
@@ -119,7 +120,7 @@ class Store:
                VALUES(?,?,?,?,?,?)""",
             (
                 event_id,
-                row["callback_url"],
+                self.callback_url,
                 model.event.model_dump_json().encode(),
                 now + self.delay_s,
                 now + 86400,
@@ -156,13 +157,12 @@ class Store:
                         str(uuid4()),
                         body.amount_twd,
                         body.expires_at.timestamp(),
-                        str(body.callback_url),
+                        self.callback_url,
                     ),
                 ).fetchone()
-            elif (row["amount"], row["expires"], row["callback_url"]) != (
+            elif (row["amount"], row["expires"]) != (
                 body.amount_twd,
                 body.expires_at.timestamp(),
-                str(body.callback_url),
             ):
                 raise Problem(409, "intent-key-reused", "Merchant ID already used")
             tombstone = conn.execute(
@@ -234,9 +234,16 @@ class Store:
                 "SELECT * FROM deliveries WHERE next_try <= ? ORDER BY next_try LIMIT 64",
                 (now,),
             ).fetchall()
+        # Persisted URLs may predate the fixed-destination policy. Route retries and new
+        # deliveries to the current deployment endpoint regardless of either SQLite URL column.
         return [
             Delivery(
-                r["event_id"], r["url"], r["body"], r["deadline"], r["attempts"], r["request_id"]
+                r["event_id"],
+                self.callback_url,
+                r["body"],
+                r["deadline"],
+                r["attempts"],
+                r["request_id"],
             )
             for r in rows
         ]

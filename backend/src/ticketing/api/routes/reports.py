@@ -172,5 +172,6 @@ async def sales(
         path,
         media_type=MIME,
         filename=f"event-{event_id}-sales.xlsx",
+        headers={"Cache-Control": "private, no-store"},
         background=BackgroundTask(_clean, path),
     )
