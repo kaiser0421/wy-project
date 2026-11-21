@@ -1,6 +1,6 @@
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { api, ApiError, logServices, type AdminUser, type Alert, type HttpMetrics, type Metric, type Role, type User } from "./api";
+import { accessStatusClasses, api, ApiError, logServices, type AdminUser, type Alert, type HttpMetrics, type Metric, type Role, type User } from "./api";
 import { date, label } from "./format";
 import { incomplete, metricSecond, MetricWindow, WINDOW_SECONDS, type Sample } from "./metrics";
 import { onThemeChange } from "./theme";
@@ -314,6 +314,13 @@ function alertsPanel(signal: AbortSignal): HTMLElement {
   return panel(el("h2", {}, "Firing alerts"), feedback, list);
 }
 
+function traceAction(id: string | null, openTrace: (id: string) => void): HTMLButtonElement | string {
+  if (!id) return "—";
+  const action = button(id, "quiet log-request");
+  action.onclick = () => openTrace(id);
+  return action;
+}
+
 function recentLogsPanel(signal: AbortSignal, openTrace: (id: string) => void): HTMLElement {
   const title = "Recent warnings and errors";
   const filter = select([["", "All services"], ...logServices.map(service => [service, service] as const)]);
@@ -339,17 +346,10 @@ function recentLogsPanel(signal: AbortSignal, openTrace: (id: string) => void): 
         snapshot = next;
         const active = document.activeElement;
         const focusedId = active instanceof HTMLButtonElement && body.contains(active) ? active.textContent : null;
-        body.replaceChildren(...entries.map(entry => {
-          const id = entry.request_id;
-          let action: HTMLButtonElement | undefined;
-          if (id) {
-            action = button(id, "quiet log-request");
-            action.onclick = () => openTrace(id);
-          }
-          return el("tr", {}, el("td", {}, el("time", { datetime: entry.ts }, date(entry.ts))),
+        body.replaceChildren(...entries.map(entry =>
+          el("tr", {}, el("td", {}, el("time", { datetime: entry.ts }, date(entry.ts))),
             el("td", {}, entry.service), el("td", {}, el("span", { class: `log-level ${entry.level}` }, entry.level)),
-            el("td", {}, entry.event ?? "—"), el("td", {}, action ?? "—"));
-        }));
+            el("td", {}, entry.event ?? "—"), el("td", {}, traceAction(entry.request_id, openTrace)))));
         if (focusedId) {
           const nextAction = [...body.querySelectorAll("button")].find(action => action.textContent === focusedId);
           (nextAction ?? filter).focus();
@@ -392,6 +392,59 @@ function recentLogsPanel(signal: AbortSignal, openTrace: (id: string) => void): 
   return panel(el("h2", {}, title), el("div", { class: "filters" }, field("Service", filter)), status, container);
 }
 
+function accessLogPanel(signal: AbortSignal, openTrace: (id: string) => void): HTMLElement {
+  const title = "Access log";
+  const statusClass = select([["", "All statuses"], ...accessStatusClasses.map(status => [status, status] as const)]);
+  const form = el("form", { class: "filters" },
+    field("Window (minutes)", el("input", { name: "since_minutes", type: "number", min: 1, max: 60, value: 15, required: true })),
+    field("Limit", el("input", { name: "limit", type: "number", min: 1, max: 200, value: 50, required: true })),
+    field("Status", statusClass),
+    field("Method", el("input", { name: "method", maxlength: 32, pattern: "[A-Za-z]{1,32}", placeholder: "GET" })),
+    field("Path prefix", el("input", { name: "path_prefix", maxlength: 512, placeholder: "/api/v1/" })),
+    field("Request ID", el("input", { name: "request_id", maxlength: 128 })),
+    button("Apply filters", "secondary", "submit"));
+  const status = notice();
+  const { body, container } = table(["Time", "Method", "Path", "Status", "Duration", "Request ID"]);
+  container.setAttribute("aria-label", title);
+  container.classList.add("recent-logs-scroll");
+  let pending: AbortController | undefined;
+
+  async function load(): Promise<void> {
+    pending?.abort();
+    pending = new AbortController();
+    const lookupSignal = AbortSignal.any([signal, pending.signal]);
+    container.hidden = true;
+    show(status, "Loading access logs…");
+    try {
+      const entries = await api.accessLogs({
+        since_minutes: Number(formValue(form, "since_minutes")),
+        limit: Number(formValue(form, "limit")),
+        status_class: accessStatusClasses.find(value => value === statusClass.value),
+        method: formValue(form, "method") || undefined,
+        path_prefix: formValue(form, "path_prefix") || undefined,
+        request_id: formValue(form, "request_id") || undefined,
+      }, lookupSignal);
+      if (lookupSignal.aborted) return;
+      body.replaceChildren(...entries.map(entry =>
+        el("tr", {}, el("td", {}, el("time", { datetime: entry.ts }, date(entry.ts))),
+          el("td", {}, entry.method ?? "—"), el("td", {}, entry.path ?? "—"),
+          el("td", {}, entry.status ?? "—"), el("td", {}, entry.req_ms == null ? "—" : `${number.format(entry.req_ms)} ms`),
+          el("td", {}, traceAction(entry.request_id, openTrace)))));
+      container.hidden = entries.length === 0;
+      show(status, entries.length ? "" : "No access logs match these filters.");
+    } catch (error) {
+      if (!lookupSignal.aborted) show(status, errorText(error), true);
+    }
+  }
+
+  form.onsubmit = event => {
+    event.preventDefault();
+    void load();
+  };
+  void load();
+  return panel(el("h2", {}, title), form, status, container);
+}
+
 function tracePanel(signal: AbortSignal) {
   const lookup = button("Find request", "primary", "submit");
   const input = el("input", { name: "request_id", required: true, maxLength: 160, placeholder: "Paste a request ID" });
@@ -417,7 +470,7 @@ function tracePanel(signal: AbortSignal) {
         const details = el("details", {}, el("summary", {}, "View"), el("pre", {}, JSON.stringify(entry.attrs, null, 2)));
         return el("tr", {}, el("td", {}, entry.ts ? date(entry.ts) : "—"),
           el("td", {}, entry.service ?? "—"), el("td", {}, entry.level ?? "—"),
-          el("td", {}, entry.event ?? ([entry.method, entry.route ?? entry.path].filter(Boolean).join(" ") || "—")),
+          el("td", {}, [entry.event, entry.method, entry.route ?? entry.path].filter(Boolean).join(" ") || "—"),
           el("td", {}, entry.status ?? "—"), el("td", {}, entry.req_ms == null ? undefined : `${entry.req_ms} ms`,
             entry.attrs ? details : undefined));
       }));
@@ -446,7 +499,8 @@ export function adminPage(root: HTMLElement, signal: AbortSignal): void {
   const trace = tracePanel(signal);
   root.append(heading("Monitoring", "Watch traffic, ticketing activity and operational alerts."),
     el("div", { class: "page-actions" }, link("Manage users", "#/admin/users")), metricsPanel(signal),
-    el("div", { class: "admin-lower" }, alertsPanel(signal), trace.box, recentLogsPanel(signal, trace.open)));
+    el("div", { class: "admin-lower" }, alertsPanel(signal), trace.box,
+      recentLogsPanel(signal, trace.open), accessLogPanel(signal, trace.open)));
 }
 
 export function usersPage(root: HTMLElement, principal: User, signal: AbortSignal): void {

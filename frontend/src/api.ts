@@ -149,6 +149,23 @@ export interface RecentLog {
   attrs: Record<string, string | number>;
 }
 interface RecentLogFilters { service?: LogService; level?: LogLevel; since_minutes?: number; limit?: number }
+export const accessStatusClasses = ["2xx", "3xx", "4xx", "5xx"] as const;
+export interface AccessLog {
+  ts: string;
+  request_id: string | null;
+  method: string | null;
+  path: string | null;
+  status: number | null;
+  req_ms: number | null;
+}
+interface AccessLogFilters {
+  since_minutes?: number;
+  limit?: number;
+  status_class?: typeof accessStatusClasses[number];
+  method?: string;
+  path_prefix?: string;
+  request_id?: string;
+}
 type OrderPayload = Omit<Order, "id"> & ({ id: string } | { public_id: string });
 type ImportPayload = ImportJob & { progress_percent?: number };
 type MetricReading = HttpMetrics & {
@@ -428,13 +445,27 @@ export const api = {
     request(`/admin/alerts/${encodeURIComponent(id)}/ack`, { method: "POST", signal }),
   recentLogs: async (filters: RecentLogFilters, signal: AbortSignal) =>
     (await json<{ items: RecentLog[] }>("/admin/logs/recent" + query({ ...filters }), { signal })).items,
+  accessLogs: async (filters: AccessLogFilters, signal: AbortSignal) =>
+    (await json<{ items: AccessLog[] }>("/admin/logs/access" + query({ ...filters }), { signal })).items,
   trace: async (id: string, signal: AbortSignal) => {
     const data = await json<Collection<TraceEntry> | { entries: TraceEntry[] } | RequestLogs>(
       `/admin/requests/${encodeURIComponent(id)}/logs`, { signal },
     );
     if (!Array.isArray(data) && "entries" in data) return data.entries;
     if ("service_logs" in data) {
-      const entries = data.access_log ? [{ ...data.access_log, service: "nginx" }, ...data.service_logs] : data.service_logs;
+      const services = data.service_logs.map(entry => {
+        if (entry.event !== "request.completed" || !entry.attrs) return entry;
+        const { method, route, path, status, duration_ms } = entry.attrs;
+        return {
+          ...entry,
+          method: typeof method === "string" ? method : entry.method,
+          route: typeof route === "string" ? route : entry.route,
+          path: typeof path === "string" ? path : entry.path,
+          status: typeof status === "number" ? status : entry.status,
+          req_ms: typeof duration_ms === "number" ? duration_ms : entry.req_ms,
+        };
+      });
+      const entries = data.access_log ? [{ ...data.access_log, service: "nginx" }, ...services] : services;
       return entries.sort((a, b) => Date.parse(a.ts ?? "") - Date.parse(b.ts ?? ""));
     }
     return page(data).items;

@@ -343,11 +343,28 @@ flowchart LR
 | p50/p95/p99 | 同一秒的 nginx `$request_time` 含 proxy 時間。App 從進入 middleware 到 ASGI 處理返回，以 monotonic 計時。合併同來源各副本的 histogram 桶後再算 percentile。見 `infra/nginx/nginx.conf:44`、`backend/src/ticketing/telemetry/api_setup.py:39`、`backend/src/ticketing/telemetry/metrics.py:17`。 | `metrics_1s.hist` 與固定桶估計的 `p50_ms`、`p95_ms`、`p99_ms`。 |
 | 即時連線數 | Collector 每秒透過內部 nginx `/nginx_status` 取得 `Active connections` 的 TCP 連線數，並對近 3 秒有回報的 API 副本加總各自最後一筆座位 SSE 連線數。寫到最近完成的秒。見 `infra/nginx/nginx.conf:108`、`backend/src/ticketing/telemetry/collector.py:34`、`backend/src/ticketing/telemetry/collector.py:46`。 | `metrics_1s.conns_active`、`conns_sse`。 |
 
-日誌以 COPY 分批寫 `access_logs` / `service_logs`。監控與業務計數分別批次寫 `metrics_1s`、`business_1s`。每日 UTC 分區保留門檻為日誌 7 天、監控與業務 14 天、`seat_events` 90 天。監控 SSE 每秒讀最近完成的秒，Edge 缺該秒時可帶上最近的 Edge 資料，判讀時看各列 `ts`。見 `backend/src/ticketing/telemetry/logs.py:316`、`backend/src/ticketing/telemetry/app_metrics.py:241`、`backend/migrations/versions/0005_monitoring.py:95`、`backend/src/ticketing/api/routes/monitoring.py:389`。
+這些資料存於 PostgreSQL，按 UTC 日分區。
 
-Admin 的近期日誌面板在頁面可見時每 5 秒更新，預設讀取最近 15 分鐘內最新的 50 筆警告、錯誤及嚴重錯誤。`GET /api/v1/admin/logs/recent` 最多查詢 60 分鐘與 200 筆，依 `ts` 裁剪每日分區並使用部分索引，回傳的附加欄位限於例外類別與 HTTP 狀態碼。
+| 資料表 | 批次寫入方式 | 保留門檻 |
+|---|---|---|
+| `access_logs`、`service_logs` | Collector 追讀 nginx 與服務的 JSON 檔，每次最多 2,000 筆，以 `COPY` 和檔案游標在同一交易提交。 | 7 天 |
+| `seat_events` | Relay 每批最多為 500 筆已提交的 outbox 列編序，在同一交易以 `INSERT … SELECT` 展開並歸檔座位變更。 | 90 天 |
+| `metrics_1s`、`business_1s` | Collector 合併已完成秒的來源樣本與業務計數，透過 `executemany` 批次 upsert。 | 14 天 |
 
-管理後台可用 `request_id` 查詢 nginx 存取日誌及共用目錄中的服務日誌。API 呼叫 paymock 時透過 `X-Request-ID` 傳遞識別碼，paymock 以該識別碼記錄請求處理。回呼傳送沿用觸發付款狀態變更的請求識別碼，並記錄傳送結果。付款頁日誌使用路由樣板遮蔽 checkout token。見 `backend/src/ticketing/core/http.py`、`paymock/src/paymock/main.py`、`paymock/src/paymock/delivery.py`。
+```sql
+SELECT ts, request_id, method, path, status FROM access_logs
+ WHERE ts >= now() - interval '15 minutes' ORDER BY ts DESC LIMIT 50;
+SELECT recorded_at, event_id, seq, seat_idx, status, request_id FROM seat_events
+ WHERE recorded_at >= now() - interval '15 minutes' ORDER BY recorded_at DESC LIMIT 50;
+SELECT ts, source, req_total, err_5xx, p95_ms FROM metrics_1s
+ WHERE ts >= now() - interval '15 minutes' AND scope = 'all' ORDER BY ts DESC LIMIT 50;
+```
+
+監控 SSE 每秒讀最近完成的秒，Edge 缺該秒時可帶上最近的 Edge 資料，判讀時看各列 `ts`。[Admin 監控頁](http://localhost:8080/#/admin) 的「Access log」讀取已落庫的 nginx 日誌，可依狀態碼級別、HTTP 方法、路徑前綴及請求 ID 篩選。「Recent warnings and errors」在頁面可見時每 5 秒更新。兩個列表預設讀取最近 15 分鐘的 50 筆，最多查詢 60 分鐘與 200 筆。點選請求 ID 可開啟「Request trace」。
+
+API 為每個完成的 HTTP 請求記錄一行 INFO JSON `request.completed`，略過健康檢查與 SSE 串流。日誌只取路由樣板、方法、狀態碼、耗時、追蹤識別碼及已驗證的使用者 ID。以 2,000 req/s 全部經過 API 計算，新增約 2,000 行/s 的完成紀錄，各寫一份至 stdout 與 `LOG_DIR`。請求端只序列化並入有界佇列，背景執行緒批次寫入，正常關閉時排空。若寫入端長時間低於產生速率，滿佇列會對請求施加背壓。容器的 stdout 輪替設定只涵蓋 `json-file`，Collector 追讀的是共用磁碟區的檔案 sink，該檔案的容量與輪替需各自管理。資料庫的分區保留期限只適用於已落庫的資料。
+
+API 呼叫 paymock 時透過 `X-Request-ID` 傳遞識別碼，paymock 以路由樣板記錄處理結果，並沿用付款操作的識別碼傳送回呼。回呼日誌連回建立付款的請求，Worker 處理付款重試、取消、退款與座位匯入時沿用工作所保存的來源識別碼。Trace 可依識別碼串接 nginx、API、paymock 和 Worker 紀錄。
 
 - **告警演練**　停掉 relay 後，`SERVICE_DOWN`（relay）與 outbox 編序延遲告警依規則進入 pending、轉為 firing 並出現在 Admin 監控頁，重新啟動後轉為 resolved。見 [告警演練紀錄](docs/evidence/alert-drill-20261121/README.md)。
 - **HTTP 全 200 仍受害**　例如模擬金流 confirm 回 200，買家輪詢訂單也一直回 200，但畫面長時間停在待付款。當 capture 經回呼或 poll 寫入，`PAYMENT_CALLBACK_LAG` 可在最近 60 秒記錄中指出超過 30 秒的落差。完全沒有觀測到 capture 時，這條規則沒有資料，需查看金流與訂單、`HOLD_EXPIRY_BACKLOG` 等旁證。另一種情境是瀏覽與監控正常，大量買家在有空位的活動反覆遇到 `hold_soldout`。 `PURCHASE_FUNNEL_COLLAPSE` 依活動看過去 30 秒，成功率低於 20%、conflict 與 limit 合計少於失敗的一半且仍有可用席，條件持續 30 秒才發出告警。單一小區的問題可能被同活動其他區的流量掩蓋。見 `backend/src/ticketing/telemetry/alerts.py:32`、`backend/src/ticketing/telemetry/alerts.py:45`、`backend/src/ticketing/telemetry/alerts.py:58`、`backend/src/ticketing/telemetry/alerts.py:205`、`backend/src/ticketing/booking/create.py:248`。

@@ -279,8 +279,14 @@ describe("API payloads", () => {
   });
 
   it("combines access and service entries in chronological order", async () => {
-    respond({ access_log: { ts, status: 200 }, service_logs: [{ ts: "2026-11-20T11:59:59Z", service: "api" }] });
-    await expect(api.trace("request", signal)).resolves.toMatchObject([{ service: "api" }, { service: "nginx", status: 200 }]);
+    respond({ access_log: { ts, status: 200 }, service_logs: [{
+      ts: "2026-11-20T11:59:59Z", service: "api", event: "request.completed",
+      attrs: { method: "GET", route: "/api/v1/events/{event_id}", status: 200, duration_ms: 1.25 },
+    }] });
+    await expect(api.trace("request", signal)).resolves.toMatchObject([
+      { service: "api", method: "GET", route: "/api/v1/events/{event_id}", status: 200, req_ms: 1.25 },
+      { service: "nginx", status: 200 },
+    ]);
     respond([{ ts, service: "worker" }]);
     await expect(api.trace("request", signal)).resolves.toMatchObject([{ service: "worker" }]);
   });
@@ -296,6 +302,23 @@ describe("API payloads", () => {
       "/api/v1/admin/logs/recent", "/api/v1/admin/logs/recent?service=worker&level=error&since_minutes=5&limit=2",
     ]);
     const init = fetchMock.mock.calls[1]![1];
+    expect(init).toMatchObject({ method: "GET", cache: "no-store" });
+    controller.abort();
+    expect(init?.signal?.aborted).toBe(true);
+  });
+
+  it("reads access logs with encoded filters and a cancellable request", async () => {
+    const entries = [{ ts, request_id: "request-1", method: "GET", path: "/api/v1/events", status: 200, req_ms: 12 }];
+    const controller = new AbortController();
+    respond({ items: entries });
+    await expect(api.accessLogs({}, controller.signal)).resolves.toEqual(entries);
+    await expect(api.accessLogs({
+      status_class: "2xx", method: "GET", path_prefix: "/api/v1/_%", request_id: "id:1",
+      since_minutes: 1, limit: 200,
+    }, controller.signal)).resolves.toEqual(entries);
+    const [url, init] = fetchMock.mock.calls[1]!;
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/v1/admin/logs/access");
+    expect(url).toBe("/api/v1/admin/logs/access?status_class=2xx&method=GET&path_prefix=%2Fapi%2Fv1%2F_%25&request_id=id%3A1&since_minutes=1&limit=200");
     expect(init).toMatchObject({ method: "GET", cache: "no-store" });
     controller.abort();
     expect(init?.signal?.aborted).toBe(true);

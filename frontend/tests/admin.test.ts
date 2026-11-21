@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminPage } from "../src/admin";
-import { api, ApiError, type RecentLog } from "../src/api";
+import { api, ApiError, type AccessLog, type RecentLog } from "../src/api";
 
 vi.mock("uplot", () => ({ default: vi.fn() }));
 
@@ -29,8 +29,61 @@ beforeEach(() => {
     disconnect = vi.fn();
   });
   vi.spyOn(api, "alerts").mockRejectedValue(new ApiError(403, "forbidden", "Forbidden"));
+  vi.spyOn(api, "accessLogs").mockResolvedValue([]);
   root = document.createElement("main");
   document.body.append(root);
+});
+
+describe("access log", () => {
+  const row: AccessLog = {
+    ts: warning.ts, request_id: "request-access", method: "POST", path: "/api/v1/example", status: 201, req_ms: 12,
+  };
+
+  it("submits filters, shows persisted rows and opens the request trace", async () => {
+    vi.spyOn(api, "recentLogs").mockResolvedValue([]);
+    const logs = vi.mocked(api.accessLogs).mockResolvedValueOnce([]).mockResolvedValueOnce([row, {
+      ...row, request_id: null, req_ms: null,
+    }]);
+    const trace = vi.spyOn(api, "trace").mockResolvedValue([{ event: "request.completed", service: "api" }]);
+    adminPage(root, navigation.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    const region = root.querySelector<HTMLElement>('[aria-label="Access log"]')!;
+    const panel = region.closest("section")!;
+    const form = panel.querySelector("form")!;
+    expect(panel.querySelector('[role="status"]')?.textContent).toBe("No access logs match these filters.");
+    expect(region.hidden).toBe(true);
+    for (const [name, value] of Object.entries({
+      since_minutes: "3", limit: "20", method: "POST", path_prefix: "/api/v1/", request_id: "request-access",
+    })) form.querySelector<HTMLInputElement>(`[name="${name}"]`)!.value = value;
+    form.querySelector("select")!.value = "2xx";
+    form.requestSubmit();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(logs).toHaveBeenLastCalledWith({
+      since_minutes: 3, limit: 20, status_class: "2xx", method: "POST", path_prefix: "/api/v1/", request_id: "request-access",
+    }, expect.any(AbortSignal));
+    expect(region.hidden).toBe(false);
+    expect([...region.querySelectorAll('th[scope="col"]')].map(cell => cell.textContent))
+      .toEqual(["Time", "Method", "Path", "Status", "Duration", "Request ID"]);
+    const rows = region.querySelectorAll("tbody tr");
+    expect(rows[0]?.querySelector("time")?.dateTime).toBe(row.ts);
+    expect([...rows[0]!.querySelectorAll("td")].slice(1).map(cell => cell.textContent))
+      .toEqual(["POST", "/api/v1/example", "201", "12 ms", "request-access"]);
+    expect(rows[1]?.querySelector("button")).toBeNull();
+    rows[0]!.querySelector("button")!.click();
+    expect(trace).toHaveBeenCalledWith("request-access", expect.any(AbortSignal));
+    expect(document.activeElement).toBe(root.querySelector('input[name="request_id"]'));
+  });
+
+  it("cancels stale loads on repeated submits and when leaving monitoring", () => {
+    vi.spyOn(api, "recentLogs").mockResolvedValue([]);
+    const pending = new Promise<AccessLog[]>(() => {});
+    const logs = vi.mocked(api.accessLogs).mockReturnValueOnce(pending).mockReturnValueOnce(pending);
+    adminPage(root, navigation.signal);
+    root.querySelector('[aria-label="Access log"]')!.closest("section")!.querySelector("form")!.requestSubmit();
+    expect(logs.mock.calls[0]?.[1].aborted).toBe(true);
+    navigation.abort();
+    expect(logs.mock.calls[1]?.[1].aborted).toBe(true);
+  });
 });
 
 afterEach(() => {

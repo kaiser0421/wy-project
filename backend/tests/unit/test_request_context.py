@@ -6,6 +6,7 @@ import asyncpg
 import httpx
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 from structlog.testing import capture_logs
 
 from ticketing.api.middleware import RequestContextMiddleware
@@ -34,6 +35,18 @@ def _app(outbound: list[httpx.Request]) -> RequestContextMiddleware:
     @app.get("/boom")
     async def boom() -> None:
         raise RuntimeError("secret-internal-detail")
+
+    @app.post("/private/{item_id}")
+    async def private(item_id: str) -> None:
+        raise RuntimeError(item_id)
+
+    @app.get("/healthz/live")
+    async def live() -> None:
+        pass
+
+    @app.get("/stream")
+    async def stream() -> StreamingResponse:
+        return StreamingResponse(iter([": keep-alive\n\n"]), media_type="text/event-stream")
 
     @app.get("/outbound")
     async def call_outbound() -> dict[str, str]:
@@ -99,6 +112,40 @@ async def test_unhandled_error_keeps_request_id(app_client: httpx.AsyncClient) -
     assert body["code"] == "internal-error"
     assert body["request_id"] == "e" * 32
     assert "secret-internal-detail" not in response.text  # no internal details leak
+
+
+async def test_request_completion_records_only_safe_fields(app_client: httpx.AsyncClient) -> None:
+    with capture_logs() as logs:
+        response = await app_client.post(
+            "/private/private-path?token=private-query",
+            content="private-body",
+            headers={
+                "Authorization": "Bearer private-token",
+                "Cookie": "sid=private-cookie",
+                "X-CSRF-Token": "private-csrf",
+            },
+        )
+    assert response.status_code == 500
+    (entry,) = [item for item in logs if item["event"] == "request.completed"]
+    assert entry == {
+        "event": "request.completed",
+        "log_level": "info",
+        "method": "POST",
+        "route": "/private/{item_id}",
+        "status": 500,
+        "duration_ms": entry["duration_ms"],
+    }
+    assert entry["duration_ms"] >= 0
+    assert "private-" not in repr(logs)
+
+
+async def test_probes_and_sse_keep_alives_do_not_log_completions(
+    app_client: httpx.AsyncClient,
+) -> None:
+    with capture_logs() as logs:
+        for path in ("/healthz/live", "/stream"):
+            assert (await app_client.get(path)).status_code == 200
+    assert not logs
 
 
 async def test_database_back_pressure_is_retryable_503(app_client: httpx.AsyncClient) -> None:

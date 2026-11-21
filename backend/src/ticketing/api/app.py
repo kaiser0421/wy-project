@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from typing import Any
 
 from fastapi import FastAPI
@@ -30,7 +30,7 @@ from ticketing.auth.sessions import LastSeenRefresher
 from ticketing.core.db import create_pool
 from ticketing.core.errors import PROBLEM_CONTENT_TYPE
 from ticketing.core.http import create_http_client
-from ticketing.core.logging import configure_logging, get_logger
+from ticketing.core.logging import background_logging, get_logger
 from ticketing.core.passwords import PasswordHasher
 from ticketing.core.ratelimit import RateLimiter
 from ticketing.core.redis import create_redis
@@ -299,11 +299,11 @@ def _document_operations(schema: dict[str, Any], routes: Iterable[APIRoute]) -> 
                     }
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, service_logging: bool = False) -> FastAPI:
     settings = settings or get_settings()
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def services(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = settings
         app.state.draining = False
         app.state.db = await create_pool(settings)
@@ -323,6 +323,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await app.state.redis.aclose()
             await app.state.db.close()
             log.info("api.stopped")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        logging = (
+            background_logging("api", settings.log_level, settings.log_dir)
+            if service_logging
+            else nullcontext()
+        )
+        async with logging, services(app):
+            yield
 
     app = FastAPI(
         title="Ticketing Platform API",
@@ -391,8 +401,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 def create_asgi_app(settings: Settings | None = None) -> ASGIApp:
     """The deployable ASGI callable: FastAPI wrapped by the outermost request-context middleware."""
     settings = settings or get_settings()
-    configure_logging("api", settings.log_level, settings.log_dir)
-    fastapi_app = create_app(settings)
+    fastapi_app = create_app(settings, service_logging=True)
     wrapped = RequestContextMiddleware(fastapi_app)
     wrapped.fastapi = fastapi_app  # type: ignore[attr-defined]
     return wrapped

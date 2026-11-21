@@ -41,7 +41,15 @@
 
 以預設帳號在 Compose 堆疊上操作的實際畫面（瀏覽器視窗 1440×900，長頁面為整頁截圖）。
 
-Admin 即時監控的「Recent warnings and errors」面板可依服務篩選近期警告與錯誤，並點選請求 ID 直接查詢追蹤紀錄。
+登入 Admin 後開啟 [Monitoring](http://localhost:8080/#/admin)。「Access log」可依時間、狀態碼級別、HTTP 方法、路徑前綴和請求 ID 篩選已落庫的 nginx 存取日誌。「Recent warnings and errors」可依服務篩選近期警告與錯誤。兩個區塊的請求 ID 都可直接開啟「Request trace」。
+
+PostgreSQL 的 `access_logs` 由 Collector 從 nginx 檔案分批 `COPY` 寫入，`seat_events` 由 relay 依 outbox 批次寫入，`metrics_1s` 由 Collector 批次合併每秒統計。以下 SQL 可查看各表最近的資料，寫入流程與保留期限見 [設計 Q6](DESIGN.md#q6-監控數據)。
+
+```sql
+SELECT ts, request_id, method, path, status FROM access_logs ORDER BY ts DESC LIMIT 20;
+SELECT recorded_at, event_id, seq, seat_idx, status FROM seat_events ORDER BY recorded_at DESC LIMIT 20;
+SELECT ts, source, req_total, p95_ms FROM metrics_1s WHERE scope = 'all' ORDER BY ts DESC LIMIT 20;
+```
 
 導覽列可切換深色或淺色主題，也可跟隨系統設定。
 
