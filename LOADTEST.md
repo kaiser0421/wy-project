@@ -15,8 +15,8 @@
 
 | 筆電試跑 | 桌機正式跑 |
 |---|---|
-| **CPU**　Intel MacBook，2 核心／4 執行緒。 | **CPU**　（待桌機壓測結果） |
-| **RAM／容器配額**　8 GB。Docker Desktop VM 4 CPU／5 GB（Excel 匯出紀錄）。 | **RAM／容器配額**　（待桌機壓測結果） |
+| **CPU**　Intel MacBook，2 核心／4 執行緒。 | **CPU**　AMD Ryzen 5 5600，6 核心／12 執行緒。 |
+| **RAM／容器配額**　8 GB。Docker Desktop VM 4 CPU／5 GB（Excel 匯出紀錄）。 | **RAM／容器配額**　24 GB。Windows + WSL2 + Docker Desktop，WSL 實際可用的 CPU 與記憶體見 `environment.txt`。 |
 | **OS／版本**　macOS（Intel）。Excel 匯出日期為 2026-11-21（台北）。 | **OS／版本／日期／commit**　（待桌機壓測結果，填入 `environment.txt`） |
 | **拓樸**　筆電壓測的產壓程式、nginx、API、PostgreSQL 和其他服務共用宿主機。先前的 Scenario B 開發試跑使用單一 Uvicorn 和測試用 DB／Redis 容器，見 §3。 | **拓樸**　在另一台桌機執行 `loadtest/run.sh`。預設產壓端與整個 Compose stack 仍共用該機器。實際 CPU 限額與服務配置（待桌機壓測結果）。 |
 
