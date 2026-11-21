@@ -99,7 +99,7 @@ test("admin can view graphs, acknowledge an alert, look up a trace, and edit acc
   })).toBe(true);
   await page.getByRole("button", { name: "Acknowledge" }).click();
   await expect(page.getByText("Acknowledged", { exact: true })).toBeVisible();
-  await page.getByLabel("Request ID").fill("demo-request");
+  await page.getByPlaceholder("Paste a request ID").fill("demo-request");
   await page.getByRole("button", { name: "Find request" }).click();
   await expect(page.getByText("request_finished")).toBeVisible();
   await page.getByRole("link", { name: "Manage users" }).click();
