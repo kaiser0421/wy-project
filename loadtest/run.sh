@@ -135,7 +135,7 @@ scenario_a() {
   psql_q -c "SELECT status, count(*) AS orders, sum(quantity) AS tickets FROM orders WHERE event_id=$event_id GROUP BY 1 ORDER BY 1;" \
          -c "SELECT status, count(*) FROM seats WHERE event_id=$event_id GROUP BY 1 ORDER BY 1;" \
     > "$OUT/a/final-state.txt" 2>&1 || true
-  cat "$OUT/a/final-state.txt" | tee -a "$OUT/run.log"
+  tee -a "$OUT/run.log" < "$OUT/a/final-state.txt"
   psql_q -c "\copy (SELECT * FROM metrics_1s WHERE ts BETWEEN '$started' AND '$ended'::timestamptz + interval '30 seconds' ORDER BY ts, source) TO STDOUT WITH CSV HEADER" \
     > "$OUT/a/metrics_1s.csv" 2>/dev/null || true
   psql_q -c "\copy (SELECT * FROM business_1s WHERE ts BETWEEN '$started' AND '$ended'::timestamptz + interval '30 seconds' ORDER BY ts) TO STDOUT WITH CSV HEADER" \
