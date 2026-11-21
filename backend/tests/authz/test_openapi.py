@@ -28,7 +28,7 @@ def test_openapi_covers_each_operation() -> None:
         for method, operation in item.items()
     }
     assert operations
-    for route in _walk(list(app.routes)):
+    for route, _path in _walk(list(app.routes)):
         if not isinstance(route, APIRoute) or not route.include_in_schema:
             continue
         policy = route.endpoint.__policy__

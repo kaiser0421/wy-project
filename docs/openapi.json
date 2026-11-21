@@ -12,6 +12,7 @@
           "health"
         ],
         "summary": "Liveness probe",
+        "description": "Public probe for process liveness. A read has no side effects.",
         "operationId": "live_healthz_live_get",
         "responses": {
           "200": {
@@ -19,11 +20,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object",
-                  "title": "Response Live Healthz Live Get"
+                  "$ref": "#/components/schemas/LiveResult"
                 }
               }
             }
@@ -38,8 +35,7 @@
             },
             "description": "internal-error"
           }
-        },
-        "description": "Public probe for process liveness. A read has no side effects."
+        }
       }
     },
     "/healthz/ready": {
@@ -47,7 +43,8 @@
         "tags": [
           "health"
         ],
-        "summary": "Readiness probe (PostgreSQL, Redis, schema revision, draining)",
+        "summary": "Readiness probe",
+        "description": "Public probe for database, Redis and schema readiness. Each read checks current state.",
         "operationId": "ready_healthz_ready_get",
         "responses": {
           "200": {
@@ -74,16 +71,6 @@
               }
             }
           },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "internal-error"
-          },
           "503": {
             "description": "One or more readiness checks failed.",
             "content": {
@@ -107,9 +94,18 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        },
-        "description": "Public probe for database, Redis and schema readiness. Each read checks current state."
+        }
       }
     },
     "/api/v1/auth/register": {
@@ -118,6 +114,7 @@
           "auth"
         ],
         "summary": "Create a User account",
+        "description": "A caller from an allowed origin can create a User account. The email is unique. Repeating a successful registration returns a conflict. Requests are rate-limited.",
         "operationId": "register_api_v1_auth_register_post",
         "requestBody": {
           "content": {
@@ -140,66 +137,23 @@
               }
             }
           },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "validation-failed"
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "origin-not-allowed"
-          },
-          "409": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "email-taken"
-          },
-          "429": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "rate-limited",
-            "headers": {
-              "Retry-After": {
-                "description": "Wait before retrying when present.",
-                "schema": {
-                  "type": "string",
-                  "examples": [
-                    "1"
-                  ]
-                }
-              }
-            }
-          },
           "503": {
+            "description": "server-busy",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "server-busy": {
+                    "value": {
+                      "status": 503,
+                      "code": "server-busy"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "server-busy",
             "headers": {
               "Retry-After": {
                 "description": "Wait before retrying when present.",
@@ -213,17 +167,107 @@
             }
           },
           "500": {
+            "description": "internal-error",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "internal-error": {
+                    "value": {
+                      "status": 500,
+                      "code": "internal-error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "origin-not-allowed",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "origin-not-allowed": {
+                    "value": {
+                      "status": 403,
+                      "code": "origin-not-allowed"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation-failed",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "validation-failed": {
+                    "value": {
+                      "status": 422,
+                      "code": "validation-failed"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate-limited",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "rate-limited": {
+                    "value": {
+                      "status": 429,
+                      "code": "rate-limited"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "internal-error"
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "email-taken",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "email-taken": {
+                    "value": {
+                      "status": 409,
+                      "code": "email-taken"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
-        },
-        "description": "A caller from an allowed origin can create a User account. The email is unique. Repeating a successful registration returns a conflict. Requests are rate-limited."
+        }
       }
     },
     "/api/v1/auth/login": {
@@ -231,7 +275,8 @@
         "tags": [
           "auth"
         ],
-        "summary": "Sign in; sets the session cookie and returns the CSRF token",
+        "summary": "Sign in and set the session cookie",
+        "description": "A caller from an allowed origin can sign in with an active account. Each successful request creates a session and returns a CSRF token. Requests are rate-limited.",
         "operationId": "login_api_v1_auth_login_post",
         "requestBody": {
           "content": {
@@ -254,66 +299,23 @@
               }
             }
           },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "validation-failed"
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "invalid-credentials"
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "origin-not-allowed"
-          },
-          "429": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "rate-limited",
-            "headers": {
-              "Retry-After": {
-                "description": "Wait before retrying when present.",
-                "schema": {
-                  "type": "string",
-                  "examples": [
-                    "1"
-                  ]
-                }
-              }
-            }
-          },
           "503": {
+            "description": "server-busy",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "server-busy": {
+                    "value": {
+                      "status": 503,
+                      "code": "server-busy"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "server-busy",
             "headers": {
               "Retry-After": {
                 "description": "Wait before retrying when present.",
@@ -327,17 +329,107 @@
             }
           },
           "500": {
+            "description": "internal-error",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "internal-error": {
+                    "value": {
+                      "status": 500,
+                      "code": "internal-error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "origin-not-allowed",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "origin-not-allowed": {
+                    "value": {
+                      "status": 403,
+                      "code": "origin-not-allowed"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation-failed",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "validation-failed": {
+                    "value": {
+                      "status": 422,
+                      "code": "validation-failed"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate-limited",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "rate-limited": {
+                    "value": {
+                      "status": 429,
+                      "code": "rate-limited"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "internal-error"
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid-credentials",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "invalid-credentials": {
+                    "value": {
+                      "status": 401,
+                      "code": "invalid-credentials"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
-        },
-        "description": "A caller from an allowed origin can sign in with an active account. Each successful request creates a session and returns a CSRF token. Requests are rate-limited."
+        }
       }
     },
     "/api/v1/auth/logout": {
@@ -345,21 +437,30 @@
         "tags": [
           "auth"
         ],
-        "summary": "Sign out; the session cookie stops working immediately",
+        "summary": "Revoke the current session",
+        "description": "Revoke the current authenticated session. Revocation takes effect on the next request. Repeating the request with the revoked cookie returns 401.",
         "operationId": "logout_api_v1_auth_logout_post",
         "responses": {
           "204": {
             "description": "Successful Response"
           },
           "503": {
+            "description": "server-busy",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "server-busy": {
+                    "value": {
+                      "status": 503,
+                      "code": "server-busy"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "server-busy",
             "headers": {
               "Retry-After": {
                 "description": "Wait before retrying when present.",
@@ -373,37 +474,66 @@
             }
           },
           "500": {
+            "description": "internal-error",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "internal-error": {
+                    "value": {
+                      "status": 500,
+                      "code": "internal-error"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "internal-error"
+            }
           },
           "401": {
+            "description": "unauthenticated",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "unauthenticated": {
+                    "value": {
+                      "status": 401,
+                      "code": "unauthenticated"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "unauthenticated"
+            }
           },
           "403": {
+            "description": "csrf-failed, origin-not-allowed",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "csrf-failed": {
+                    "value": {
+                      "status": 403,
+                      "code": "csrf-failed"
+                    }
+                  },
+                  "origin-not-allowed": {
+                    "value": {
+                      "status": 403,
+                      "code": "origin-not-allowed"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "csrf-failed, origin-not-allowed"
+            }
           }
         },
-        "description": "Revoke the current authenticated session. Revocation takes effect on the next request. Repeating the request with the revoked cookie returns 401.",
         "x-allowed-roles": [
           "admin",
           "user",
@@ -422,7 +552,8 @@
         "tags": [
           "auth"
         ],
-        "summary": "Current user and the session's CSRF token",
+        "summary": "Get the current user and CSRF token",
+        "description": "Read the authenticated user's current account and CSRF token.",
         "operationId": "me_api_v1_auth_me_get",
         "responses": {
           "200": {
@@ -435,28 +566,61 @@
               }
             }
           },
-          "500": {
+          "503": {
+            "description": "server-busy",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "server-busy": {
+                    "value": {
+                      "status": 503,
+                      "code": "server-busy"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "internal-error"
+            }
+          },
+          "500": {
+            "description": "internal-error",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "internal-error": {
+                    "value": {
+                      "status": 500,
+                      "code": "internal-error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           },
           "401": {
+            "description": "unauthenticated",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "unauthenticated": {
+                    "value": {
+                      "status": 401,
+                      "code": "unauthenticated"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "unauthenticated"
+            }
           }
         },
-        "description": "Read the authenticated user's current account and CSRF token.",
         "x-allowed-roles": [
           "admin",
           "user",
@@ -474,7 +638,8 @@
         "tags": [
           "admin"
         ],
-        "summary": "List users (keyset paging)",
+        "summary": "List users",
+        "description": "Admins can list accounts in ascending ID order. Each page uses the last ID as its cursor, so inserts do not shift accounts already returned.",
         "operationId": "list_users_api_v1_admin_users_get",
         "parameters": [
           {
@@ -485,13 +650,14 @@
               "type": "integer",
               "maximum": 100,
               "minimum": 1,
-              "default": 50,
-              "title": "Limit",
+              "description": "Page size.",
               "examples": [
                 50
-              ]
+              ],
+              "default": 50,
+              "title": "Limit"
             },
-            "description": "Maximum number of accounts to return."
+            "description": "Page size."
           },
           {
             "name": "cursor",
@@ -507,13 +673,13 @@
                   "type": "null"
                 }
               ],
-              "description": "Last id from the previous page",
-              "title": "Cursor",
+              "description": "Last ID on the prior page.",
               "examples": [
                 42
-              ]
+              ],
+              "title": "Cursor"
             },
-            "description": "Last id from the previous page"
+            "description": "Last ID on the prior page."
           }
         ],
         "responses": {
@@ -527,48 +693,97 @@
               }
             }
           },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "validation-failed"
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "internal-error"
-          },
           "401": {
+            "description": "unauthenticated",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "unauthenticated": {
+                    "value": {
+                      "status": 401,
+                      "code": "unauthenticated"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "unauthenticated"
+            }
           },
           "403": {
+            "description": "forbidden",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "forbidden": {
+                    "value": {
+                      "status": 403,
+                      "code": "forbidden"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "forbidden"
+            }
+          },
+          "422": {
+            "description": "validation-failed",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "validation-failed": {
+                    "value": {
+                      "status": 422,
+                      "code": "validation-failed"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal-error",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "internal-error": {
+                    "value": {
+                      "status": 500,
+                      "code": "internal-error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "server-busy",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "server-busy": {
+                    "value": {
+                      "status": 503,
+                      "code": "server-busy"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
-        "description": "Admins can list accounts in ascending ID order. Each page uses the last ID as its cursor, so inserts do not shift accounts already returned.",
         "x-allowed-roles": [
           "admin"
         ],
@@ -585,6 +800,7 @@
           "admin"
         ],
         "summary": "Get one user",
+        "description": "Admins can read an account and its current ETag.",
         "operationId": "get_user_api_v1_admin_users__user_id__get",
         "parameters": [
           {
@@ -593,12 +809,13 @@
             "required": true,
             "schema": {
               "type": "integer",
-              "title": "User Id",
+              "description": "Account ID.",
               "examples": [
                 42
-              ]
+              ],
+              "title": "User Id"
             },
-            "description": "Managed account ID."
+            "description": "Account ID."
           }
         ],
         "responses": {
@@ -612,58 +829,115 @@
               }
             }
           },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "validation-failed"
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "not-found"
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "internal-error"
-          },
           "401": {
+            "description": "unauthenticated",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "unauthenticated": {
+                    "value": {
+                      "status": 401,
+                      "code": "unauthenticated"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "unauthenticated"
+            }
           },
           "403": {
+            "description": "forbidden",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "forbidden": {
+                    "value": {
+                      "status": 403,
+                      "code": "forbidden"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "forbidden"
+            }
+          },
+          "422": {
+            "description": "validation-failed",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "validation-failed": {
+                    "value": {
+                      "status": 422,
+                      "code": "validation-failed"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal-error",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "internal-error": {
+                    "value": {
+                      "status": 500,
+                      "code": "internal-error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "server-busy",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "server-busy": {
+                    "value": {
+                      "status": 503,
+                      "code": "server-busy"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not-found",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "not-found": {
+                    "value": {
+                      "status": 404,
+                      "code": "not-found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
-        "description": "Admins can read an account and its current ETag.",
         "x-allowed-roles": [
           "admin"
         ],
@@ -677,7 +951,8 @@
         "tags": [
           "admin"
         ],
-        "summary": "Change a user's role or active state (requires If-Match)",
+        "summary": "Change a user's role or active state",
+        "description": "Admins can update an account's role or active state using its ETag. Concurrent writes serialize and a stale ETag returns 412. Changes revoke the account's sessions.",
         "operationId": "patch_user_api_v1_admin_users__user_id__patch",
         "parameters": [
           {
@@ -686,12 +961,13 @@
             "required": true,
             "schema": {
               "type": "integer",
-              "title": "User Id",
+              "description": "Account ID.",
               "examples": [
                 42
-              ]
+              ],
+              "title": "User Id"
             },
-            "description": "Managed account ID."
+            "description": "Account ID."
           },
           {
             "name": "if-match",
@@ -706,12 +982,13 @@
                   "type": "null"
                 }
               ],
-              "title": "If-Match",
+              "description": "Current account ETag.",
               "examples": [
-                "\"v2\""
-              ]
+                "\"v1\""
+              ],
+              "title": "If-Match"
             },
-            "description": "Strong ETag of the account revision to update."
+            "description": "Current account ETag."
           }
         ],
         "requestBody": {
@@ -735,65 +1012,107 @@
               }
             }
           },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "unauthenticated": {
+                    "value": {
+                      "status": 401,
+                      "code": "unauthenticated"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "forbidden, csrf-failed, origin-not-allowed",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "forbidden": {
+                    "value": {
+                      "status": 403,
+                      "code": "forbidden"
+                    }
+                  },
+                  "csrf-failed": {
+                    "value": {
+                      "status": 403,
+                      "code": "csrf-failed"
+                    }
+                  },
+                  "origin-not-allowed": {
+                    "value": {
+                      "status": 403,
+                      "code": "origin-not-allowed"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "422": {
+            "description": "validation-failed",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "validation-failed": {
+                    "value": {
+                      "status": 422,
+                      "code": "validation-failed"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "validation-failed"
+            }
           },
-          "404": {
+          "500": {
+            "description": "internal-error",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "internal-error": {
+                    "value": {
+                      "status": 500,
+                      "code": "internal-error"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "not-found"
-          },
-          "409": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "self-modification, last-admin"
-          },
-          "412": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "precondition-failed"
-          },
-          "428": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "precondition-required"
+            }
           },
           "503": {
+            "description": "server-busy",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "server-busy": {
+                    "value": {
+                      "status": 503,
+                      "code": "server-busy"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "server-busy",
             "headers": {
               "Retry-After": {
                 "description": "Wait before retrying when present.",
@@ -806,38 +1125,85 @@
               }
             }
           },
-          "500": {
+          "404": {
+            "description": "not-found",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "not-found": {
+                    "value": {
+                      "status": 404,
+                      "code": "not-found"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "internal-error"
+            }
           },
-          "401": {
+          "409": {
+            "description": "self-modification, last-admin",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "self-modification": {
+                    "value": {
+                      "status": 409,
+                      "code": "self-modification"
+                    }
+                  },
+                  "last-admin": {
+                    "value": {
+                      "status": 409,
+                      "code": "last-admin"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "unauthenticated"
+            }
           },
-          "403": {
+          "412": {
+            "description": "precondition-failed",
             "content": {
               "application/problem+json": {
+                "examples": {
+                  "precondition-failed": {
+                    "value": {
+                      "status": 412,
+                      "code": "precondition-failed"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
-            },
-            "description": "forbidden csrf-failed, origin-not-allowed"
+            }
+          },
+          "428": {
+            "description": "precondition-required",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "precondition-required": {
+                    "value": {
+                      "status": 428,
+                      "code": "precondition-required"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
-        "description": "Admins can update an account's role or active state using its ETag. Concurrent writes serialize and a stale ETag returns 412. Changes revoke the account's sessions.",
         "x-allowed-roles": [
           "admin"
         ],
@@ -4386,7 +4752,7 @@
           "seats"
         ],
         "summary": "Get a consistent seat snapshot",
-        "description": "Any authenticated role may read a published event. Drafts are visible to the owner and administrators. Missing and hidden events return 404.\n\nRead-only and safe to retry. Layout, seat state and the assigned stream sequence come from one repeatable-read database snapshot. Concurrent requests on the same API process share a refresh. A cached result is at most one second old and is bypassed when its layout version is below `min_layout_ver`. The response carries the database version even if it is below the requested minimum. Resume the stream using `last_seq`.",
+        "description": "Any authenticated role may read a published event. Drafts are visible to User-role owners and administrators. Missing and hidden events return 404.\n\nRead-only and safe to retry. Layout, seat state and the assigned stream sequence come from one repeatable-read database snapshot. Concurrent requests on the same API process share a refresh. A cached result is at most one second old and is bypassed when its layout version is below `min_layout_ver`. The response carries the database version even if it is below the requested minimum. Resume the stream using `last_seq`.",
         "operationId": "get_seats_api_v1_events__event_id__seats_get",
         "parameters": [
           {
@@ -4549,7 +4915,7 @@
           "seats"
         ],
         "summary": "Subscribe to a resumable seat update stream",
-        "description": "Any authenticated role may read a published event. Drafts are visible to the owner and administrators. Missing and hidden events return 404.\n\nThe read-only SSE stream accepts the last **applied** sequence in `Last-Event-ID`. Start with a snapshot and send its `last_seq`. Omitting the header tails the live head. Registration captures a live head and replays through it before following new frames. Delivery resumes at the next sequence and uses PostgreSQL when a ring frame is missing or overlaps the cursor. Apply only newer seat versions. At process capacity, new event IDs receive a retryable `503 server-busy`.\n\n- `delta`, with `id: <to>` and payload `{\"from\": 10, \"to\": 12, \"changes\": [[0, \"held\", 2]], \"ts\": \"2026-11-21T00:00:00Z\"}`. The inclusive range covers all coalesced outbox rows and `ts` is their earliest outbox creation time. If `from > last_applied + 1`, reconnect from the last applied sequence.\n- `layout`, with `id: <seq>`: `{\"layout_ver\": 3}`. Fetch a snapshot with `min_layout_ver=3` before applying deltas. Resume at that snapshot's sequence.\n- `progress`, every second: `{\"head\": 12, \"oldest_unassigned_age_ms\": 0}`. If progress advances beyond the applied cursor for more than three seconds or the oldest unassigned change exceeds two seconds, show the state as stale.\n- `resync`, followed by EOF: `{\"reason\": \"replay-unavailable\"}`. This includes missing replay rows and replay capacity exhaustion. Fetch a new snapshot and reconnect. A stalled socket may close before the frame arrives.\n- A heartbeat comment is sent every 15 seconds. Revoked sessions are disconnected. Bytes already handed to the transport can still arrive.",
+        "description": "Any authenticated role may read a published event. Drafts are visible to User-role owners and administrators. Missing and hidden events return 404.\n\nThe read-only SSE stream accepts the last **applied** sequence in `Last-Event-ID`. Start with a snapshot and send its `last_seq`. Omitting the header tails the live head. Registration captures a live head and replays through it before following new frames. Delivery resumes at the next sequence and uses PostgreSQL when a ring frame is missing or overlaps the cursor. Apply only newer seat versions. At process capacity, new event IDs receive a retryable `503 server-busy`.\n\n- `delta`, with `id: <to>` and payload `{\"from\": 10, \"to\": 12, \"changes\": [[0, \"held\", 2]], \"ts\": \"2026-11-21T00:00:00Z\"}`. The inclusive range covers all coalesced outbox rows and `ts` is their earliest outbox creation time. If `from > last_applied + 1`, reconnect from the last applied sequence.\n- `layout`, with `id: <seq>`: `{\"layout_ver\": 3}`. Fetch a snapshot with `min_layout_ver=3` before applying deltas. Resume at that snapshot's sequence.\n- `progress`, every second: `{\"head\": 12, \"oldest_unassigned_age_ms\": 0}`. If progress advances beyond the applied cursor for more than three seconds or the oldest unassigned change exceeds two seconds, show the state as stale.\n- `resync`, followed by EOF: `{\"reason\": \"replay-unavailable\"}`. This includes missing replay rows and replay capacity exhaustion. Fetch a new snapshot and reconnect. A stalled socket may close before the frame arrives.\n- A heartbeat comment is sent every 15 seconds. Revoked sessions are disconnected. Bytes already handed to the transport can still arrive.",
         "operationId": "seat_stream_api_v1_events__event_id__seat_stream_get",
         "parameters": [
           {
@@ -5949,7 +6315,7 @@
           "id": {
             "type": "integer",
             "title": "Id",
-            "description": "Account ID.",
+            "description": "User ID.",
             "examples": [
               42
             ]
@@ -5957,9 +6323,9 @@
           "email": {
             "type": "string",
             "title": "Email",
-            "description": "Account's normalized email address.",
+            "description": "Account email.",
             "examples": [
-              "buyer@example.com"
+              "user@example.com"
             ]
           },
           "role": {
@@ -5970,7 +6336,7 @@
               "viewer"
             ],
             "title": "Role",
-            "description": "Role governing the account's permissions.",
+            "description": "Assigned role.",
             "examples": [
               "user"
             ]
@@ -5986,9 +6352,9 @@
           "version": {
             "type": "integer",
             "title": "Version",
-            "description": "Current revision used to produce the ETag.",
+            "description": "Revision used in the ETag.",
             "examples": [
-              2
+              1
             ]
           }
         },
@@ -6010,17 +6376,9 @@
             },
             "type": "array",
             "title": "Items",
-            "description": "Accounts in ascending ID order.",
+            "description": "Users on this page.",
             "examples": [
-              [
-                {
-                  "id": 42,
-                  "email": "buyer@example.com",
-                  "role": "user",
-                  "is_active": true,
-                  "version": 2
-                }
-              ]
+              []
             ]
           },
           "next_cursor": {
@@ -6033,7 +6391,7 @@
               }
             ],
             "title": "Next Cursor",
-            "description": "Pass as `cursor` to fetch the next page",
+            "description": "Cursor for the next page.",
             "examples": [
               "42"
             ]
@@ -6063,7 +6421,7 @@
               }
             ],
             "title": "Role",
-            "description": "New role, if provided.",
+            "description": "New assigned role.",
             "examples": [
               "viewer"
             ]
@@ -6078,7 +6436,7 @@
               }
             ],
             "title": "Is Active",
-            "description": "New sign-in status, if provided.",
+            "description": "Enable or disable sign-in.",
             "examples": [
               false
             ]
@@ -6506,10 +6864,10 @@
             "maxLength": 254,
             "minLength": 3,
             "title": "Email",
+            "description": "Account email.",
             "examples": [
               "user@example.com"
-            ],
-            "description": "Account's normalized email address."
+            ]
           },
           "password": {
             "type": "string",
@@ -6518,7 +6876,7 @@
             "title": "Password",
             "description": "Account password.",
             "examples": [
-              "example-passphrase"
+              "Example-Pass-1"
             ]
           }
         },
@@ -7234,6 +7592,22 @@
         "title": "JobOut"
       },
       "JsonValue": {},
+      "LiveResult": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status",
+            "description": "API is running.",
+            "default": "ok",
+            "examples": [
+              "ok"
+            ]
+          }
+        },
+        "type": "object",
+        "title": "LiveResult"
+      },
       "Metric": {
         "properties": {
           "ts": {
@@ -7873,6 +8247,53 @@
         ],
         "title": "PaymentAttempt"
       },
+      "ReadyResult": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "not-ready"
+            ],
+            "title": "Status",
+            "description": "Machine-readable readiness result.",
+            "examples": [
+              "ready"
+            ]
+          },
+          "checks": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Checks",
+            "description": "Dependency check outcomes, deployed schema revision and any drain flag.",
+            "examples": [
+              {
+                "postgres": "ok",
+                "redis": "ok",
+                "schema": "0005_monitoring"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "checks"
+        ],
+        "title": "ReadyResult"
+      },
       "Registration": {
         "properties": {
           "email": {
@@ -7880,19 +8301,19 @@
             "maxLength": 254,
             "minLength": 3,
             "title": "Email",
+            "description": "Account email.",
             "examples": [
               "user@example.com"
-            ],
-            "description": "Account's normalized email address."
+            ]
           },
           "password": {
             "type": "string",
             "maxLength": 128,
             "minLength": 10,
             "title": "Password",
-            "description": "10 to 128 characters",
+            "description": "New account password.",
             "examples": [
-              "example-passphrase"
+              "Example-Pass-1"
             ]
           }
         },
@@ -8287,11 +8708,11 @@
         "properties": {
           "user": {
             "$ref": "#/components/schemas/UserOut",
-            "description": "Account associated with the session.",
+            "description": "Authenticated user.",
             "examples": [
               {
+                "email": "user@example.com",
                 "id": 42,
-                "email": "buyer@example.com",
                 "role": "user"
               }
             ]
@@ -8299,9 +8720,9 @@
           "csrf_token": {
             "type": "string",
             "title": "Csrf Token",
-            "description": "Send as X-CSRF-Token on POST/PUT/PATCH/DELETE",
+            "description": "Session-bound token to send as X-CSRF-Token on writes.",
             "examples": [
-              "example-csrf-token"
+              "session-csrf-token-example"
             ]
           }
         },
@@ -8372,7 +8793,7 @@
           "id": {
             "type": "integer",
             "title": "Id",
-            "description": "Account ID.",
+            "description": "User ID.",
             "examples": [
               42
             ]
@@ -8380,9 +8801,9 @@
           "email": {
             "type": "string",
             "title": "Email",
-            "description": "Account's normalized email address.",
+            "description": "Normalized account email.",
             "examples": [
-              "buyer@example.com"
+              "user@example.com"
             ]
           },
           "role": {
@@ -8393,7 +8814,7 @@
               "viewer"
             ],
             "title": "Role",
-            "description": "Role governing the account's permissions.",
+            "description": "Current role.",
             "examples": [
               "user"
             ]
