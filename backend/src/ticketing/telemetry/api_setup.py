@@ -88,7 +88,7 @@ async def _flush_loop(state: State, routes: dict[str, Counts]) -> None:
             route: [counts.status_classes, counts.hist] for route, counts in routes.items()
         }
         routes.clear()
-        gauge = getattr(state, "sse_active", None)
+        gauge = state.sse_active_connections()
         outcomes = business.drain()
         try:
             async with asyncio.timeout(0.4):
@@ -103,7 +103,7 @@ async def _flush_loop(state: State, routes: dict[str, Counts]) -> None:
                             {
                                 "routes": route_payload,
                                 "business": outcomes,
-                                "sse_active": gauge if isinstance(gauge, int) else None,
+                                "sse_active": gauge,
                             }
                         ),
                     },

@@ -19,6 +19,7 @@ from starlette.types import Receive, Scope, Send
 
 from ticketing.api.routes.events import READ, Current, EventId, problems
 from ticketing.api.security import SecureRouter
+from ticketing.core.db import acquire
 from ticketing.core.errors import ProblemError
 from ticketing.core.logging import get_logger
 from ticketing.events.access import EventActor, can_view
@@ -68,9 +69,11 @@ async def _authorize(request: Request, actor: EventActor, event_id: int) -> None
 
     The same rule is enforced again inside the workbook snapshot (reports.sales._event).
     """
-    row = await request.app.state.db.fetchrow(
-        "SELECT owner_id, status::text AS status FROM events WHERE id = $1", event_id
-    )
+    state = request.app.state
+    async with acquire(state.db, state.settings.db_pool_acquire_timeout_s) as conn:
+        row = await conn.fetchrow(
+            "SELECT owner_id, status::text AS status FROM events WHERE id = $1", event_id
+        )
     if row is None or (
         actor.role != "viewer" and not can_view(actor, row["owner_id"], row["status"])
     ):

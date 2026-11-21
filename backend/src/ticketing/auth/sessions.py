@@ -17,6 +17,7 @@ import orjson
 from redis.asyncio import Redis
 
 from ticketing.auth.tokens import hash_token, new_session_token
+from ticketing.core.db import acquire
 from ticketing.core.logging import get_logger
 from ticketing.core.settings import Settings
 
@@ -46,8 +47,8 @@ WHERE s.token_hash = $1
 """
 
 
-async def authenticate(pool: asyncpg.Pool, token: str) -> SessionPrincipal | None:
-    row = await pool.fetchrow(_AUTH_SQL, hash_token(token))
+async def authenticate(conn: asyncpg.Connection, token: str) -> SessionPrincipal | None:
+    row = await conn.fetchrow(_AUTH_SQL, hash_token(token))
     if row is None:
         return None
     return SessionPrincipal(
@@ -151,6 +152,7 @@ class LastSeenRefresher:
 
     def __init__(self, pool: asyncpg.Pool, settings: Settings, interval_s: float = 5.0) -> None:
         self._pool = pool
+        self._acquire_timeout = settings.db_pool_acquire_timeout_s
         self._idle = timedelta(minutes=settings.session_idle_minutes)
         self._interval = interval_s
         self._pending: set[uuid.UUID] = set()
@@ -181,25 +183,26 @@ class LastSeenRefresher:
             return
         batch, self._pending = list(self._pending), set()
         try:
-            await self._pool.execute(
-                """
-                WITH eligible AS (
-                    SELECT id FROM sessions
-                    WHERE id = ANY($1::uuid[])
-                      AND revoked_at IS NULL
-                      AND abs_expires_at > now()
-                      AND idle_expires_at > now()
-                      AND last_seen_at <= now() - interval '60 seconds'
-                    FOR NO KEY UPDATE SKIP LOCKED  -- never wait on a revoking transaction
+            async with acquire(self._pool, self._acquire_timeout) as conn:
+                await conn.execute(
+                    """
+                    WITH eligible AS (
+                        SELECT id FROM sessions
+                        WHERE id = ANY($1::uuid[])
+                          AND revoked_at IS NULL
+                          AND abs_expires_at > now()
+                          AND idle_expires_at > now()
+                          AND last_seen_at <= now() - interval '60 seconds'
+                        FOR NO KEY UPDATE SKIP LOCKED  -- never wait on a revoking transaction
+                    )
+                    UPDATE sessions s
+                    SET last_seen_at = now(),
+                        idle_expires_at = LEAST(s.abs_expires_at, now() + $2::interval)
+                    FROM eligible WHERE s.id = eligible.id
+                    """,
+                    batch,
+                    self._idle,
                 )
-                UPDATE sessions s
-                SET last_seen_at = now(),
-                    idle_expires_at = LEAST(s.abs_expires_at, now() + $2::interval)
-                FROM eligible WHERE s.id = eligible.id
-                """,
-                batch,
-                self._idle,
-            )
         except Exception as exc:
             self.failed_flushes += 1
             log.warning("auth.refresh_failed", error=type(exc).__name__, count=len(batch))

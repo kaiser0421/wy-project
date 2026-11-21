@@ -77,11 +77,13 @@ async def list_users(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: Annotated[int | None, Query(ge=0, description="Last id from the previous page")] = None,
 ) -> AdminUserPage:
-    rows = await request.app.state.db.fetch(
-        f"SELECT {_COLUMNS} FROM users WHERE id > $1 ORDER BY id LIMIT $2",
-        cursor or 0,
-        limit + 1,
-    )
+    state = request.app.state
+    async with acquire(state.db, state.settings.db_pool_acquire_timeout_s) as conn:
+        rows = await conn.fetch(
+            f"SELECT {_COLUMNS} FROM users WHERE id > $1 ORDER BY id LIMIT $2",
+            cursor or 0,
+            limit + 1,
+        )
     items = [AdminUserOut(**dict(r)) for r in rows[:limit]]
     next_cursor = str(items[-1].id) if len(rows) > limit and items else None
     return AdminUserPage(items=items, next_cursor=next_cursor)
@@ -89,10 +91,12 @@ async def list_users(
 
 @router.get("/{user_id}", policy=ADMIN, response_model=AdminUserOut, summary="Get one user")
 async def get_user(user_id: int, request: Request, response: Response) -> AdminUserOut:
-    row = await request.app.state.db.fetchrow(
-        f"SELECT {_COLUMNS} FROM users WHERE id = $1",
-        user_id,
-    )
+    state = request.app.state
+    async with acquire(state.db, state.settings.db_pool_acquire_timeout_s) as conn:
+        row = await conn.fetchrow(
+            f"SELECT {_COLUMNS} FROM users WHERE id = $1",
+            user_id,
+        )
     if row is None:
         raise ProblemError(404, "not-found", "Not found", "User not found.")
     response.headers["ETag"] = _etag(row["version"])

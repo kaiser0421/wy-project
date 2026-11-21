@@ -133,12 +133,13 @@ async def register(body: Registration, request: Request) -> UserOut:
     )
     password_hash = await state.passwords.hash(body.password)
     try:
-        row = await state.db.fetchrow(
-            "INSERT INTO users (email, password_hash, role) VALUES ($1, $2, 'user') "
-            "RETURNING id, email::text AS email, role::text AS role",
-            body.email,
-            password_hash,
-        )
+        async with acquire(state.db, settings.db_pool_acquire_timeout_s) as conn:
+            row = await conn.fetchrow(
+                "INSERT INTO users (email, password_hash, role) VALUES ($1, $2, 'user') "
+                "RETURNING id, email::text AS email, role::text AS role",
+                body.email,
+                password_hash,
+            )
     except asyncpg.UniqueViolationError as exc:
         raise ProblemError(409, "email-taken", "Email already registered") from exc
     return UserOut(id=row["id"], email=row["email"], role=row["role"])
@@ -163,9 +164,10 @@ async def login(body: Credentials, request: Request, response: Response) -> Sess
     # The global budget is charged only for requests admitted to password verification.
     await limiter.hit("login-global", "all", settings.rate_limit_login_global_per_s, 1)
 
-    user = await state.db.fetchrow(
-        "SELECT id, password_hash FROM users WHERE email = $1", body.email
-    )
+    async with acquire(state.db, settings.db_pool_acquire_timeout_s) as conn:
+        user = await conn.fetchrow(
+            "SELECT id, password_hash FROM users WHERE email = $1", body.email
+        )
     verified = await state.passwords.verify(user["password_hash"] if user else None, body.password)
     if not verified or user is None:
         await _penalize_failure(request, body.email)

@@ -9,6 +9,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from ticketing.api.security import Public, SecureRouter
+from ticketing.core.db import acquire
 from ticketing.core.schema import SCHEMA_HEAD
 
 router = SecureRouter(prefix="/healthz", tags=["health"])
@@ -35,7 +36,8 @@ async def ready(request: Request) -> JSONResponse:
 
     try:
         async with asyncio.timeout(1.0):
-            version = await state.db.fetchval("SELECT version_num FROM alembic_version")
+            async with acquire(state.db, state.settings.db_pool_acquire_timeout_s) as conn:
+                version = await conn.fetchval("SELECT version_num FROM alembic_version")
         checks["postgres"] = "ok"
         checks["schema"] = version
         if version != SCHEMA_HEAD:

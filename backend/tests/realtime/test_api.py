@@ -10,16 +10,21 @@ from typing import Any
 import asyncpg
 import httpx
 import pytest
+from redis.asyncio import Redis
 from starlette.types import ASGIApp, Message, Scope
 
 from tests.support import create_user, login
 from ticketing.auth.sessions import REVOKE_CHANNEL, revoke_session
 from ticketing.core.service import ServiceContext
+from ticketing.core.settings import Settings
 from ticketing.realtime import reader, relay, revocation, stream
 from ticketing.realtime.client_model import apply_delta
 from ticketing.realtime.outbox import emit_layout_changed, emit_seat_changes
 from ticketing.realtime.reader import EventReader
 from ticketing.realtime.snapshot import SnapshotCache
+from ticketing.telemetry import business
+from ticketing.telemetry.app_metrics import parse_batch
+from ticketing.telemetry.common import STREAM
 
 pytestmark = pytest.mark.integration
 
@@ -671,3 +676,81 @@ async def test_two_failed_rechecks_close_all_local_streams(
                     assert remaining.kind == "progress"
     assert failures >= 2
     assert revocations.active == 0
+
+
+async def test_api_flushes_gauge_after_sse_connect_and_disconnect(
+    client: httpx.AsyncClient,
+    running_app: ASGIApp,
+    event: Event,
+    settings: Settings,
+) -> None:
+    business.record(813, "hold_ok")
+    assert (await client.get("/healthz/live")).status_code == 200
+    async with Redis.from_url(settings.redis_url) as redis:
+        async with open_stream(running_app, client, event) as events:
+            await receive_kind(events, "progress")
+            async with asyncio.timeout(WAIT_S):
+                while True:
+                    intervals = parse_batch(await redis.xrange(STREAM))
+                    if any(item.sse == 1 for item in intervals):
+                        break
+                    await asyncio.sleep(0.05)
+            active_interval = max(item.number for item in intervals if item.sse == 1)
+            assert any((813, "hold_ok", 1) in item.outcomes for item in intervals)
+            assert (
+                sum(
+                    item.routes["/healthz/live"].status_classes[2]
+                    for item in intervals
+                    if "/healthz/live" in item.routes
+                )
+                == 1
+            )
+        async with asyncio.timeout(WAIT_S):
+            while True:
+                intervals = parse_batch(await redis.xrange(STREAM))
+                if any(item.number > active_interval and item.sse == 0 for item in intervals):
+                    break
+                await asyncio.sleep(0.05)
+
+
+async def test_draft_visibility_matches_events_after_owner_demotion(
+    db: asyncpg.Connection,
+    client: httpx.AsyncClient,
+    running_app: ASGIApp,
+    make_client: Callable[[], httpx.AsyncClient],
+    event: Event,
+) -> None:
+    await db.execute("UPDATE events SET status='draft', published_at=NULL WHERE id=$1", event.id)
+    detail = f"/api/v1/events/{event.id}"
+    assert (await client.get(detail)).status_code == 200
+    assert (await client.get(event.seats)).status_code == 200
+    async with open_stream(running_app, client, event) as stream:
+        await receive_kind(stream, "progress")
+    owner_id = await db.fetchval("SELECT owner_id FROM events WHERE id=$1", event.id)
+    for role in ("user", "viewer"):
+        email = f"other-{role}@example.com"
+        await create_user(db, email, role=role)
+        async with make_client() as other:
+            await login(other, email)
+            for url in (detail, event.seats, event.stream):
+                assert (await other.get(url)).status_code == 404
+    await create_user(db, "admin@example.com", role="admin")
+    async with make_client() as admin:
+        admin_session = await login(admin, "admin@example.com")
+        user_url = f"/api/v1/admin/users/{owner_id}"
+        before = await admin.get(user_url)
+        changed = await admin.patch(
+            user_url,
+            headers={**admin_session.headers(), "If-Match": before.headers["ETag"]},
+            json={"role": "viewer"},
+        )
+        assert changed.status_code == 200
+        assert (await admin.get(event.seats)).status_code == 200
+        async with open_stream(running_app, admin, event) as stream:
+            await receive_kind(stream, "progress")
+    assert (await client.get(event.seats)).status_code == 401
+    await login(client, "owner@example.com")
+    for url in (detail, event.seats, event.stream):
+        denied = await client.get(url)
+        assert denied.status_code == 404
+        assert denied.json()["code"] == "not-found"
