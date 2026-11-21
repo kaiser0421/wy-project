@@ -47,6 +47,8 @@
 | --- | --- |
 | [![即時座位圖](docs/screenshots/03-seat-map-live.png)](docs/screenshots/03-seat-map-live.png) | [![即時監控](docs/screenshots/06-admin-monitoring.png)](docs/screenshots/06-admin-monitoring.png) |
 | 座位狀態經 SSE 即時更新，可指定座位或由系統依區域配位。 | Edge／App 的每秒 RPS、延遲分位數、錯誤率、連線數、銷售活動、告警與 `request_id` 追查。 |
+| [![深色主題座位圖](docs/screenshots/09-dark-seat-map.png)](docs/screenshots/09-dark-seat-map.png) | [![深色主題監控](docs/screenshots/10-dark-monitoring.png)](docs/screenshots/10-dark-monitoring.png) |
+| 深色主題（跟隨系統設定）。 | 深色主題下的監控圖表。 |
 
 <details>
 <summary>其他畫面：登入、活動列表、主辦管理、我的訂單、使用者管理、Swagger</summary>
