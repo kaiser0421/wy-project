@@ -114,12 +114,17 @@ function orderState(order: Order, status: string): void {
   if (changed.length) update(changed);
 }
 
+function jsonBody<T>(init: RequestInit): T {
+  if (typeof init.body !== "string") throw new SyntaxError("Expected a JSON request body.");
+  return JSON.parse(init.body) as T;
+}
+
 function book(event: EventInfo, init: RequestInit): Response {
   const key = new Headers(init.headers).get("Idempotency-Key") ?? "";
   const existing = bookings.get(key);
   if (existing) return json(orders.get(existing));
   if (event.status !== "published") return problem(409, "event-not-on-sale", "This event is not open for booking.");
-  const data = JSON.parse(String(init.body)) as { seat_ids?: number[]; zone_code?: string; quantity?: number };
+  const data = jsonBody<{ seat_ids?: number[]; zone_code?: string; quantity?: number }>(init);
   const inventory = event.id === 1 ? seats : [];
   const chosen = data.seat_ids ? inventory.filter(seat => data.seat_ids!.includes(Number(seat.id)))
     : inventory.filter(seat => seat.zone === data.zone_code && seat.status === "available").slice(0, data.quantity);
@@ -150,7 +155,7 @@ function mockEvent(path: string, verb: string | undefined, init: RequestInit, ur
       return problem(412, "precondition-failed", "Reload the current event before saving.");
     }
     if (action === "publish") event.status = "published";
-    else Object.assign(event, JSON.parse(String(init.body)));
+    else Object.assign(event, jsonBody<Partial<EventInfo>>(init));
     revisions.set(event.id, revision + 1);
     return json(event, revision + 1);
   }
@@ -187,12 +192,12 @@ function mockEvent(path: string, verb: string | undefined, init: RequestInit, ur
 }
 
 /** Simulates the network boundary so demo routes use the same client, SSE parser and UI. */
-export async function mock(resource: string, init: RequestInit): Promise<Response> {
+export function mock(resource: string, init: RequestInit): Response {
   const url = new URL(resource, location.origin);
   const path = url.pathname;
   const verb = init.method;
   if (path === "/auth/login") {
-    const email = (JSON.parse(String(init.body)) as { email: string }).email;
+    const { email } = jsonBody<{ email: string }>(init);
     const role: Role = email.startsWith("viewer") ? "viewer" : email.startsWith("admin") ? "admin" : "user";
     const account = users.find(user => user.email === `${role}@demo.test`)!;
     localStorage.setItem("ticketing-demo-user", String(account.id));
@@ -207,7 +212,7 @@ export async function mock(resource: string, init: RequestInit): Promise<Respons
   if (path === "/auth/me") return json(session);
   if (path === "/events") {
     if (verb === "POST") {
-      const body = JSON.parse(String(init.body)) as Omit<EventInfo, "id" | "status">;
+      const body = jsonBody<Omit<EventInfo, "id" | "status">>(init);
       const event = { ...body, id: crypto.randomUUID(), owner_id: session.user.id, status: "draft" };
       events.push(event);
       return json(event, 1);
@@ -277,7 +282,7 @@ export async function mock(resource: string, init: RequestInit): Promise<Respons
       if (new Headers(init.headers).get("If-Match") !== `"v${user.version}"`) {
         return problem(412, "precondition-failed", "Reload the current user before saving.");
       }
-      Object.assign(user, JSON.parse(String(init.body)), { version: user.version + 1 });
+      Object.assign(user, jsonBody<Partial<typeof user>>(init), { version: user.version + 1 });
     }
     if (user) return json(user, user.version);
   }

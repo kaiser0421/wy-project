@@ -81,7 +81,7 @@ export class SeatGrid {
     const grouped = new Map<string, Map<string, number[]>>();
     seats.forEach((seat, index) => {
       let rows = grouped.get(seat.zone);
-      if (!rows) grouped.set(seat.zone, rows = new Map());
+      if (!rows) grouped.set(seat.zone, rows = new Map<string, number[]>());
       let cells = rows.get(seat.row);
       if (!cells) rows.set(seat.row, cells = []);
       cells.push(index);

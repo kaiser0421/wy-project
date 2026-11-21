@@ -1,4 +1,4 @@
-import { api, mockMode, type Order, type User } from "./api";
+import { api, mockMode, type User } from "./api";
 import { countdown, label, money } from "./format";
 import { IntentUnavailable, MutationIntent, retryDelay, retryLabel, retrySeconds } from "./intent";
 import { button, el, errorText, heading, interval, link, notice, panel, show, sleep } from "./view";

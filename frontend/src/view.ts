@@ -86,7 +86,8 @@ export function interval(work: () => void, ms: number, signal: AbortSignal): voi
 }
 
 export function formValue(form: HTMLFormElement, key: string): string {
-  return String(new FormData(form).get(key) ?? "").trim();
+  const value = new FormData(form).get(key);
+  return typeof value === "string" ? value.trim() : "";
 }
 
 export async function download(response: Promise<Response>, name: string): Promise<void> {
