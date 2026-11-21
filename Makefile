@@ -19,9 +19,12 @@ logs:  ## Follow service logs
 ps:  ## Show service status
 	$(COMPOSE) ps
 
-test:  ## Run the full test suite (lint, types, unit, integration) against PostgreSQL 16
-	$(TEST_COMPOSE) build tests
-	$(TEST_COMPOSE) run --rm -T tests; status=$$?; $(TEST_COMPOSE) down -v --remove-orphans; exit $$status
+test:  ## Run backend checks, PostgreSQL integration tests, and frontend tests in Docker
+	@trap '$(TEST_COMPOSE) down -v --remove-orphans' EXIT; \
+		status=0; \
+		$(TEST_COMPOSE) build tests && $(TEST_COMPOSE) run --rm -T tests || status=$$?; \
+		$(TEST_COMPOSE) run --rm -T frontend-tests || status=$$?; \
+		exit $$status
 
 test-fast:  ## Unit tests only, on the host (no Docker)
 	uv run pytest backend/tests/unit -q

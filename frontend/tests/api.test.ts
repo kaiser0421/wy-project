@@ -54,10 +54,11 @@ describe("API payloads", () => {
   });
 
   it("aggregates business metrics and accepts the published SSE event names", async () => {
-    stream("metrics", { ts, edge: { req_total: 300 }, app: { req_total: 280 }, complete: true,
+    const edgeTs = "2026-11-20T11:59:50Z";
+    stream("metrics", { ts, edge: { ts: edgeTs, req_total: 300 }, app: { ts, req_total: 280 }, complete: true,
       business: [{ hold_ok: 4, pay_ok: 3 }, { hold_ok: 2, pay_ok: 1 }] });
     await expect(collect(api.metricsStream(signal))).resolves.toMatchObject([{
-      edge: { rps: 300 }, app: { rps: 280 }, completeness: 1, business: { hold_ok: 6, pay_ok: 4 },
+      edge: { ts: edgeTs, rps: 300 }, app: { ts, rps: 280 }, completeness: 1, business: { hold_ok: 6, pay_ok: 4 },
     }]);
     stream("alerts", { items: [{ id: 2, state: "firing" }] });
     await expect(collect(api.alertsStream(signal))).resolves.toEqual([{ snapshot: [{ id: 2, state: "firing" }] }]);

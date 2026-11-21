@@ -10,7 +10,7 @@ const colors = ["#205cb5", "#147668", "#986414"];
 type Reading = (sample: Metric) => number | null | undefined;
 interface Series { label: string; read: Reading; color: string; dash?: number[] }
 
-function httpSeries(entries: (keyof HttpMetrics)[], labels: string[], multiplier = 1): Series[] {
+function httpSeries(entries: (keyof Omit<HttpMetrics, "ts">)[], labels: string[], multiplier = 1): Series[] {
   return entries.flatMap((key, index) => (["edge", "app"] as const).map(source => ({
     label: `${source === "edge" ? "Edge" : "App"}${labels[index] ? ` ${labels[index]}` : ""}`,
     color: colors[index]!, dash: source === "app" ? [5, 4] : undefined,
@@ -43,11 +43,12 @@ function chart(title: string, unit: string, definitions: Series[], signal: Abort
     shaded = samples.map(incomplete);
     const data: uPlot.AlignedData = [seconds, ...definitions.map(series => samples.map(sample =>
       sample ? series.read(sample) ?? null : null))];
-    const latest = samples.findLast(sample => sample !== null);
-    if (latest) {
+    if (samples.some(sample => sample !== null)) {
       current.textContent = definitions.map(series => {
-        const value = series.read(latest);
-        return `${series.label} ${value == null ? "—" : `${number.format(value)}${unit ? ` ${unit}` : ""}`}`;
+        const index = samples.findLastIndex(sample => sample !== null && series.read(sample) != null);
+        const value = index < 0 ? null : series.read(samples[index]!);
+        const time = index < 0 ? "" : ` at ${new Date(seconds[index]! * 1000).toLocaleTimeString()}`;
+        return `${series.label} ${value == null ? "—" : `${number.format(value)}${unit ? ` ${unit}` : ""}${time}`}`;
       }).join("  ·  ");
     } else current.textContent = "Waiting for data";
     if (graph) {
@@ -385,6 +386,7 @@ export function usersPage(root: HTMLElement, principal: User, signal: AbortSigna
       const { data, etag } = await api.user(account.id, signal);
       if (signal.aborted || selected !== id) return;
       const role = select([["admin", "Admin"], ["user", "User"], ["viewer", "Viewer"]]);
+      role.setAttribute("aria-label", "Role");
       role.value = data.role;
       const active = el("input", { type: "checkbox", checked: data.is_active });
       const save = button("Save account", "primary", "submit");

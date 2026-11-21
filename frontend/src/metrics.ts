@@ -14,12 +14,40 @@ export class MetricWindow {
   add(metric: Metric, replace = true): void {
     const second = metricSecond(metric.ts);
     if (!Number.isFinite(second)) return;
-    const current = this.samples.get(second);
-    if (replace || !current) this.samples.set(second, metric);
-    else if ((metric.completeness ?? 0) > (current.completeness ?? 0)) {
-      // History can fill a late HTTP sample, while only the live frame carries sales activity.
-      this.samples.set(second, { ...metric, business: metric.business ?? current.business });
+    const { edge, app, connections, ...frame } = metric;
+    const edgeSecond = edge?.ts === undefined ? second : metricSecond(edge.ts);
+    const appSecond = app?.ts === undefined ? second : metricSecond(app.ts);
+    // Sales remain on the frame's second. HTTP and connection gauges follow their source.
+    if (edgeSecond === second && appSecond === second) {
+      this.merge(second, metric, replace);
+      return;
     }
+    this.merge(second, { ...frame, completeness: undefined }, replace);
+    if (edge && Number.isFinite(edgeSecond)) {
+      this.merge(edgeSecond, { ts: edgeSecond, edge, connections: { active: connections?.active } }, replace);
+    }
+    if (app && Number.isFinite(appSecond)) {
+      this.merge(appSecond, { ts: appSecond, app, connections: { sse: connections?.sse },
+        completeness: app.completeness ?? frame.completeness }, replace);
+    }
+  }
+
+  private merge(second: number, metric: Metric, replace: boolean): void {
+    const current = this.samples.get(second);
+    const preferred = replace || (metric.completeness ?? 0) > (current?.completeness ?? 0);
+    const pick = <T>(previous: T | undefined, incoming: T | undefined) =>
+      preferred ? incoming ?? previous : previous ?? incoming;
+    this.samples.set(second, {
+      ts: metric.ts,
+      edge: pick(current?.edge, metric.edge),
+      app: pick(current?.app, metric.app),
+      business: pick(current?.business, metric.business),
+      completeness: pick(current?.completeness, metric.completeness),
+      connections: {
+        active: pick(current?.connections?.active, metric.connections?.active),
+        sse: pick(current?.connections?.sse, metric.connections?.sse),
+      },
+    });
   }
 
   window(last: number): { seconds: number[]; samples: Sample[] } {

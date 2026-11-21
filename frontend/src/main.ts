@@ -2,9 +2,10 @@ import { adminPage, usersPage } from "./admin";
 import { api, ApiError, mockMode, onSessionExpired, type Role, type User } from "./api";
 import { eventPage, eventsPage } from "./events";
 import { label } from "./format";
+import { pendingIntents, retryDelay, retryLabel, retrySeconds } from "./intent";
 import { orderPage, ordersPage } from "./orders";
 import { managePage, organizerPage } from "./organizer";
-import { button, el, errorText, field, heading, link, notice, panel, show } from "./view";
+import { button, el, errorText, field, heading, interval, link, notice, panel, show } from "./view";
 import "./style.css";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -17,6 +18,9 @@ let user: User | undefined;
 let route = new AbortController();
 let loginDestination = "#/events";
 let ready = false;
+let registeredEmail = "";
+let loginRetryAt = 0;
+let registrationRetryAt = 0;
 const appNotice = notice();
 
 const navigation = [
@@ -82,18 +86,35 @@ function loginPage(root: HTMLElement, signal: AbortSignal): void {
   const feedback = notice();
   const form = el("form", { class: "edit-form" }, field("Email address", email), field("Password", password), login, feedback);
   const card = panel(heading("Sign in", "Access events, tickets and reports."), form);
+  if (!mockMode) card.append(link("Create an account", "#/register"));
+  if (registeredEmail) {
+    email.value = registeredEmail;
+    show(feedback, "Account created. Sign in to continue.");
+    registeredEmail = "";
+  }
   const controls = [login];
+  let busy = false;
+
+  function render(): void {
+    const seconds = retrySeconds(loginRetryAt);
+    for (const control of controls) control.disabled = busy || seconds > 0;
+    login.textContent = retryLabel("Sign in", seconds);
+  }
 
   async function submit(address: string, secret: string, destination: string): Promise<void> {
-    controls.forEach(control => { control.disabled = true; });
+    if (busy || retrySeconds(loginRetryAt)) return;
+    busy = true;
+    render();
     show(feedback, "Signing in…");
     try {
       const session = await api.login(address, secret, signal);
       if (!signal.aborted) signedIn(session.user, destination);
     } catch (error) {
+      loginRetryAt = Date.now() + retryDelay(error);
       if (!signal.aborted) show(feedback, errorText(error), true);
     } finally {
-      controls.forEach(control => { control.disabled = false; });
+      busy = false;
+      render();
     }
   }
   form.onsubmit = event => {
@@ -112,6 +133,101 @@ function loginPage(root: HTMLElement, signal: AbortSignal): void {
     card.append(el("hr"), el("h2", {}, "Try a demo role"), demo);
   }
   root.append(el("div", { class: "login-layout" }, card));
+  interval(render, 250, signal);
+  render();
+}
+
+function registrationPage(root: HTMLElement, signal: AbortSignal): void {
+  const email = el("input", { type: "email", name: "email", autocomplete: "username", required: true,
+    maxlength: 254, "aria-describedby": "registration-email-error" });
+  const password = el("input", { type: "password", name: "password", autocomplete: "new-password",
+    required: true, minlength: 10, maxlength: 128, "aria-describedby": "registration-password-error" });
+  const submit = button("Create account", "primary", "submit");
+  const feedback = notice();
+  const fields = { email, password };
+  const errors = {
+    email: el("span", { id: "registration-email-error", class: "field-error", "aria-live": "polite" }),
+    password: el("span", { id: "registration-password-error", class: "field-error", "aria-live": "polite" }),
+  };
+  const form = el("form", { class: "edit-form" }, field("Email address", email), errors.email,
+    field("Password (10–128 characters)", password), errors.password, submit, feedback);
+  root.append(el("div", { class: "login-layout" }, panel(heading("Create an account"), form,
+    link("Back to sign in", "#/login"))));
+  let busy = false;
+
+  function render(): void {
+    const seconds = retrySeconds(registrationRetryAt);
+    submit.disabled = busy || seconds > 0;
+    submit.textContent = retryLabel("Create account", seconds);
+  }
+
+  function fieldError(name: keyof typeof fields, message: string): void {
+    errors[name].textContent = message;
+    if (message) fields[name].setAttribute("aria-invalid", "true");
+    else fields[name].removeAttribute("aria-invalid");
+  }
+
+  for (const name of ["email", "password"] as const) fields[name].oninput = () => fieldError(name, "");
+  form.onsubmit = async event => {
+    event.preventDefault();
+    if (busy || retrySeconds(registrationRetryAt)) return;
+    busy = true;
+    render();
+    fieldError("email", "");
+    fieldError("password", "");
+    show(feedback, "Creating account…");
+    try {
+      const account = await api.register(email.value.trim(), password.value, signal);
+      if (signal.aborted) return;
+      registeredEmail = account.email;
+      navigate("#/login");
+    } catch (error) {
+      if (signal.aborted) return;
+      registrationRetryAt = Date.now() + retryDelay(error);
+      if (error instanceof ApiError) {
+        for (const issue of error.errors) {
+          const name = issue.loc.at(-1);
+          if (name === "email" || name === "password") fieldError(name, issue.msg);
+        }
+        if (error.code === "email-taken") fieldError("email", "This email address is already registered.");
+      }
+      const invalid = form.querySelector<HTMLInputElement>("[aria-invalid=true]");
+      invalid?.focus();
+      show(feedback, invalid ? "Check the highlighted fields."
+        : error instanceof ApiError && error.status === 429
+          ? "Too many registration attempts. Wait for the countdown and try again." : errorText(error), true);
+    } finally {
+      busy = false;
+      render();
+    }
+  };
+  interval(render, 250, signal);
+  render();
+}
+
+function pendingBanner(account: User, hash: string, signal: AbortSignal): HTMLElement {
+  const banner = el("section", { class: "pending-confirmation", hidden: true, "aria-label": "Pending confirmation" });
+  function render(): void {
+    const links = new Map<string, string>();
+    for (const request of pendingIntents(account.id)) {
+      if (request.operation === "booking") {
+        links.set(`#/events/${encodeURIComponent(request.event)}`, `Booking for event ${request.event}`);
+      } else {
+        links.set(`#/orders/${encodeURIComponent(request.order)}`, `Order ${request.order.slice(0, 8)}`);
+      }
+    }
+    links.delete(hash);
+    banner.hidden = links.size === 0;
+    if (banner.hidden) {
+      banner.replaceChildren();
+      return;
+    }
+    banner.replaceChildren(el("strong", {}, "Pending confirmation"),
+      el("ul", {}, ...Array.from(links, ([href, name]) => el("li", {}, link(name, href)))));
+  }
+  window.addEventListener("storage", render, { signal });
+  render();
+  return banner;
 }
 
 function validRoute(href: string): boolean {
@@ -127,11 +243,12 @@ function permitted(path: string, account: User): boolean {
 async function renderRoute(): Promise<void> {
   if (!ready) return;
   const hash = location.hash || "#/events";
-  if (hash === "#/login" && user) {
+  const authPage = hash === "#/login" || hash === "#/register";
+  if (authPage && user) {
     navigate("#/events");
     return;
   }
-  if (hash !== "#/login" && !user) {
+  if (!authPage && !user) {
     if (validRoute(hash)) loginDestination = hash;
     navigate("#/login");
     return;
@@ -142,11 +259,13 @@ async function renderRoute(): Promise<void> {
   const root = el("div", { class: "page" });
   root.addEventListener("refresh-route", () => void renderRoute());
   main.replaceChildren(appNotice, root);
+  if (user && user.role !== "viewer") root.before(pendingBanner(user, hash, signal));
   headerFor(hash);
   const [, part = "", identifier] = hash.split("/");
   const loading = notice();
   try {
     if (part === "login") loginPage(root, signal);
+    else if (part === "register") registrationPage(root, signal);
     else if (!user || !permitted(part, user)) {
       root.append(heading("Access restricted"), panel(el("p", {}, "Your role does not have access to this page."),
         link("Browse events", "#/events")));
@@ -158,7 +277,7 @@ async function renderRoute(): Promise<void> {
         show(loading, "Loading…");
         root.append(loading);
         if (part === "events") await eventPage(root, id, user, signal);
-        if (part === "orders") await orderPage(root, id, signal);
+        if (part === "orders") await orderPage(root, id, user, signal);
         if (part === "organizer") await managePage(root, id, user, signal);
       } else if (part === "events") eventsPage(root, signal);
       else if (part === "orders") ordersPage(root, signal);

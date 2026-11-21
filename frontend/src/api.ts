@@ -54,7 +54,7 @@ export type Booking = { seat_ids: Id[] } | { zone_code: string; quantity: number
 export interface OrderItem { seat_id?: Id; zone_code?: string; row_label?: string; seat_number?: Id }
 export interface Order {
   id: string;
-  event_id?: Id;
+  event_id: Id;
   event_title?: string;
   items?: OrderItem[];
   status: string;
@@ -76,6 +76,7 @@ export interface ImportJob {
   failure_reason?: string | null;
 }
 export interface HttpMetrics {
+  ts?: string | number;
   rps?: number | null;
   p50_ms?: number | null;
   p95_ms?: number | null;
@@ -83,6 +84,7 @@ export interface HttpMetrics {
   error_rate?: number | null;
   err_5xx?: number;
   err_4xx?: number;
+  completeness?: number | null;
 }
 export interface Metric {
   ts: string | number;
@@ -121,7 +123,6 @@ type MetricReading = HttpMetrics & {
   req_total?: number;
   conns_active?: number | null;
   conns_sse?: number | null;
-  completeness?: number | null;
 };
 interface LiveMetric extends Omit<Metric, "business"> {
   edge?: MetricReading | null;
@@ -132,7 +133,8 @@ interface LiveMetric extends Omit<Metric, "business"> {
 type HistoryMetric = LiveMetric | (MetricReading & { ts: Metric["ts"]; source: "edge" | "app" });
 export type AlertUpdate = { snapshot: Alert[] } | { alert: Alert };
 interface RequestLogs { access_log: TraceEntry | null; service_logs: TraceEntry[] }
-interface Problem { code?: string; detail?: string; request_id?: string; retryable?: boolean }
+export interface FieldError { loc: (string | number)[]; msg: string }
+interface Problem { code?: string; detail?: string; request_id?: string; retryable?: boolean; errors?: FieldError[] }
 
 export class ApiError extends Error {
   constructor(
@@ -142,6 +144,7 @@ export class ApiError extends Error {
     public readonly requestId?: string,
     public readonly retryable = false,
     public readonly retryAfter?: string,
+    public readonly errors: FieldError[] = [],
   ) {
     super(detail);
   }
@@ -190,7 +193,7 @@ async function request(path: string, options: Options = {}): Promise<Response> {
   throw new ApiError(
     response.status, problem.code ?? "http-error", problem.detail ?? `Request failed (HTTP ${response.status}).`,
     problem.request_id ?? response.headers.get("X-Request-ID") ?? undefined,
-    problem.retryable ?? false, response.headers.get("Retry-After") ?? undefined,
+    problem.retryable ?? false, response.headers.get("Retry-After") ?? undefined, problem.errors,
   );
 }
 
@@ -219,20 +222,24 @@ const orderPath = (id: string) => `/orders/${encodeURIComponent(id)}`;
 const userPath = (id: Id) => `/admin/users/${encodeURIComponent(id)}`;
 const jobPath = (id: string) => `/seat-imports/${encodeURIComponent(id)}`;
 
-async function* stream(path: string, signal: AbortSignal, after?: number): AsyncGenerator<Frame> {
+async function* stream(
+  path: string, signal: AbortSignal, after?: number, onComment?: () => void,
+): AsyncGenerator<Frame> {
   const headers: Record<string, string> = { Accept: "text/event-stream" };
   if (after !== undefined) headers["Last-Event-ID"] = String(after);
   const response = await request(path, { headers, signal, timeoutMs: null });
   if (!response.body || !response.headers.get("Content-Type")?.includes("text/event-stream")) {
     throw new Error("The server did not return an event stream.");
   }
-  yield* readFrames(response.body);
+  yield* readFrames(response.body, onComment);
 }
 
 const parse = <T>(frame: Frame): T => JSON.parse(frame.data) as T;
 
-export async function* seatStream(id: Id, after: number, signal: AbortSignal): AsyncGenerator<SeatFrame> {
-  for await (const frame of stream(eventPath(id) + "/seat-stream", signal, after)) {
+export async function* seatStream(
+  id: Id, after: number, signal: AbortSignal, onComment?: () => void,
+): AsyncGenerator<SeatFrame> {
+  for await (const frame of stream(eventPath(id) + "/seat-stream", signal, after, onComment)) {
     switch (frame.event) {
       case "delta": yield { event: "delta", data: parse<Delta>(frame) }; break;
       case "layout": yield { event: "layout", data: parse<{ layout_ver: number }>(frame) }; break;
@@ -309,6 +316,9 @@ async function* alertsStream(signal: AbortSignal): AsyncGenerator<AlertUpdate> {
 }
 
 export const api = {
+  register: (email: string, password: string, signal: AbortSignal) => json<User>("/auth/register", {
+    method: "POST", body: { email, password }, signal, authOptional: true,
+  }),
   async login(email: string, password: string, signal: AbortSignal): Promise<Session> {
     const session = await json<Session>("/auth/login", {
       method: "POST", body: { email, password }, signal, authOptional: true,

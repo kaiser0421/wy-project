@@ -54,3 +54,21 @@ it("fills an incomplete live sample with more complete history and keeps sales a
     completeness: 1, business: { hold_ok: 2 }, edge: { rps: 60 },
   });
 });
+
+it("buckets each source and its connection gauge using its own time and fills a historical gap", () => {
+  const window = new MetricWindow();
+  const ts = 1700000010;
+  const delay = { ts: ts - 10, rps: 600 };
+  window.add({ ts, edge: delay, app: { ts, rps: 11, completeness: 1 },
+    connections: { active: 23, sse: 2 }, business: { hold_ok: 1 }, completeness: 1 });
+  window.add({ ts: ts + 1, edge: delay, app: { ts: ts + 1, rps: 12 },
+    connections: { active: 23, sse: 3 } });
+  window.add({ ts: ts - 10, app: { rps: 7 }, connections: { sse: 4 }, completeness: 1 }, false);
+  const buckets = window.window(ts + 1).samples;
+  expect(buckets.at(-12)).toMatchObject({ edge: { rps: 600 }, app: { rps: 7 },
+    connections: { active: 23, sse: 4 } });
+  expect(buckets.at(-11)).toBeNull();
+  expect(buckets.at(-2)).toMatchObject({ app: { rps: 11 }, business: { hold_ok: 1 }, connections: { sse: 2 } });
+  expect(buckets.at(-2)?.connections?.active).toBeUndefined();
+  expect(buckets.at(-1)?.edge).toBeUndefined();
+});
