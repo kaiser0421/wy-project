@@ -6,6 +6,11 @@ export const money = (amount: number) => currency.format(amount);
 
 const dateTime = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 export const date = (value: string) => Number.isFinite(Date.parse(value)) ? dateTime.format(new Date(value)) : "—";
+const clockTime = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3, hourCycle: "h23",
+});
+/** Compact time of day for log tables (the full date stays available on hover). */
+export const clock = (value: string) => Number.isFinite(Date.parse(value)) ? clockTime.format(new Date(value)) : "—";
 export const label = (value: string) => value.replaceAll("_", " ").replace(/^./, character => character.toUpperCase());
 
 export function countdown(expiresAt: string, now = Date.now()): string {

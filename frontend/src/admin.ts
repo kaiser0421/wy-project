@@ -1,7 +1,7 @@
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { accessStatusClasses, api, ApiError, logServices, type AdminUser, type Alert, type HttpMetrics, type Metric, type Role, type User } from "./api";
-import { date, label } from "./format";
+import { clock, date, label } from "./format";
 import { incomplete, metricSecond, MetricWindow, WINDOW_SECONDS, type Sample } from "./metrics";
 import { onThemeChange } from "./theme";
 import { button, el, errorText, field, formValue, heading, interval, link, notice, panel, select, show, sleep, table } from "./view";
@@ -347,7 +347,7 @@ function recentLogsPanel(signal: AbortSignal, openTrace: (id: string) => void): 
         const active = document.activeElement;
         const focusedId = active instanceof HTMLButtonElement && body.contains(active) ? active.textContent : null;
         body.replaceChildren(...entries.map(entry =>
-          el("tr", {}, el("td", {}, el("time", { datetime: entry.ts }, date(entry.ts))),
+          el("tr", {}, el("td", { class: "nowrap" }, el("time", { datetime: entry.ts, title: date(entry.ts) }, clock(entry.ts))),
             el("td", {}, entry.service), el("td", {}, el("span", { class: `log-level ${entry.level}` }, entry.level)),
             el("td", {}, entry.event ?? "—"), el("td", {}, traceAction(entry.request_id, openTrace)))));
         if (focusedId) {
@@ -426,7 +426,7 @@ function accessLogPanel(signal: AbortSignal, openTrace: (id: string) => void): H
       }, lookupSignal);
       if (lookupSignal.aborted) return;
       body.replaceChildren(...entries.map(entry =>
-        el("tr", {}, el("td", {}, el("time", { datetime: entry.ts }, date(entry.ts))),
+        el("tr", {}, el("td", { class: "nowrap" }, el("time", { datetime: entry.ts, title: date(entry.ts) }, clock(entry.ts))),
           el("td", {}, entry.method ?? "—"), el("td", {}, entry.path ?? "—"),
           el("td", {}, entry.status ?? "—"), el("td", {}, entry.req_ms == null ? "—" : `${number.format(entry.req_ms)} ms`),
           el("td", {}, traceAction(entry.request_id, openTrace)))));
@@ -468,7 +468,7 @@ function tracePanel(signal: AbortSignal) {
       if (lookupSignal.aborted) return;
       body.replaceChildren(...entries.map(entry => {
         const details = el("details", {}, el("summary", {}, "View"), el("pre", {}, JSON.stringify(entry.attrs, null, 2)));
-        return el("tr", {}, el("td", {}, entry.ts ? date(entry.ts) : "—"),
+        return el("tr", {}, el("td", { class: "nowrap" }, entry.ts ? el("time", { datetime: entry.ts, title: date(entry.ts) }, clock(entry.ts)) : "—"),
           el("td", {}, entry.service ?? "—"), el("td", {}, entry.level ?? "—"),
           el("td", {}, [entry.event, entry.method, entry.route ?? entry.path].filter(Boolean).join(" ") || "—"),
           el("td", {}, entry.status ?? "—"), el("td", {}, entry.req_ms == null ? undefined : `${entry.req_ms} ms`,
