@@ -188,7 +188,7 @@ Burst 的 8,337 次串流嘗試包含 6,110 次 HTTP request errors，並出現 
 | 100,000 列 CSV | 完整服務閒置 **11.6–15.6 秒**；同時跑完整測試套件 21.0 秒；整合測試（隔離資料庫）15.14 秒（門檻 60 秒） | 先產檔才開始計時。完整服務經 nginx 上傳，整合測試直接呼叫 API；兩者都計到 worker 完成、讀到終態。 |
 | 100,000 列 JSON | 完整服務閒置 **17.0–22.2 秒**；同時跑完整測試套件 47.8 秒；整合測試（隔離資料庫）15.35 秒（門檻 60 秒） | 同上，各格式獨立執行。 |
 
-2026-11-22 以目前程式在閒置開發筆電測得 100,000 列結果，量測紀錄見 [10 萬列匯入實測](docs/evidence/import-100k.md)。測試也確認 job 回報及 PostgreSQL 實際座位數都為 100,000。見 [test_import_100k_under_60s](backend/tests/imports/test_import_perf.py)（`backend/tests/imports/test_import_perf.py:17–36`）。可在已備妥 PostgreSQL 整合測試環境執行 `uv run pytest -s backend/tests/imports/test_import_perf.py`，或透過 `make test` 跑 Compose 測試。檔案上限及列數預設見 `backend/src/ticketing/core/settings.py:89–90`。
+2026-11-22 以目前程式在開發筆電量測：完整服務的閒置與資源競爭兩種情境，以及隔離資料庫的整合測試，量測紀錄見 [10 萬列匯入實測](docs/evidence/import-100k.md)。兩種量測都確認 job 回報及 PostgreSQL 實際座位數都為 100,000。見 [test_import_100k_under_60s](backend/tests/imports/test_import_perf.py)（`backend/tests/imports/test_import_perf.py:17–36`）。可在已備妥 PostgreSQL 整合測試環境執行 `uv run pytest -s backend/tests/imports/test_import_perf.py`，或透過 `make test` 跑 Compose 測試。檔案上限及列數預設見 `backend/src/ticketing/core/settings.py:89–90`。
 
 ## 5. Excel 匯出
 
