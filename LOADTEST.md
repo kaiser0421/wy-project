@@ -2,6 +2,17 @@
 
 ## 結論摘要
 
+**一圖看懂**（圖由 `loadtest/charts.py` 直接讀取 `docs/evidence/` 的原始輸出產生）
+
+| 請求結果：第 1 輪的 502 消失，6 副本時被削峰的 503 大幅減少 | 座位結果：每一輪都沒有任何座位被賣兩次 |
+| --- | --- |
+| ![情境 A 請求結果](docs/evidence/charts/a-request-outcomes.png) | ![情境 A 座位結果](docs/evidence/charts/a-seat-inventory.png) |
+
+- **灰色（503 server-busy）是刻意的過載保護**：資料庫連線池滿時最多等 1 秒，就快速請客戶端稍後重試，系統因此不會崩潰；不是程式錯誤。
+- **紅色（502）只在第 1 輪出現**：nginx 在過載時把 3 個 API 副本全部判定故障；修正後第 2 輪與 6 副本皆為 0。
+- **座位圖**：藍色為已付款、棕色為鎖位中；三輪都沒有超賣，排空後一致性 SQL 在第 2 輪與 6 副本皆為 0 列。
+
+
 | 需求指標 | 第 2 輪（3 個 API 副本） | 6 個 API 副本 | 來源 |
 |---|---|---|---|
 | 情境 A · 吞吐（k6 全路徑） | 2,098 req/s（134,801 筆） | 1,919 req/s（120,426 筆） | [第 2 輪 k6](docs/evidence/loadtest-run2-20261121/a/k6-summary.json) · [6 副本 k6](docs/evidence/loadtest-run3-6replicas-20261121/a/k6-summary.json) |
@@ -50,6 +61,11 @@
 
 ## 2. Scenario A
 
+![情境 A 每秒指標：3 與 6 個 API 副本](docs/evidence/charts/a-per-second.png)
+
+上圖由監控系統每秒寫入 PostgreSQL 的 nginx 指標畫成：兩種配置的每秒請求數相近；被削峰的 5xx 比例（每秒中位數）從 3 個副本的約 86% 降到 6 個副本的約 41%（範圍 3–76%），每秒 p95 延遲中位數分別約 2.0 秒與 1.8 秒（含最多 1 秒的連線池等待）。
+
+
 **參數與流量（第 2 輪腳本）**　單一開賣活動 10,000 席、3,000 個 `constant-vus`，持續 60 秒。準備腳本以 `POST /api/v1/auth/login` 登入主辦人，透過 API 建立活動、匯入座位並發布，並直接在 PostgreSQL 建立每位買家的獨立 session。初始 idle 與 absolute deadline 均為 12 小時（`loadtest/prepare_a.py:135`）。正常登入的預設分別為 30 分鐘與 12 小時。每次購買抽 1–4 張，約 70% 指定席、30% 區域配位。成功後約 80% 模擬付款並輪詢訂單、10% 取消、10% 保留至期限，另抽約 2% 用原請求內容及 Idempotency-Key 驗證重放。重放遇 502／504 或 `503 server-busy` 時依 `Retry-After`（預設 1 秒）重送，合計最多 10 次嘗試。每筆發起的重放均須收到回應並驗證為原訂單。觸及個人配額後，確認已有 4 張的 VU 切到查訂單。請求 timeout 5 秒，指定的可重試 409 最多重送兩次。見 `loadtest/prepare_a.py:72`、`loadtest/prepare_a.py:110`、`backend/src/ticketing/core/settings.py:46`、`loadtest/scenario_a.js`。
 
 | 正式結果 | 第 1 輪 | 第 2 輪 |
@@ -81,6 +97,11 @@
 **筆電壓測**　3,000 VUs 在 2 核心／4 執行緒機器上把 CPU 壓滿，產壓端與服務互相爭用。大多數請求快速收到 `503 server-busy`，或在客戶端 timeout。總吞吐約 **86–95 req/s**，同機 CPU 競爭明顯（當時以 `pg_stat_statements` 觀察到 SQL 平均約 35–170 ms，未留存原始輸出）。一致性檢查未發現超賣。筆電試跑僅有摘要。
 
 ## 3. Scenario B
+
+![情境 B：2,000 條 SSE 連線](docs/evidence/charts/b-sse.png)
+
+修正後第 2 輪 2,000 個客戶端最終全部與資料庫一致；快照與座位變化的套用延遲（中位數）都下降一個數量級以上（圖為對數座標）。
+
 
 **參數與流量（第 2 輪腳本）**　對同一活動預建 2,000 個獨立 session。SSE client 依可見 CPU 數啟動最多 8 個程序，各自先取得一份起始快照，所有連線在前 10 秒均勻啟動，並維持每第十條為慢速讀取。Runner 最多等 80 秒達成 2,000 條同時連線，達標後由 4 個 writer worker 以總目標 100 seat changes/s 寫入 55 秒。量測窗口 80 秒；窗口與 writer 都結束後，最多再等 20 秒排空。第 1 輪使用 `B_RATE=300`。各 writer worker 在不重疊的範圍切換座位狀態與版本，走正式 transactional outbox。累積量、速度、連線及最終比對都從工具實際輸出擷取。見 `loadtest/run.sh`、`loadtest/scenario_b_writer.py`、`loadtest/sse_client.py`。
 
