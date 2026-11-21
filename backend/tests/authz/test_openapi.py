@@ -38,6 +38,10 @@ def test_openapi_covers_each_operation() -> None:
             assert operation["summary"]
             assert operation["description"]
             assert "internal-error" in responses["500"]["description"]
+            if route.path not in {"/healthz/live", "/healthz/ready"}:
+                busy = responses["503"]
+                assert "server-busy" in busy["description"]
+                assert "Retry-After" in busy["headers"]
             if policy.public:
                 assert "sessionCookie" not in str(operation.get("security", []))
                 assert "csrfHeader" not in str(operation.get("security", []))
