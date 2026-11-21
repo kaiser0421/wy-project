@@ -69,6 +69,7 @@ SELECT ts, source, req_total, p95_ms FROM metrics_1s WHERE scope = 'all' ORDER B
 | --- | --- |
 | [![登入](docs/screenshots/01-login.png)](docs/screenshots/01-login.png) 登入 | [![活動列表](docs/screenshots/02-events-list.png)](docs/screenshots/02-events-list.png) 活動列表 |
 | [![主辦管理](docs/screenshots/04-organizer.png)](docs/screenshots/04-organizer.png) 主辦管理（建立、匯入、發布） | [![我的訂單](docs/screenshots/05-my-orders.png)](docs/screenshots/05-my-orders.png) 我的訂單（鎖位倒數、付款） |
+| [![全站訂單](docs/screenshots/12-admin-all-orders.png)](docs/screenshots/12-admin-all-orders.png) Admin 全站訂單（篩選、明細、取消／退款） | [![請求追查與日誌](docs/screenshots/13-admin-trace-and-logs.png)](docs/screenshots/13-admin-trace-and-logs.png) 依 request_id 追查跨服務日誌（nginx、api、worker、模擬金流） |
 | [![使用者管理](docs/screenshots/07-admin-users.png)](docs/screenshots/07-admin-users.png) Admin 使用者管理 | [![Swagger](docs/screenshots/08-api-docs-swagger.png)](docs/screenshots/08-api-docs-swagger.png) Swagger API 文件 |
 
 </details>
@@ -124,6 +125,20 @@ uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.json --zone A
 重複座位以區域和排號的大寫值及去除前導零的座號比對，同組每列均標記為錯誤。見 `backend/src/ticketing/imports/validation.py:11`、`backend/src/ticketing/imports/runner.py:225`。
 
 ## 測試與實測
+
+**測試架構**
+
+| 層級 | 框架 | 位置 | 內容 |
+| --- | --- | --- | --- |
+| 後端單元測試 | pytest | `backend/tests/unit/` | 設定驗證、錯誤格式、日誌欄位、壓測工具統計、schema 版本等純邏輯 |
+| 後端整合測試 | pytest + httpx（直接呼叫 FastAPI 應用）+ **PostgreSQL 16**（與正式環境相同映像）+ Redis 7 | `backend/tests/integration/`、`authz/`、`booking/`、`payments/`、`events/`、`imports/`、`realtime/`、`reports/`、`telemetry/` | 每個測試從已 migrate 的 template 複製一個獨立資料庫；涵蓋 API 行為、授權矩陣、交易與約束、背景工作、推送與監控 |
+| 併發測試 | pytest + asyncio | `backend/tests/booking/test_booking.py` 等 | 200 人搶同一座位、限購競爭、區域配位競爭、移除防線的破壞驗證 |
+| 前端單元測試 | Vitest | `frontend/tests/*.test.ts` | API 客戶端、座位模型、SSE 序號、冪等意圖、主題、各管理面板 |
+| 瀏覽器測試 | Playwright（Chromium） | `frontend/tests/e2e/` | 介面流程；另有經 nginx 的整合版本 |
+| 端到端流程 | Python 腳本 | `scripts/e2e_flow.py` | 經 nginx 跑完建活動、匯入、發布、鎖位、付款回呼、報表、日誌追查（CI 也會執行） |
+
+`make test` 一行指令在 Docker 內執行以上全部（後端約 230 個、前端約 60 個測試）。逐條驗收條件與對應測試見 [驗收條件](docs/ACCEPTANCE.md)。
+
 
 正式量測與擴容對照見 [壓測結論摘要](LOADTEST.md#結論摘要)。
 

@@ -37,7 +37,7 @@
 | # | 驗收條件 | 驗證方式 | 狀態 |
 |---|---|---|---|
 | 3.1 | **Admin** 可管理所有活動：編輯、發布、刪除任何人的活動 | Admin 登入 → Organizer 可看到所有活動並操作；測試 `test_event_access`、`test_lifecycle_and_concurrent_patch` | ✅ |
-| 3.2 | **Admin** 可查看與管理所有使用者的訂單（列出全站訂單、篩選、查看明細、取消） | Admin 登入 → **All orders** 頁；API `GET /api/v1/admin/orders` | 🔧 |
+| 3.2 | **Admin** 可查看與管理所有使用者的訂單（列出全站訂單、篩選、查看明細、取消） | Admin 登入 → **All orders** 頁（[截圖](screenshots/12-admin-all-orders.png)）；API `GET /api/v1/admin/orders`；`backend/tests/booking/test_admin_orders.py` | ✅ |
 | 3.3 | **Admin** 可使用系統管理功能（使用者管理、監控、日誌查詢） | 導覽列 Monitoring、Users 只對 Admin 顯示；`test_monitoring_routes_require_admin`、`test_non_admin_cannot_list_users` | ✅ |
 | 3.4 | **User** 可建立活動、匯入座位、鎖位與付款 | User 登入 → Organizer 建活動並匯入 → Events 下單付款；`scripts/e2e_flow.py` | ✅ |
 | 3.5 | **User** 只能修改／刪除自己的活動；修改他人活動回 403 | `test_event_access` | ✅ |
@@ -101,7 +101,7 @@
 | # | 驗收條件 | 驗證方式 | 狀態 |
 |---|---|---|---|
 | 5.4.1 | 每秒更新、反映整個系統：RPS、p50/p95/p99、錯誤率（5xx）、即時連線數，以圖表呈現 | Admin → Monitoring；`test_admin_metric_history_streams_and_openapi`、`test_metric_error_rate_excludes_4xx` | ✅ |
-| 5.4.2 | **存取日誌**以批次寫入資料庫（`access_logs`），且可在介面查看 | 資料庫查詢 `SELECT count(*) FROM access_logs`；介面 Monitoring → Access log | 🔧（寫入 ✅、介面檢視 🔧） |
+| 5.4.2 | **存取日誌**以批次寫入資料庫（`access_logs`），且可在介面查看 | 資料庫查詢 `SELECT count(*) FROM access_logs`；介面 Monitoring → **Access log**（可依時間、狀態、方法、路徑、request_id 篩選）；API `GET /api/v1/admin/logs/access` | ✅ |
 | 5.4.3 | **座位狀態變化事件**以批次寫入資料庫（`seat_events`） | `test_failed_second_batch_leaves_first_committed`；壓測 SQL 稽核 `seat_event_missing／extra` 為 0 | ✅ |
 | 5.4.4 | **每秒系統指標**以批次寫入資料庫（`metrics_1s`、`business_1s`） | 壓測證據中的 `metrics_1s.csv` 即由資料庫匯出；`test_minimum_delay_dedupe_wall_skew_completeness_and_gauge` | ✅ |
 | 5.4.5 | 系統異常時 Admin 即時收到告警（自訂 6 種規則），可確認（Acknowledge） | [告警演練](evidence/alert-drill-20261121/README.md)：停掉 relay 後告警出現在監控頁並於恢復後 resolved；`test_rule_fires_and_resolves` | ✅ |
@@ -119,7 +119,7 @@
 | # | 驗收條件 | 驗證方式 | 狀態 |
 |---|---|---|---|
 | 5.6.1 | 可修改使用者角色與啟用狀態；不能停用或降級自己；變更留稽核紀錄 | Admin → Users；`test_admin_cannot_demote_or_disable_self`、`test_role_change_revokes_target_sessions_and_is_audited` | ✅ |
-| 5.6.2 | 輸入 `request_id` 可看到該請求經過的**所有服務**的日誌（nginx、API，以及涉及時的 worker、模擬金流） | Monitoring → Request trace（ID 可從回應標頭 `X-Request-ID` 或錯誤回應取得）；`test_admin_request_trace_returns_linked_entries_in_timestamp_sequence_order`、`test_admin_request_trace_returns_paymock_processing_and_delivery` | 🔧（目前一般請求只顯示 nginx 紀錄，補上 API 每個請求的日誌中） |
+| 5.6.2 | 輸入 `request_id` 可看到該請求經過的**所有服務**的日誌（nginx、API，以及涉及時的 worker、模擬金流） | Monitoring → Request trace（ID 可從回應標頭 `X-Request-ID` 或錯誤回應取得）；`test_admin_request_trace_returns_linked_entries_in_timestamp_sequence_order`、`test_admin_request_trace_returns_paymock_processing_and_delivery` | ✅（實測一筆付款請求的追查涵蓋 nginx、api、worker、paymock，[截圖](screenshots/13-admin-trace-and-logs.png)） |
 
 ### 5.7 操作介面
 
@@ -151,4 +151,4 @@
 | 7.5 | Q5：登出／停用／改角色後立即失效、每請求成本（實測）、快取一致性；停用者的匯入 job；系統性授權驗證與最易漏掉的端點 | DESIGN Q5、[session 成本實測](evidence/session-auth-cost.md) | ✅ |
 | 7.6 | Q6：各指標的來源、窗口、儲存；「圖表正常但使用者受害」的偵測；多副本去重與時鐘慢 20 秒的現象；數字不一致時相信誰 | DESIGN Q6 | ✅ |
 | 7.7 | 設計假設、替代方案、取捨、驗證方式 | DESIGN 對應章節與驗證對照表 | ✅ |
-| 7.8 | 以流程圖輔助說明 Q1–Q6 | DESIGN 各題開頭的流程圖 | 🔧 |
+| 7.8 | 以流程圖輔助說明 Q1–Q6 | DESIGN 各題開頭的流程圖（6 張皆以 mermaid 11 實際渲染驗證） | ✅ |
