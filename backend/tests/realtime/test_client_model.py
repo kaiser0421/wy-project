@@ -24,10 +24,11 @@ def test_ring_eviction_by_bytes_and_by_age(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr("ticketing.realtime.reader.RING_BYTES", 8)
     ring = Ring()
     ring.append(Frame(1, 3, b"1234"), 1)
-    assert ring.after(1) == Frame(1, 3, b"1234")
+    assert ring.after(0) == Frame(1, 3, b"1234")
+    assert ring.after(1) is None
     ring.append(Frame(4, 4, b"56789"), 2)
     assert ring.size == 5
-    assert ring.after(2) is None
+    assert ring.after(0) is None
     assert ring.after(3) == Frame(4, 4, b"56789")
     ring.prune(7)
     assert ring.size == 0

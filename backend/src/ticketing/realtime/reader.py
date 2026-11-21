@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import asyncpg
 
 from ticketing.core.db import acquire
-from ticketing.core.errors import ProblemError
+from ticketing.core.errors import ProblemError, server_busy
 from ticketing.core.logging import get_logger
 from ticketing.realtime.client_model import SequenceGap
 from ticketing.realtime.frames import Frame, coalesce, encode
@@ -26,6 +26,8 @@ RING_BYTES = 2 * 1024 * 1024
 POLL_ROWS = 1000
 REPLAY_ROWS = 256
 MAX_REPLAY_ROWS = 5000
+MAX_REPLAY_TASKS = 8
+MAX_EVENT_READERS = 64
 
 _DB_FAILURES = (asyncpg.PostgresError, asyncpg.InterfaceError, OSError, TimeoutError, ProblemError)
 
@@ -80,13 +82,53 @@ class Ring:
         idx = bisect_left(self.entries, cursor + 1, key=_end)
         if idx < len(self.entries):
             frame = self.entries[idx].frame
-            if frame.start <= cursor + 1:
+            if frame.start == cursor + 1:
                 return frame
         return None
 
 
+class Replays:
+    def __init__(self, pool: asyncpg.Pool, timeout: float) -> None:
+        self.pool = pool
+        self.timeout = timeout
+        self._tasks: dict[tuple[int, int, int], asyncio.Task[list[Frame]]] = {}
+
+    async def read(self, event_id: int, cursor: int, ceiling: int) -> list[Frame]:
+        """Share bounded reads across subscribers and release connections before network writes."""
+        if ceiling - cursor > MAX_REPLAY_ROWS:
+            raise SequenceGap("Replay limit exceeded")
+        key = (event_id, cursor, min(ceiling, cursor + REPLAY_ROWS))
+        task = self._tasks.get(key)
+        if task is None:
+            if len(self._tasks) >= MAX_REPLAY_TASKS:
+                raise server_busy("Seat stream replay capacity exhausted.")
+            task = asyncio.create_task(self._read(*key))
+            self._tasks[key] = task
+            task.add_done_callback(lambda done: self._finished(key, done))
+        return await asyncio.shield(task)
+
+    def _finished(self, key: tuple[int, int, int], task: asyncio.Task[list[Frame]]) -> None:
+        del self._tasks[key]
+        # The last waiter may have disconnected while the shielded read was running.
+        if not task.cancelled():
+            task.exception()
+
+    async def _read(self, event_id: int, cursor: int, end: int) -> list[Frame]:
+        async with acquire(self.pool, self.timeout) as conn:
+            rows = await conn.fetch(_REPLAY, event_id, cursor, end, REPLAY_ROWS)
+        if len(rows) != end - cursor:
+            raise SequenceGap("Replay rows are missing")
+        return coalesce(rows, cursor)
+
+    async def close(self) -> None:
+        tasks = tuple(self._tasks.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 class EventReader:
-    def __init__(self, pool: asyncpg.Pool, timeout: float, event_id: int) -> None:
+    def __init__(self, pool: asyncpg.Pool, timeout: float, event_id: int, replays: Replays) -> None:
         self.pool = pool
         self.timeout = timeout
         self.event_id = event_id
@@ -97,7 +139,7 @@ class EventReader:
         self.ready = asyncio.Event()
         self.subscribers = 0
         self.broken = False
-        self._replays: dict[tuple[int, int], asyncio.Task[list[Frame]]] = {}
+        self.replays = replays
         self.task = asyncio.create_task(self.run())
 
     def notify(self) -> None:
@@ -115,40 +157,6 @@ class EventReader:
                 self.event_id,
             )
         return head
-
-    async def replay(self, cursor: int, ceiling: int) -> list[Frame]:
-        """Bound each replay read and release its connection before any network write."""
-        if ceiling - cursor > MAX_REPLAY_ROWS:
-            raise SequenceGap("Replay limit exceeded")
-        key = (cursor, min(ceiling, cursor + REPLAY_ROWS))
-        task = self._replays.get(key)
-        if task is None:
-            task = asyncio.create_task(self._read_replay(key))
-            self._replays[key] = task
-            task.add_done_callback(self._retrieve_replay_error)
-        return await asyncio.shield(task)
-
-    @staticmethod
-    def _retrieve_replay_error(task: asyncio.Task[list[Frame]]) -> None:
-        if not task.cancelled():
-            task.exception()
-
-    async def _read_replay(self, key: tuple[int, int]) -> list[Frame]:
-        cursor, end = key
-        try:
-            async with acquire(self.pool, self.timeout) as conn:
-                rows = await conn.fetch(_REPLAY, self.event_id, cursor, end, REPLAY_ROWS)
-            if len(rows) != end - cursor:
-                raise SequenceGap("Replay rows are missing")
-            return coalesce(rows, cursor)
-        finally:
-            del self._replays[key]
-
-    def stop(self) -> tuple[asyncio.Task[list[Frame] | None], ...]:
-        tasks = (self.task, *self._replays.values())
-        for task in tasks:
-            task.cancel()
-        return tasks
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -198,21 +206,28 @@ class Readers:
         self.pool = pool
         self.timeout = timeout
         self.events: dict[int, EventReader] = {}
+        self.replays = Replays(pool, timeout)
 
     @contextmanager
     def subscribe(self, event_id: int) -> Iterator[EventReader]:
         reader = self.events.get(event_id)
         if reader is None:
-            reader = self.events[event_id] = EventReader(self.pool, self.timeout, event_id)
+            if len(self.events) >= MAX_EVENT_READERS:
+                raise server_busy("Seat stream event reader capacity exhausted.")
+            reader = self.events[event_id] = EventReader(
+                self.pool, self.timeout, event_id, self.replays
+            )
         reader.subscribers += 1
         try:
             yield reader
         finally:
             reader.subscribers -= 1
             if not reader.subscribers:
-                reader.stop()
+                reader.task.cancel()
                 self.events.pop(event_id, None)
 
     async def close(self) -> None:
-        tasks = [task for reader in self.events.values() for task in reader.stop()]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        tasks = [reader.task for reader in self.events.values()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, self.replays.close(), return_exceptions=True)

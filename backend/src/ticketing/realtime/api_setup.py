@@ -10,8 +10,8 @@ from fastapi import FastAPI
 
 from ticketing.core.db import create_pool
 from ticketing.core.settings import Settings
+from ticketing.realtime import revocation
 from ticketing.realtime.reader import Readers
-from ticketing.realtime.revocation import Revocations
 from ticketing.realtime.snapshot import SnapshotCache
 
 
@@ -26,11 +26,13 @@ def install(app: FastAPI) -> None:
             timeout = settings.db_pool_acquire_timeout_s
             readers = Readers(app.state.db, timeout)
             snapshots = SnapshotCache(app.state.db, timeout)
-            check_settings = settings.model_copy(update={"db_statement_timeout_ms": 300})
+            check_settings = settings.model_copy(
+                update={"db_statement_timeout_ms": revocation.RECHECK_QUERY_TIMEOUT_MS}
+            )
             check_pool = await create_pool(
                 check_settings, min_size=2, max_size=2, application_name="api-sse-recheck"
             )
-            revocations = Revocations(check_pool, app.state.redis)
+            revocations = revocation.Revocations(check_pool, app.state.redis)
             app.state.seat_readers = readers
             app.state.seat_snapshots = snapshots
             app.state.seat_revocations = revocations
