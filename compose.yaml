@@ -102,7 +102,7 @@ services:
       - imports:/data/imports
       - exports:/data/exports
     deploy:
-      replicas: 3
+      replicas: ${API_REPLICAS:-3}
       resources:
         limits: {memory: 512m}
     ulimits:
