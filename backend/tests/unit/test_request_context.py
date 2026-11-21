@@ -31,6 +31,10 @@ def _app(outbound: list[httpx.Request]) -> RequestContextMiddleware:
     async def db_timeout() -> None:
         raise asyncpg.QueryCanceledError("canceling statement due to statement timeout")
 
+    @app.get("/stalled")
+    async def stalled() -> None:
+        raise TimeoutError
+
     @app.get("/boom")
     async def boom() -> None:
         raise RuntimeError("secret-internal-detail")
@@ -109,6 +113,12 @@ async def test_database_back_pressure_is_retryable_503(app_client: httpx.AsyncCl
     assert body["code"] == "server-busy"
     assert body["retryable"] is True
     assert "statement timeout" not in response.text
+
+
+async def test_escaped_timeout_is_retryable_503(app_client: httpx.AsyncClient) -> None:
+    response = await app_client.get("/stalled")
+    assert response.status_code == 503
+    assert response.json()["code"] == "server-busy"
 
 
 async def test_not_found_is_problem_json(app_client: httpx.AsyncClient) -> None:

@@ -92,9 +92,11 @@ async def _unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
     return _render(problem, request)
 
 
-# Database back-pressure (lock_timeout, statement_timeout, deadlock victim) is an overload
-# signal, not a server bug: callers get the same retryable 503 as pool exhaustion.
+# Database back-pressure (lock_timeout, statement_timeout, deadlock victim) and any timeout
+# that escapes a handler (e.g. returning a connection to a stalled pool) are overload signals,
+# not server bugs: callers get the same retryable 503 as pool exhaustion.
 _OVERLOAD_ERRORS = (
+    TimeoutError,
     asyncpg.LockNotAvailableError,
     asyncpg.QueryCanceledError,
     asyncpg.DeadlockDetectedError,
