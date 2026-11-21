@@ -1,6 +1,6 @@
 # CP4：50 萬筆訂單 Excel 匯出（512 MB API 實例）
 
-> 需求：`requirement.txt` 六.5「50 萬筆訂單需能在記憶體上限為 512MB 的 API 實例上完成匯出」。
+> 需求：題目第六節第 5 點「50 萬筆訂單需能在記憶體上限為 512MB 的 API 實例上完成匯出」。
 > 量測日期：2026-11-21（台北），執行環境見 `LOADTEST.md` §1（MacBook Intel 4 執行緒 / 8 GB，Docker Desktop VM 4 CPU / 5 GB）。
 
 ## 方法
