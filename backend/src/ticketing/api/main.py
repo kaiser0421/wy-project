@@ -46,6 +46,8 @@ def main() -> None:
         proxy_headers=True,
         forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "*"),
         timeout_graceful_shutdown=20,
+        # Longer than nginx's upstream keepalive_timeout (60 s), so nginx closes idle ones first.
+        timeout_keep_alive=75,
         backlog=4096,
         log_config=None,
     )

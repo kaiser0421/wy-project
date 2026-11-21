@@ -20,7 +20,7 @@ from ticketing.payments.callbacks import AppliedEvent, apply_event, lock_payment
 from ticketing.payments.provider import Provider, ProviderUnavailable
 
 log = get_logger(__name__)
-_BATCH_SIZE = 12
+_BATCH_SIZE = 50
 # Less than the 30-second durable lease so a stalled phase cannot outlive its claim.
 _PHASE_TIMEOUT_S = 12.0
 
@@ -226,7 +226,7 @@ async def _clean_completed_keys(ctx: ServiceContext) -> None:
 
 
 # Rows processed concurrently across the poll, cancel and refund phases of one tick.
-_MAX_CONCURRENT_ROWS = 4
+_MAX_CONCURRENT_ROWS = 6
 
 
 async def _run_phase(
