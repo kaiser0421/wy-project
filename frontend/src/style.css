@@ -347,6 +347,9 @@ progress { width: 100%; accent-color: var(--primary); }
 .admin-lower > :has(.recent-logs-scroll) { grid-column: 1 / -1; }
 .recent-logs-scroll { max-height: 24rem; }
 .recent-logs-scroll th { position: sticky; top: 0; }
+.request-trace-scroll table { min-width: 48rem; }
+.request-trace-scroll .trace-event { min-width: 12rem; overflow-wrap: anywhere; }
+.request-trace-scroll .trace-request { min-width: 15rem; overflow-wrap: anywhere; }
 .log-level { display: inline-block; border: 1px solid var(--danger-border); border-radius: .45rem;
   padding: .1rem .45rem; background: var(--danger-background); color: var(--danger); }
 .log-level.warning { border-color: var(--warning-border); background: var(--warning-background); color: var(--warning-ink); }
