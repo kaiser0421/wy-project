@@ -3744,7 +3744,8 @@
                 {
                   "type": "string",
                   "minLength": 1,
-                  "maxLength": 254
+                  "maxLength": 254,
+                  "pattern": "^[^\\x00]+$"
                 },
                 {
                   "type": "null"
