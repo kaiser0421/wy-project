@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
-import json
 import math
+import multiprocessing
 import os
 import random
 from array import array
@@ -15,63 +15,27 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import lru_cache
+from multiprocessing.connection import Connection, wait
 from pathlib import Path
-from time import time
-from typing import Any, cast
+from time import monotonic, time
+from typing import Any
 
 import asyncpg
 import httpx
 import orjson
 
-from ticketing.realtime.client_model import Delta, SequenceGap, apply_delta
+from ticketing.realtime.client_model import SeatState, SequenceGap
 from ticketing.realtime.snapshot import STATUS_CHAR
 
-_CHAR_STATUS = {ord(value): key for key, value in STATUS_CHAR.items()}
-
-
-@dataclass(frozen=True, slots=True)
-class Layout:
-    version: int
-    positions: dict[int, int]
-    fingerprint: bytes
-
-    @classmethod
-    def create(cls, version: int, indices: list[int]) -> Layout:
-        index_hash = hashlib.sha256(array("I", indices).tobytes()).digest()
-        return cls(version, {idx: pos for pos, idx in enumerate(indices)}, index_hash)
-
-
-@dataclass(slots=True)
-class Seats:
-    layout: Layout
-    status: bytearray
-    versions: array[int]
-
-    def clone(self) -> Seats:
-        return Seats(self.layout, self.status.copy(), self.versions[:])
-
-    def get(self, idx: int, /) -> tuple[str, int]:
-        pos = self.layout.positions[idx]
-        return _CHAR_STATUS[self.status[pos]], self.versions[pos]
-
-    def __setitem__(self, idx: int, value: tuple[str, int], /) -> None:
-        pos = self.layout.positions[idx]
-        status, version = value
-        self.status[pos] = ord(STATUS_CHAR[status])
-        self.versions[pos] = version
-
-    def digest(self) -> str:
-        digest = hashlib.sha256(str(self.layout.version).encode())
-        digest.update(self.layout.fingerprint)
-        digest.update(self.status)
-        digest.update(self.versions)
-        return digest.hexdigest()
+_CHAR_STATUS = {value: key for key, value in STATUS_CHAR.items()}
 
 
 @dataclass(slots=True)
 class Probe:
     applied: int
-    seats: Seats
+    layout_ver: int
+    seats: SeatState
     opened: bool = False
     last_progress_at: float | None = None
 
@@ -82,16 +46,20 @@ class Metrics:
     latency: Counter[int] = field(default_factory=Counter)
     connect: Counter[int] = field(default_factory=Counter)
     snapshot: Counter[int] = field(default_factory=Counter)
-    active: int = 0
-    peak: int = 0
 
-    def summary(self, seconds: float) -> dict[str, Any]:
+    def merge(self, other: Metrics) -> None:
+        self.total.update(other.total)
+        self.latency.update(other.latency)
+        self.connect.update(other.connect)
+        self.snapshot.update(other.snapshot)
+
+    def summary(self, seconds: float, peak: int) -> dict[str, Any]:
         return {
             "gaps": self.total["gaps"],
             "resyncs": self.total["resyncs"],
             "request_errors": self.total["request_errors"],
             **dict(self.total),
-            "peak_active": self.peak,
+            "peak_active": peak,
             "sse_body_bytes_per_second": round(self.total["sse_body_bytes"] / seconds),
             "delta_apply_samples": self.latency.total(),
             "delta_apply_ms": percentiles(self.latency),
@@ -101,6 +69,16 @@ class Metrics:
                 self.total["stream_request_errors"] / max(1, self.total["stream_attempts"]), 6
             ),
         }
+
+
+def record_latency(histogram: Counter[int], seconds: float) -> None:
+    # Fixed bounds keep worker memory and IPC size independent of the sample count.
+    ms = max(-300_000, min(300_000, round(seconds * 1000)))
+    if abs(ms) >= 10_000:
+        ms = round(ms, -2)
+    elif abs(ms) >= 1000:
+        ms = round(ms, -1)
+    histogram[ms] += 1
 
 
 def percentiles(histogram: Counter[int]) -> dict[str, int]:
@@ -121,26 +99,63 @@ def percentiles(histogram: Counter[int]) -> dict[str, int]:
 
 async def events(
     response: httpx.Response, metrics: Metrics
-) -> AsyncIterator[tuple[str, int | None, dict[str, Any]]]:
+) -> AsyncIterator[tuple[str, int | None, str]]:
     fields: dict[str, str] = {}
     async for line in response.aiter_lines():
         metrics.total["sse_body_bytes"] += len(line.encode()) + 1
         if not line:
             if "event" in fields:
                 seq = int(fields["id"]) if "id" in fields else None
-                yield fields["event"], seq, orjson.loads(fields["data"])
+                yield fields["event"], seq, fields["data"]
             fields.clear()
         elif not line.startswith(":"):
             name, _, value = line.partition(":")
             fields[name] = value.removeprefix(" ")
 
 
+@lru_cache(maxsize=128)
+def decode_delta(raw: str) -> tuple[int, int, float, list[tuple[int, tuple[str, int]]]]:
+    data = orjson.loads(raw)
+    # Subscribers often receive the same frame. Reuse its immutable seat values.
+    changes = [(idx, (status, version)) for idx, status, version in data["changes"]]
+    return data["from"], data["to"], datetime.fromisoformat(data["ts"]).timestamp(), changes
+
+
+def apply_delta(probe: Probe, seq: int | None, raw: str) -> float | None:
+    first, last, created, changes = decode_delta(raw)
+    if seq != last:
+        raise SequenceGap("Frame ID disagrees with its interval")
+    if last <= probe.applied:
+        return None
+    if first > probe.applied + 1:
+        raise SequenceGap("Delta starts after the next expected sequence")
+    seats = probe.seats
+    for idx, value in changes:
+        previous = seats.get(idx)
+        if previous is None or value[1] > previous[1]:
+            seats[idx] = value
+    probe.applied = last
+    return created
+
+
+@lru_cache(maxsize=2)
+def decode_snapshot(raw: bytes) -> tuple[int, int, SeatState]:
+    data = orjson.loads(raw)
+    seats = {
+        seat["idx"]: (_CHAR_STATUS[status], version)
+        for seat, status, version in zip(
+            data["seats"], data["status"], data["versions"], strict=True
+        )
+    }
+    return data["last_seq"], data["layout_ver"], seats
+
+
 class Scenario:
-    def __init__(self, event_id: int, cookie_name: str, slow_delay: float) -> None:
-        self.url = f"/api/v1/events/{event_id}"
-        self.cookie_name = cookie_name
-        self.slow_delay = slow_delay
-        self.layouts: dict[int, Layout] = {}
+    def __init__(self, args: argparse.Namespace, active: Any) -> None:
+        self.url = f"/api/v1/events/{args.event_id}"
+        self.cookie_name = args.cookie_name
+        self.slow_delay = args.slow_delay
+        self.active = active
         self.metrics = Metrics()
 
     async def snapshot(self, client: httpx.AsyncClient, cookie: str, min_layout: int) -> Probe:
@@ -152,19 +167,12 @@ class Scenario:
             params={"format": "compact", "min_layout_ver": min_layout},
         )
         response.raise_for_status()
-        data = response.json()
-        self.metrics.snapshot[round((loop.time() - started) * 1000)] += 1
-        version = data["layout_ver"]
+        head, version, seats = decode_snapshot(response.content)
         if version < min_layout:
             raise SequenceGap("Layout snapshot is behind the requested version")
-        layout = self.layouts.get(version)
-        if layout is None:
-            layout = Layout.create(version, [seat["idx"] for seat in data["seats"]])
-            self.layouts[version] = layout
-        return Probe(
-            data["last_seq"],
-            Seats(layout, bytearray(data["status"], "ascii"), array("I", data["versions"])),
-        )
+        probe = Probe(head, version, seats.copy())
+        record_latency(self.metrics.snapshot, loop.time() - started)
+        return probe
 
     async def subscribe(
         self, client: httpx.AsyncClient, cookie: str, probe: Probe, delay: float
@@ -176,14 +184,15 @@ class Scenario:
         headers = {"Cookie": cookie, "Last-Event-ID": str(probe.applied)}
         async with client.stream("GET", self.url + "/seat-stream", headers=headers) as response:
             response.raise_for_status()
-            self.metrics.connect[round((loop.time() - start) * 1000)] += 1
+            record_latency(self.metrics.connect, loop.time() - start)
             if not probe.opened:
                 probe.opened = True
                 self.metrics.total["connections_established"] += 1
-            self.metrics.active += 1
-            self.metrics.peak = max(self.metrics.peak, self.metrics.active)
+            with self.active.get_lock():
+                self.active[0] += 1
+                self.active[1] = max(self.active[1], self.active[0])
             try:
-                async for kind, seq, data in events(response, self.metrics):
+                async for kind, seq, raw in events(response, self.metrics):
                     if kind == "resync":
                         self.metrics.total["resyncs"] += 1
                         return 0
@@ -192,17 +201,14 @@ class Scenario:
                             raise SequenceGap("Layout sequence is beyond the next expected row")
                         if seq > probe.applied:
                             self.metrics.total["layout_refreshes"] += 1
-                            return int(data["layout_ver"])
+                            return int(orjson.loads(raw)["layout_ver"])
                     elif kind == "delta":
-                        if seq != data["to"]:
-                            raise SequenceGap("Frame ID disagrees with its interval")
-                        applied = apply_delta(probe.seats, probe.applied, cast(Delta, data))
-                        if applied > probe.applied:
-                            probe.applied = applied
-                            created = datetime.fromisoformat(data["ts"]).timestamp()
-                            self.metrics.latency[round((time() - created) * 1000)] += 1
+                        created = apply_delta(probe, seq, raw)
+                        if created is not None:
+                            record_latency(self.metrics.latency, time() - created)
                             self.metrics.total["deltas_applied"] += 1
                     elif kind == "progress":
+                        data = orjson.loads(raw)
                         if data["oldest_unassigned_age_ms"] > 2000:
                             self.metrics.total["outbox_lag_samples"] += 1
                         if data["head"] <= probe.applied:
@@ -215,7 +221,8 @@ class Scenario:
                     if delay:
                         await asyncio.sleep(delay)
             finally:
-                self.metrics.active -= 1
+                with self.active.get_lock():
+                    self.active[0] -= 1
         self.metrics.total["stream_eofs"] += 1
         return None
 
@@ -231,7 +238,9 @@ class Scenario:
             try:
                 if minimum is not None:
                     snapshot = await self.snapshot(client, cookie, minimum)
-                    probe.applied, probe.seats = snapshot.applied, snapshot.seats
+                    probe.applied = snapshot.applied
+                    probe.layout_ver = snapshot.layout_ver
+                    probe.seats = snapshot.seats
                     minimum = None
                 minimum = await self.subscribe(
                     client, cookie, probe, self.slow_delay if slow else 0
@@ -259,7 +268,24 @@ class Scenario:
             retries = min(4, retries + 1)
 
 
-async def pg_state(conn: asyncpg.Connection, event_id: int) -> tuple[int, int, str, int]:
+@dataclass(slots=True)
+class DatabaseState:
+    head: int
+    pending: int
+    layout_ver: int
+    seats: SeatState
+    archive_mismatches: int
+
+    def digest(self) -> str:
+        # Keep the report fingerprint compatible with previous runs.
+        digest = hashlib.sha256(str(self.layout_ver).encode())
+        digest.update(hashlib.sha256(array("I", self.seats).tobytes()).digest())
+        digest.update("".join(STATUS_CHAR[status] for status, _ in self.seats.values()).encode())
+        digest.update(array("I", (version for _, version in self.seats.values())))
+        return digest.hexdigest()
+
+
+async def pg_state(conn: asyncpg.Connection, event_id: int) -> DatabaseState:
     async with conn.transaction(isolation="repeatable_read", readonly=True):
         info = await conn.fetchrow(
             """
@@ -305,82 +331,179 @@ async def pg_state(conn: asyncpg.Connection, event_id: int) -> tuple[int, int, s
             event_id,
             info["head"],
         )
-    seats = Seats(
-        Layout.create(info["layout_ver"], [row["seat_idx"] for row in rows]),
-        bytearray("".join(STATUS_CHAR[row["status"]] for row in rows), "ascii"),
-        array("I", (row["version"] for row in rows)),
+    seats = {row["seat_idx"]: (row["status"], row["version"]) for row in rows}
+    return DatabaseState(
+        info["head"], info["pending"], info["layout_ver"], seats, archive_mismatches
     )
-    return info["head"], info["pending"], seats.digest(), archive_mismatches
 
 
-async def run_scenario(args: argparse.Namespace, tokens: list[str]) -> bool:
-    loop = asyncio.get_running_loop()
-    scenario = Scenario(args.event_id, args.cookie_name, args.slow_delay)
-    clients: list[httpx.AsyncClient] = []
-    tasks: list[asyncio.Task[None]] = []
+async def measure_shard(
+    args: argparse.Namespace,
+    tokens: list[str],
+    shard: int,
+    channel: Connection,
+    progress: Any,
+    active: Any,
+) -> tuple[Metrics, int]:
+    scenario = Scenario(args, active)
+    probes: list[Probe] = []
     async with AsyncExitStack() as stack:
-        # Smaller pools avoid a quadratic connection search during a 2,000-client reconnect.
-        for _ in range(math.ceil(len(tokens) / 64)):
-            clients.append(
-                await stack.enter_async_context(
-                    httpx.AsyncClient(
-                        base_url=args.base_url,
-                        limits=httpx.Limits(max_connections=72),
-                        timeout=httpx.Timeout(20.0, connect=10.0),
-                        trust_env=False,
-                    )
+        # Small pools keep HTTP connection searches short during reconnects.
+        clients = [
+            await stack.enter_async_context(
+                httpx.AsyncClient(
+                    base_url=args.base_url,
+                    limits=httpx.Limits(max_connections=72),
+                    timeout=httpx.Timeout(20.0, connect=10.0),
+                    trust_env=False,
                 )
             )
+            for _ in range(math.ceil(len(tokens) / 64))
+        ]
         initial = await scenario.snapshot(clients[0], f"{args.cookie_name}={tokens[0]}", 0)
-        probes = [Probe(initial.applied, initial.seats.clone()) for _ in tokens]
-        started = loop.time()
+        channel.send(None)
+        started = channel.recv()
 
-        async def connect(index: int, probe: Probe, token: str) -> None:
-            if args.ramp_seconds:
-                await asyncio.sleep(args.ramp_seconds * index / len(tokens))
-            await scenario.run(clients[index // 64], token, probe, index % 10 == 0)
+        async def connect(local_index: int, token: str) -> None:
+            index = shard + local_index * args.processes
+            offset = args.ramp_seconds * index / args.connections
+            await asyncio.sleep(max(0, started + offset - monotonic()))
+            probe = Probe(initial.applied, initial.layout_ver, initial.seats.copy())
+            probes.append(probe)
+            await scenario.run(clients[local_index // 64], token, probe, index % 10 == 0)
 
-        for i, (probe, token) in enumerate(zip(probes, tokens, strict=True)):
-            tasks.append(asyncio.create_task(connect(i, probe, token)))
-        try:
-            await asyncio.sleep(args.duration)
-            deadline = loop.time() + args.drain_timeout
-            conn = await asyncpg.connect(os.environ["DATABASE_URL"])
-            try:
-                while True:
-                    head, pending, digest, archive_errors = await pg_state(conn, args.event_id)
-                    if not pending and all(probe.applied >= head for probe in probes):
-                        break
-                    if loop.time() >= deadline:
-                        break
-                    await asyncio.sleep(0.25)
-            finally:
-                await conn.close()
-            matched = sum(
-                probe.applied == head and probe.seats.digest() == digest for probe in probes
-            )
-            report = scenario.metrics.summary(loop.time() - started)
-            report.update(
-                {
-                    "target_connections": len(tokens),
-                    "final_head": head,
-                    "outbox_pending": pending,
-                    "archive_mismatches": archive_errors,
-                    "pg_state_sha256": digest,
-                    "matching_clients": matched,
-                }
-            )
-            print(json.dumps(report, sort_keys=True))
-            return (
-                matched == len(tokens)
-                and scenario.metrics.peak == len(tokens)
-                and pending == archive_errors == 0
-                and report["delta_apply_samples"] > 0
-            )
-        finally:
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(connect(i, token)) for i, token in enumerate(tokens)]
+            while not channel.poll():
+                if len(probes) == len(tokens):
+                    progress[shard] = min(probe.applied for probe in probes)
+                await asyncio.sleep(0.1)
+            final: DatabaseState = channel.recv()
             for task in tasks:
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+
+    matched = sum(
+        probe.applied == final.head
+        and probe.layout_ver == final.layout_ver
+        and probe.seats == final.seats
+        for probe in probes
+    )
+    return scenario.metrics, matched
+
+
+def worker(
+    args: argparse.Namespace,
+    tokens: list[str],
+    shard: int,
+    channel: Connection,
+    progress: Any,
+    active: Any,
+) -> None:
+    with channel:
+        channel.send(asyncio.run(measure_shard(args, tokens, shard, channel, progress, active)))
+
+
+def receive(channel: Connection) -> Any:
+    try:
+        return channel.recv()
+    except (EOFError, OSError) as error:
+        raise SystemExit("An SSE worker exited before completing its report") from error
+
+
+async def drain(
+    args: argparse.Namespace, progress: Any, channels: list[Connection]
+) -> DatabaseState:
+    deadline = monotonic() + args.drain_timeout
+    conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+    try:
+        while True:
+            if wait(channels, timeout=0):
+                raise SystemExit("An SSE worker exited during the drain")
+            final = await pg_state(conn, args.event_id)
+            if (not final.pending and min(progress[:]) >= final.head) or monotonic() >= deadline:
+                return final
+            await asyncio.sleep(0.25)
+    finally:
+        await conn.close()
+
+
+def run_scenario(args: argparse.Namespace, tokens: list[str]) -> bool:
+    ctx = multiprocessing.get_context("spawn")
+    active = ctx.Array("i", [0, 0])  # Current and peak simultaneous connections across workers.
+    progress = ctx.Array("q", [-1] * args.processes)
+    channels: list[Connection] = []
+    processes = []
+    try:
+        for shard in range(args.processes):
+            parent, child = ctx.Pipe()
+            channels.append(parent)
+            with child:
+                process = ctx.Process(
+                    target=worker,
+                    args=(args, tokens[shard :: args.processes], shard, child, progress, active),
+                )
+                process.start()
+            processes.append(process)
+
+        pending = set(channels)
+        while pending:
+            for channel in wait(pending):
+                receive(channel)
+                pending.remove(channel)
+
+        started = monotonic()
+        for channel in channels:
+            channel.send(started)
+        if wait(channels, timeout=max(0, started + args.duration - monotonic())):
+            raise SystemExit("An SSE worker exited during the load phase")
+        final = asyncio.run(drain(args, progress, channels))
+        elapsed = monotonic() - started
+        for channel in channels:
+            channel.send(final)
+
+        metrics = Metrics()
+        matched = 0
+        pending = set(channels)
+        while pending:
+            for channel in wait(pending):
+                shard_metrics, shard_matched = receive(channel)
+                metrics.merge(shard_metrics)
+                matched += shard_matched
+                pending.remove(channel)
+
+        for process in processes:
+            process.join()
+            if process.exitcode != 0:
+                raise SystemExit(f"An SSE worker exited with status {process.exitcode}")
+
+        peak = active[1]
+        report = metrics.summary(elapsed, peak)
+        report.update(
+            {
+                "target_connections": len(tokens),
+                "processes": args.processes,
+                "final_head": final.head,
+                "outbox_pending": final.pending,
+                "archive_mismatches": final.archive_mismatches,
+                "pg_state_sha256": final.digest(),
+                "matching_clients": matched,
+            }
+        )
+        print(orjson.dumps(report, option=orjson.OPT_SORT_KEYS).decode())
+        return (
+            matched == len(tokens)
+            and peak == len(tokens)
+            and final.pending == final.archive_mismatches == 0
+            and report["delta_apply_samples"] > 0
+        )
+    finally:
+        for channel in channels:
+            channel.close()
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+            process.join()
+            process.close()
 
 
 def main() -> None:
@@ -390,23 +513,38 @@ def main() -> None:
     parser.add_argument("--sessions-file", required=True, type=Path)
     parser.add_argument("--connections", type=int, default=2000)
     parser.add_argument("--duration", type=float, default=75)
-    parser.add_argument("--ramp-seconds", type=float, default=0)
+    parser.add_argument(
+        "--processes",
+        type=int,
+        default=min(8, os.cpu_count() or 1),
+        help="worker processes, capped at the connection count (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--ramp-seconds",
+        type=float,
+        default=10,
+        help="spread initial connection starts over this many seconds (default: %(default)s)",
+    )
     parser.add_argument("--drain-timeout", type=float, default=10)
     parser.add_argument("--slow-delay", type=float, default=0.25)
     parser.add_argument("--cookie-name", choices=["sid", "__Host-sid"], default="sid")
     args = parser.parse_args()
     if (
         args.connections <= 0
+        or args.processes <= 0
         or args.duration <= 0
         or min(args.drain_timeout, args.slow_delay, args.ramp_seconds) < 0
     ):
-        parser.error("connections and duration must be positive. Delays must be nonnegative")
+        parser.error(
+            "connections, processes and duration must be positive; delays must be nonnegative"
+        )
     if "DATABASE_URL" not in os.environ:
         parser.error("Set DATABASE_URL for the final PostgreSQL audit")
-    tokens = json.loads(args.sessions_file.read_text())[: args.connections]
+    tokens = orjson.loads(args.sessions_file.read_bytes())[: args.connections]
     if len(tokens) != args.connections or len(set(tokens)) != args.connections:
         parser.error("Provide a JSON array with one distinct session token per connection")
-    raise SystemExit(0 if asyncio.run(run_scenario(args, tokens)) else 1)
+    args.processes = min(args.processes, args.connections)
+    raise SystemExit(0 if run_scenario(args, tokens) else 1)
 
 
 if __name__ == "__main__":

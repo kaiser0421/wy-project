@@ -6,7 +6,8 @@
 #   loadtest/run.sh b              # Scenario B only (2,000 SSE subscribers on one event)
 #   loadtest/run.sh smoke          # tiny version of both, to check the kit works (~3 minutes)
 #
-# Tunables (environment): VUS, DURATION, SEATS, CONNECTIONS, B_DURATION, B_RATE, K6_CPUS, OUT
+# Tunables: VUS, DURATION, SEATS, CONNECTIONS, B_DURATION, B_RATE, SSE_PROCESSES, SSE_RAMP, K6_CPUS, OUT
+# B_RATE=300 runs the Scenario B stress variant.
 # Results are written to loadtest/out/<timestamp>/ and packed into loadtest/out/<timestamp>.tar.gz
 set -euo pipefail
 
@@ -24,7 +25,8 @@ if [[ $MODE == smoke ]]; then
   CONNECTIONS=${CONNECTIONS:-50}; B_DURATION=${B_DURATION:-30}; B_RATE=${B_RATE:-20}
 fi
 VUS=${VUS:-3000}; DURATION=${DURATION:-60s}; SEATS=${SEATS:-10000}
-CONNECTIONS=${CONNECTIONS:-2000}; B_DURATION=${B_DURATION:-80}; B_RATE=${B_RATE:-300}
+CONNECTIONS=${CONNECTIONS:-2000}; B_DURATION=${B_DURATION:-80}; B_RATE=${B_RATE:-100}
+SSE_PROCESSES=${SSE_PROCESSES:-}; SSE_RAMP=${SSE_RAMP:-10}
 K6_CPUS=${K6_CPUS:-}                   # e.g. K6_CPUS=2 to cap the generator
 
 log() { printf '\n==> %s\n' "$*" | tee -a "$OUT/run.log"; }
@@ -56,6 +58,7 @@ environment() {
     docker info --format 'docker: {{.ServerVersion}} cpus={{.NCPU}} mem={{.MemTotal}} os={{.OperatingSystem}}'
     docker compose version
     echo "VUS=$VUS DURATION=$DURATION SEATS=$SEATS CONNECTIONS=$CONNECTIONS B_DURATION=$B_DURATION B_RATE=$B_RATE"
+    echo "SSE_PROCESSES=${SSE_PROCESSES:-auto} SSE_RAMP=$SSE_RAMP"
   } > "$OUT/environment.txt"
 }
 
@@ -126,9 +129,13 @@ scenario_b() {
   py scenario_b_writer.py write --event-id "$event_id" --workers 4 --rate "$B_RATE" \
     --start-delay 15 --duration $((B_DURATION - 25)) > "$OUT/b/writer.txt" 2>&1 &
   local writer=$!
+  local -a sse_options=(--ramp-seconds "$SSE_RAMP")
+  if [[ -n $SSE_PROCESSES ]]; then
+    sse_options+=(--processes "$SSE_PROCESSES")
+  fi
   py sse_client.py --base-url http://nginx:8080 --event-id "$event_id" \
     --sessions-file "$OUT_IN/b/sessions.json" --connections "$CONNECTIONS" \
-    --duration "$B_DURATION" --drain-timeout 20 > "$OUT/b/sse-client.txt" 2>&1 \
+    --duration "$B_DURATION" --drain-timeout 20 "${sse_options[@]}" > "$OUT/b/sse-client.txt" 2>&1 \
     || record_failure "Scenario B SSE client or audit failed (exit $?)"
   wait "$writer" || record_failure "Scenario B writer failed (exit $?)"
   tail -40 "$OUT/b/sse-client.txt" | tee -a "$OUT/run.log"

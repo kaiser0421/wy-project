@@ -39,13 +39,13 @@
 
 ## 3. Scenario B
 
-**參數與流量**　對同一活動預建 2,000 個獨立 session，Python probe 預設同時發起 SSE，80 秒後最多再等 20 秒排空，預設每第十條為慢速讀取。writer 啟動時等待 15 秒，再由 4 個 worker 以總目標 300 seat changes/s 寫入 55 秒。各 worker 在不重疊的範圍切換座位狀態與版本，走正式 transactional outbox。累積量、速度、連線及最終比對都從工具實際輸出擷取。見 `loadtest/run.sh`、`loadtest/scenario_b_writer.py`、`loadtest/sse_client.py`。
+**參數與流量**　對同一活動預建 2,000 個獨立 session。SSE client 依可見 CPU 數啟動最多 8 個程序，各自先取得一份起始快照，所有連線在前 10 秒均勻啟動，並維持每第十條為慢速讀取。80 秒後最多再等 20 秒排空。Writer 啟動後等 15 秒，再由 4 個 worker 以總目標 100 seat changes/s 寫入 55 秒。`B_RATE=300` 為高負載版本。各 writer worker 在不重疊的範圍切換座位狀態與版本，走正式 transactional outbox。累積量、速度、連線及最終比對都從工具實際輸出擷取。見 `loadtest/run.sh`、`loadtest/scenario_b_writer.py`、`loadtest/sse_client.py`。
 
 | 正式結果 | 數值 | 來源／口徑 |
 |---|---|---|
 | 峰值同時 SSE／目標 | （待桌機壓測結果）／2,000 | `peak_active`／`target_connections`。 |
 | SSE 嘗試數／errors／錯誤率 | （待桌機壓測結果） | `stream_attempts`、`stream_request_errors`、`stream_error_rate`。分母為 SSE 嘗試數，含重連。 |
-| SSE 建連／快照 p50／p95／p99（ms） | （待桌機壓測結果） | `connect_ms`、`snapshot_ms`。 |
+| SSE 建連／快照 p50／p95／p99（ms） | （待桌機壓測結果） | 合併各程序的延遲分桶後計算 `connect_ms`、`snapshot_ms`，建連計時自發出 SSE 請求起算。 |
 | Delta 套用樣本數及 p50／p95／p99（ms） | （待桌機壓測結果） | `delta_apply_samples` 與 `delta_apply_ms`。延遲從合併 frame 內最早的 outbox `created_at` 計至 probe 套用，包含提交前剩餘時間。 |
 | Writer 變更數／changes/s；SSE bytes/s | （待桌機壓測結果） | `b/writer.txt` 的 `changes`、`changes_per_sec`，以及 `sse_body_bytes_per_second`。長連線持續流量用變更速率與 bytes/s 表示。 |
 | 斷層／resync／EOF | （待桌機壓測結果） | `b/sse-client.txt` 的 probe 計數。 |
@@ -100,7 +100,7 @@ Scenario A 結束後腳本先等 90 秒，針對該活動執行 `loadtest/consis
 | `booking_replay_record` | 已完成的 create-order replay 有對應 owner 與訂單，保存的狀態碼、resource ref、Location 一致。 |
 | `outbox_unassigned`、`event_sequence`、`seat_event_missing`、`seat_event_extra` | outbox 完成編序。保留的序號須連續且抵達 DB head，封存的逐席變更須在該範圍內與 outbox 相符。 |
 
-維護程序會清除已編序超過一小時的 outbox 資料。A 的 SQL 與 B 的 SSE 稽核在保留的序號範圍內比對封存資料，範圍內缺號仍會回報。B 使用合成訂單與座位資料，寫入程式須成功結束並提交座位變更，客戶端須記錄至少一筆 delta 套用樣本。客戶端須追上最終 head，且座位索引、狀態與版本的雜湊值須與資料庫相符。通過條件包括 `peak_active = matching_clients = target_connections` 及 `outbox_pending = archive_mismatches = 0`。見 `loadtest/consistency.sql`、`loadtest/sse_client.py`。
+維護程序會清除已編序超過一小時的 outbox 資料。A 的 SQL 與 B 的 SSE 稽核在保留的序號範圍內比對封存資料，範圍內缺號仍會回報。B 使用合成訂單與座位資料，寫入程式須成功結束並提交座位變更，客戶端須記錄至少一筆 delta 套用樣本。每條連線的游標、版面版本、座位索引、狀態與版本都須與同一份最終 PostgreSQL 快照相符。通過條件包括 `peak_active = matching_clients = target_connections` 及 `outbox_pending = archive_mismatches = 0`。見 `loadtest/consistency.sql`、`loadtest/sse_client.py`。
 
 A 排空後重驗指令。將 `EVENT_ID` 設為 `a/event.json` 的活動 ID，`SEATS` 設為該輪預期庫存。
 
@@ -132,7 +132,7 @@ loadtest/run.sh a
 loadtest/run.sh b
 ```
 
-`smoke` 為 A 50 VUs／15 秒／1,000 席與 B 50 SSE／30 秒／20 changes/s。 `all` 依序跑正式參數的 A、B。 `a` 和 `b` 可獨立執行。可用 `VUS`、`DURATION`、`SEATS`、`CONNECTIONS`、`B_DURATION`、`B_RATE` 覆寫參數。A、B 共用 `SEATS`。A 向下取 4 的倍數，SQL 仍用原值核對。B 至少 16 席，且 `B_DURATION` 為大於 25 的整數秒。 `K6_CPUS` 可限制 A 的產壓容器 CPU，設值時需記入正式報告。自訂 `OUT` 時使用 `loadtest/` 下的相對路徑，以配合容器的掛載。見 `loadtest/run.sh`。
+`smoke` 為 A 50 VUs／15 秒／1,000 席與 B 50 SSE／30 秒／20 changes/s。`all` 依序跑正式參數的 A、B。`a` 和 `b` 可獨立執行。B 預設 100 changes/s，可用 `B_RATE=300 loadtest/run.sh b` 執行高負載版本。`SSE_PROCESSES` 與 `SSE_RAMP` 分別覆寫 SSE 程序數與連線爬升秒數，實際程序數可在 `b/sse-client.txt` 的 `processes` 查閱。可用 `VUS`、`DURATION`、`SEATS`、`CONNECTIONS`、`B_DURATION` 覆寫規模與時間。A、B 共用 `SEATS`。A 向下取 4 的倍數，SQL 仍用原值核對。B 至少 16 席，且 `B_DURATION` 為大於 25 的整數秒。`K6_CPUS` 可限制 A 的產壓容器 CPU，設值時需記入正式報告。自訂 `OUT` 時使用 `loadtest/` 下的相對路徑，以配合容器的掛載。見 `loadtest/run.sh`。
 
 | 產物 | 用途 |
 |---|---|

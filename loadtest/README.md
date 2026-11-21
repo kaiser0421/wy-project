@@ -21,8 +21,10 @@ loadtest/run.sh all
 | `DURATION` | `60s` | A 的正值 k6 duration，需帶時間單位。 |
 | `SEATS` | `10000` | A、B 共用。A 平均分至四區，會向下取 4 的倍數，但 SQL 仍以原值核對，故請用正的 4 倍數且不超過匯入的 100,000 列上限。B 至少 16 席（4 個 writer × 每批 4 席）。 |
 | `CONNECTIONS` | `2000` | B 的 SSE 訂閱數（正整數，每條獨立 session）。 |
-| `B_DURATION` | `80` | B 訂閱秒數，須為大於 25 的整數。Writer 等 15 秒後開始，持續 `B_DURATION-25` 秒。 |
-| `B_RATE` | `300` | B 的每秒目標座位變更數，須為正值。 |
+| `B_DURATION` | `80` | B 訂閱秒數，含連線爬升，須為大於 25 的整數。Writer 等 15 秒後開始，持續 `B_DURATION-25` 秒。 |
+| `B_RATE` | `100` | 熱門活動每秒的目標座位變更數，須為正值。以 `B_RATE=300 loadtest/run.sh b` 執行高負載版本。 |
+| `SSE_PROCESSES` | 至多 8 個可見 CPU | SSE worker 程序數，對應 `--processes`。須為正整數，實際程序數最多等於訂閱數。 |
+| `SSE_RAMP` | `10` | 首次 SSE 連線均勻啟動的秒數，對應 `--ramp-seconds`。設為 `0` 可同時啟動。 |
 | `K6_CPUS` | 未設定 | 限制 k6 容器可用 CPU，例如 `K6_CPUS=2`。 |
 | `REBUILD` | `0` | 設為 `1` 時執行 Compose 建置及啟動，即使既有入口已通過探測。 |
 | `OUT` | `loadtest/out/<時間戳>` | 使用 `loadtest/` 下的相對路徑，容器會映射到 `/lt/`。每輪用新的輸出目錄。 |
@@ -43,9 +45,11 @@ A 以 `POST /api/v1/auth/login` 登入主辦人。買家及其 session 直接寫
 | `a/event.json`、`a/metrics_1s.csv`、`a/business_1s.csv` | 活動 ID、秒級監控及業務指標。 |
 | `b/seed.txt`、`b/writer.txt`、`b/sse-client.txt` | B 的 fixture、座位變更速率、SSE 建連與套用延遲、錯誤率及最終 audit。 |
 
+B 每個 worker 先取得一份共用起始快照，再透過各自的 session 錯開建立 SSE，並為每條連線維護獨立的座位狀態。報告的 `processes` 為實際 worker 數，`peak_active` 為全體同一時間的峰值。`connect_ms` 從發出 SSE 請求計至回應標頭，扣除排程等待時間。各 worker 的延遲分桶先合併，再算 p50／p95／p99；毫秒解析度依延遲區間為 1、10 或 100 ms，超過 ±300 秒的值歸入邊界桶。
+
 結果存於 `OUT` 與旁邊的 `<OUT>.tar.gz`，預設為 `loadtest/out/<時間戳>/` 與 `loadtest/out/<時間戳>.tar.gz`。下列檢查失敗時，腳本仍會收集結果、移除 `sessions.json` 並打包，將 `FAILED` 與失敗項目寫入終端及 `run.log`，最後以非零狀態結束。若在打包前中斷，輸出目錄可能仍有憑證檔。
 
 - **A**　k6 的 `checks` 必須全數成功且 `unexpected_errors` 為零，SQL 須執行成功且回傳零違規列。k6 將 HTTP 409 標記為預期回應，未識別的 409 仍計入 `unexpected_errors`。`503 server-busy` 仍計入 `http_req_failed`，可用 `server_busy` 判讀服務過載。90 秒後仍可能有有效鎖位，可待鎖位到期、金流待辦與 relay 排空後重驗。見 [排空後重驗指令](../LOADTEST.md#6-一致性檢查)。
-- **B**　寫入程式須成功結束且提交至少一次座位變更，客戶端須至少取得一筆 `delta_apply_samples`。`peak_active` 與 `matching_clients` 都須等於 `target_connections`，且 `outbox_pending` 與 `archive_mismatches` 都為零。SQL 與 SSE 稽核皆在 outbox 保留的序號範圍內比對封存資料，並檢查該範圍是否連續且抵達最新已編序位置。維護程序可清除已編序超過一小時的前段資料。
+- **B**　寫入程式須成功結束且提交至少一次座位變更，客戶端須至少取得一筆 `delta_apply_samples`。每條連線的游標、版面版本與座位狀態及版本都須符合 PostgreSQL 最終快照。`peak_active` 與 `matching_clients` 都須等於 `target_connections`，且 `outbox_pending` 與 `archive_mismatches` 都為零。SQL 與 SSE 稽核皆在 outbox 保留的序號範圍內比對封存資料，並檢查該範圍是否連續且抵達最新已編序位置。維護程序可清除已編序超過一小時的前段資料。
 
 產壓端與受測服務同機，會共享 CPU。每輪會新增活動與測試資料。`docker compose down -v` 會刪除整個 Compose 專案的 volumes，包含 PostgreSQL、Redis、金流及共享檔案。見 `compose.yaml:223`。結果與瓶頸分析見 [LOADTEST.md](../LOADTEST.md)。
