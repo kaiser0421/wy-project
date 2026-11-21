@@ -95,6 +95,33 @@ describe("API requests", () => {
     expect(body.get("file")).toBe(file);
     expect(body.get("mode")).toBe("skip_invalid");
   });
+
+  it("lists Admin orders with encoded filters and an opaque cursor", async () => {
+    const page = {
+      items: [{
+        public_id: "order-1", event_id: 2, event_title: "Concert", buyer_email: "buyer+vip@example.test",
+        status: "pending_payment", quantity: 2, total_twd: 420, created_at: ts, expires_at: null,
+      }],
+      next_cursor: "next-token",
+    };
+    respond(page);
+    await expect(api.adminOrders({}, null, signal)).resolves.toEqual(page);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/admin/orders");
+    await api.adminOrders({
+      event_id: 2, status: "pending_payment", buyer_email: "buyer+vip", created_from: ts,
+      created_to: "2026-11-20T20:00:00+08:00",
+    }, "opaque=+/cursor", signal);
+
+    const [path, init] = fetchMock.mock.calls[1]!;
+    if (typeof path !== "string") throw new Error("Expected a relative request path");
+    const url = new URL(path, location.origin);
+    expect(url.pathname).toBe("/api/v1/admin/orders");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      event_id: "2", status: "pending_payment", buyer_email: "buyer+vip", created_from: ts,
+      created_to: "2026-11-20T20:00:00+08:00", cursor: "opaque=+/cursor",
+    });
+    expect(init).toMatchObject({ method: "GET", cache: "no-store" });
+  });
 });
 
 describe("API errors", () => {

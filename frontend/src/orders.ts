@@ -77,7 +77,8 @@ export async function orderPage(root: HTMLElement, id: string, user: User, signa
   const checkout = el("div");
   const shortId = id.slice(0, 8);
   root.append(heading(order.event_title ?? `Order ${shortId}`, `Order reference ${id}`),
-    el("div", { class: "page-actions" }, link("All orders", "#/orders")),
+    el("div", { class: "page-actions" }, user.role === "admin"
+      ? link("All orders", "#/admin/orders") : link("My orders", "#/orders")),
     el("div", { class: "order-layout" }, panel(el("div", { class: "split" }, el("h2", {}, "Tickets"), status), items),
       panel(el("h2", {}, "Order summary"), totals, timer, el("div", { class: "actions" }, pay, cancel, refresh),
         confirmation, checkout, feedback, updateStatus)));

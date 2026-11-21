@@ -1,4 +1,5 @@
 import { adminPage, usersPage } from "./admin";
+import { adminOrdersPage } from "./admin-orders";
 import { api, ApiError, mockMode, onSessionExpired, type Role, type User } from "./api";
 import { eventPage, eventsPage } from "./events";
 import { label } from "./format";
@@ -27,6 +28,7 @@ const navigation = [
   { href: "#/events", title: "Events", roles: ["admin", "user", "viewer"] },
   { href: "#/orders", title: "My orders", roles: ["admin", "user"] },
   { href: "#/organizer", title: "Organizer", roles: ["admin", "user"] },
+  { href: "#/admin/orders", title: "All orders", roles: ["admin"] },
   { href: "#/admin", title: "Monitoring", roles: ["admin"] },
   { href: "#/admin/users", title: "Users", roles: ["admin"] },
 ];
@@ -238,7 +240,7 @@ function pendingBanner(account: User, hash: string, signal: AbortSignal): HTMLEl
 }
 
 function validRoute(href: string): boolean {
-  return /^#\/(?:events(?:\/[^/]+)?|orders(?:\/[^/]+)?|organizer(?:\/[^/]+)?|admin(?:\/users)?)$/.test(href);
+  return /^#\/(?:events(?:\/[^/]+)?|orders(?:\/[^/]+)?|organizer(?:\/[^/]+)?|admin(?:\/(?:users|orders))?)$/.test(href);
 }
 
 function permitted(path: string, account: User): boolean {
@@ -290,6 +292,7 @@ async function renderRoute(): Promise<void> {
       else if (part === "orders") ordersPage(root, signal);
       else if (part === "organizer") organizerPage(root, user, signal);
       else if (identifier === "users") usersPage(root, user, signal);
+      else if (identifier === "orders") adminOrdersPage(root, user, signal);
       else adminPage(root, signal);
     }
   } catch (error) {

@@ -25,7 +25,7 @@
    | 角色 | 預設帳號 | 預設密碼 | 登入後檢查 |
    | --- | --- | --- | --- |
    | User | `user@example.com` | `User#Dev2026!` | 開啟 **Organizer**，確認可看到 **Create an event**。 |
-   | Admin | `admin@example.com` | `Admin#Dev2026!` | 開啟 **Monitoring**，確認顯示 **Live** 並可進入 **Manage users**。 |
+   | Admin | `admin@example.com` | `Admin#Dev2026!` | 從 **All orders** 管理所有活動的訂單，並可透過 **Monitoring** 與 **Manage users** 監控系統及管理帳號。 |
    | Viewer | `viewer@example.com` | `Viewer#Dev2026!` | 可瀏覽 **Events**、座位圖與活動報表，導覽列沒有 **Organizer** 或 **Monitoring**。 |
 
 5. 開啟 [Swagger UI](http://localhost:8080/api/docs)，確認可瀏覽 API operations。
@@ -53,7 +53,9 @@ Admin 即時監控的「Recent warnings and errors」面板可依服務篩選近
 | 深色主題（跟隨系統設定）。 | 深色主題下的監控圖表。 |
 
 <details>
-<summary>其他畫面：登入、活動列表、主辦管理、我的訂單、使用者管理、Swagger</summary>
+<summary>其他畫面：登入、活動列表、主辦管理、我的訂單、所有訂單、使用者管理、Swagger</summary>
+
+**所有訂單（Admin 專用）**可依活動 ID、狀態、買家電子郵件前綴與建立時間篩選，也可查看訂單明細、取消待付款訂單或申請已付款訂單退款。
 
 | | |
 | --- | --- |

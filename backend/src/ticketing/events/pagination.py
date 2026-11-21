@@ -1,8 +1,6 @@
 """Principal-bound cursors over materialized event membership."""
 
 import hashlib
-import hmac
-from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import UTC
 from typing import Annotated, Literal
 from uuid import UUID
@@ -10,6 +8,7 @@ from uuid import UUID
 import asyncpg
 from pydantic import AwareDatetime, BaseModel, Field
 
+from ticketing.core.cursors import open_cursor, seal_cursor
 from ticketing.core.errors import ProblemError
 from ticketing.events.access import EventActor
 from ticketing.events.models import EventOut, EventPage, EventStatus, UnavailableEvent, ZoneInput
@@ -90,36 +89,17 @@ def _invalid() -> ProblemError:
     return ProblemError(409, "cursor-invalidated", "Start again without a cursor")
 
 
-def _signature(secret: str, body: bytes, actor: EventActor, digest: bytes) -> bytes:
-    return hmac.digest(
-        secret.encode(),
-        b"event-list-v2\0"
-        + body
-        + actor.user_id.to_bytes(8, "big")
-        + actor.role.encode()
-        + b"\0"
-        + digest,
-        "sha256",
-    )
+def _scope(actor: EventActor, digest: bytes) -> bytes:
+    return actor.user_id.to_bytes(8, "big") + actor.role.encode() + b"\0" + digest
 
 
 def encode_cursor(snapshot: UUID, ord_: int, actor: EventActor, digest: bytes, secret: str) -> str:
     body = snapshot.bytes + ord_.to_bytes(4, "big")
-    return urlsafe_b64encode(body + _signature(secret, body, actor, digest)).decode().rstrip("=")
+    return seal_cursor(body, secret, b"event-list-v2\0", _scope(actor, digest))
 
 
 def decode_cursor(token: str, actor: EventActor, digest: bytes, secret: str) -> tuple[UUID, int]:
-    try:
-        value = urlsafe_b64decode(token + "=" * (-len(token) % 4))
-    except (ValueError, UnicodeError) as exc:
-        raise _invalid() from exc
-    body = value[:20]
-    if (
-        len(value) != 52
-        or urlsafe_b64encode(value).decode().rstrip("=") != token
-        or not hmac.compare_digest(value[20:], _signature(secret, body, actor, digest))
-    ):
-        raise _invalid()
+    body = open_cursor(token, 20, secret, b"event-list-v2\0", _scope(actor, digest))
     return UUID(bytes=body[:16]), int.from_bytes(body[16:], "big")
 
 

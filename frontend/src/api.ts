@@ -63,6 +63,26 @@ export interface Order {
   total_twd: number;
   expires_at: string | null;
 }
+export const orderStatuses = ["pending_payment", "paid", "expired", "cancelled", "refund_pending", "refunded"] as const;
+export type OrderStatus = typeof orderStatuses[number];
+export interface AdminOrder {
+  public_id: string;
+  event_id: Id;
+  event_title: string;
+  buyer_email: string;
+  status: OrderStatus;
+  quantity: number;
+  total_twd: number | null;
+  created_at: string;
+  expires_at: string | null;
+}
+export interface AdminOrderFilters {
+  event_id?: Id;
+  status?: string;
+  buyer_email?: string;
+  created_from?: string;
+  created_to?: string;
+}
 export interface Checkout { checkout_url?: string; expires_at?: string }
 export type ImportMode = "all_or_nothing" | "skip_invalid";
 export interface ImportJob {
@@ -376,6 +396,8 @@ export const api = {
     const { items, next_cursor } = page(await json<Collection<OrderPayload>>("/orders" + query({ cursor }), { signal }));
     return { items: items.map(orderFrom), next_cursor };
   },
+  adminOrders: (filters: AdminOrderFilters, cursor: string | null, signal: AbortSignal) =>
+    json<Page<AdminOrder>>("/admin/orders" + query({ ...filters, cursor }), { signal }),
   order: async (id: string, signal: AbortSignal) => orderFrom(await json<OrderPayload>(orderPath(id), { signal })),
   cancel: (id: string, key: string, signal: AbortSignal) =>
     request(orderPath(id) + "/cancel", { method: "POST", signal, headers: { "Idempotency-Key": key } }),
