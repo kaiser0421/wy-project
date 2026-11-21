@@ -1,6 +1,6 @@
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { api, ApiError, type AdminUser, type Alert, type HttpMetrics, type Metric, type Role, type User } from "./api";
+import { api, ApiError, logServices, type AdminUser, type Alert, type HttpMetrics, type Metric, type Role, type User } from "./api";
 import { date, label } from "./format";
 import { incomplete, metricSecond, MetricWindow, WINDOW_SECONDS, type Sample } from "./metrics";
 import { onThemeChange } from "./theme";
@@ -314,24 +314,105 @@ function alertsPanel(signal: AbortSignal): HTMLElement {
   return panel(el("h2", {}, "Firing alerts"), feedback, list);
 }
 
-function tracePanel(signal: AbortSignal): HTMLElement {
+function recentLogsPanel(signal: AbortSignal, openTrace: (id: string) => void): HTMLElement {
+  const title = "Recent warnings and errors";
+  const filter = select([["", "All services"], ...logServices.map(service => [service, service] as const)]);
+  const status = notice();
+  const { body, container } = table(["Time", "Service", "Level", "Event", "Request ID"]);
+  container.setAttribute("aria-label", title);
+  container.classList.add("recent-logs-scroll");
+  container.hidden = true;
+  let pending: AbortController | undefined;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let snapshot = "";
+
+  async function refresh(): Promise<void> {
+    if (pending || signal.aborted || document.visibilityState !== "visible") return;
+    const request = new AbortController();
+    pending = request;
+    try {
+      const service = logServices.find(name => name === filter.value);
+      const entries = await api.recentLogs({ service }, request.signal);
+      if (request.signal.aborted) return;
+      const next = JSON.stringify(entries);
+      if (snapshot !== next) {
+        snapshot = next;
+        const active = document.activeElement;
+        const focusedId = active instanceof HTMLButtonElement && body.contains(active) ? active.textContent : null;
+        body.replaceChildren(...entries.map(entry => {
+          const id = entry.request_id;
+          let action: HTMLButtonElement | undefined;
+          if (id) {
+            action = button(id, "quiet log-request");
+            action.onclick = () => openTrace(id);
+          }
+          return el("tr", {}, el("td", {}, el("time", { datetime: entry.ts }, date(entry.ts))),
+            el("td", {}, entry.service), el("td", {}, el("span", { class: `log-level ${entry.level}` }, entry.level)),
+            el("td", {}, entry.event ?? "—"), el("td", {}, action ?? "—"));
+        }));
+        if (focusedId) {
+          const nextAction = [...body.querySelectorAll("button")].find(action => action.textContent === focusedId);
+          (nextAction ?? filter).focus();
+        }
+      }
+      container.hidden = entries.length === 0;
+      const message = entries.length ? "" : "No recent warnings or errors.";
+      if (status.textContent !== message || status.classList.contains("problem")) show(status, message);
+    } catch (error) {
+      if (!request.signal.aborted) show(status, errorText(error), true);
+    } finally {
+      if (pending === request) pending = undefined;
+    }
+  }
+
+  function stop(): void {
+    clearInterval(timer);
+    pending?.abort();
+    pending = undefined;
+  }
+
+  function restart(): void {
+    stop();
+    if (signal.aborted || document.visibilityState !== "visible") return;
+    void refresh();
+    timer = setInterval(() => void refresh(), 5_000);
+  }
+
+  filter.onchange = () => {
+    snapshot = "";
+    body.replaceChildren();
+    container.hidden = true;
+    show(status, "Loading logs…");
+    restart();
+  };
+  document.addEventListener("visibilitychange", restart, { signal });
+  signal.addEventListener("abort", stop, { once: true });
+  show(status, "Loading logs…");
+  restart();
+  return panel(el("h2", {}, title), el("div", { class: "filters" }, field("Service", filter)), status, container);
+}
+
+function tracePanel(signal: AbortSignal) {
   const lookup = button("Find request", "primary", "submit");
-  const form = el("form", { class: "filters" },
-    field("Request ID", el("input", { name: "request_id", required: true, maxLength: 160,
-      placeholder: "Paste a request ID" })), lookup);
+  const input = el("input", { name: "request_id", required: true, maxLength: 160, placeholder: "Paste a request ID" });
+  const form = el("form", { class: "filters" }, field("Request ID", input), lookup);
   const status = notice();
   const { body, container } = table(["Time", "Service", "Level", "Event / request", "Status", "Details"]);
   container.hidden = true;
+  let pending: AbortController | undefined;
   form.onsubmit = async event => {
     event.preventDefault();
     const id = formValue(form, "request_id");
     if (!id) return;
+    pending?.abort();
+    pending = new AbortController();
+    const lookupSignal = AbortSignal.any([signal, pending.signal]);
     lookup.disabled = true;
     show(status, "Looking up request…");
     container.hidden = true;
     try {
-      const entries = await api.trace(id, signal);
-      if (signal.aborted) return;
+      const entries = await api.trace(id, lookupSignal);
+      if (lookupSignal.aborted) return;
       body.replaceChildren(...entries.map(entry => {
         const details = el("details", {}, el("summary", {}, "View"), el("pre", {}, JSON.stringify(entry.attrs, null, 2)));
         return el("tr", {}, el("td", {}, entry.ts ? date(entry.ts) : "—"),
@@ -343,18 +424,29 @@ function tracePanel(signal: AbortSignal): HTMLElement {
       container.hidden = !entries.length;
       show(status, !entries.length ? "No log entries found for this request." : `${entries.length} entries`);
     } catch (error) {
-      show(status, errorText(error), true);
+      if (!lookupSignal.aborted) show(status, errorText(error), true);
     } finally {
-      lookup.disabled = false;
+      if (!lookupSignal.aborted) {
+        lookup.disabled = false;
+        pending = undefined;
+      }
     }
   };
-  return panel(el("h2", {}, "Request trace"), form, status, container);
+  return {
+    box: panel(el("h2", {}, "Request trace"), form, status, container),
+    open: (id: string): void => {
+      input.value = id;
+      input.focus();
+      form.requestSubmit();
+    },
+  };
 }
 
 export function adminPage(root: HTMLElement, signal: AbortSignal): void {
+  const trace = tracePanel(signal);
   root.append(heading("Monitoring", "Watch traffic, ticketing activity and operational alerts."),
     el("div", { class: "page-actions" }, link("Manage users", "#/admin/users")), metricsPanel(signal),
-    el("div", { class: "admin-lower" }, alertsPanel(signal), tracePanel(signal)));
+    el("div", { class: "admin-lower" }, alertsPanel(signal), trace.box, recentLogsPanel(signal, trace.open)));
 }
 
 export function usersPage(root: HTMLElement, principal: User, signal: AbortSignal): void {

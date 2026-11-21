@@ -344,6 +344,13 @@ progress { width: 100%; accent-color: var(--primary); }
 .metric-strip dt { color: var(--muted); font-size: .875rem; }
 .metric-strip dd { font-size: 1.3rem; font-weight: 700; margin: 0; }
 .table-scroll { max-width: 100%; overflow: auto; }
+.admin-lower > :has(.recent-logs-scroll) { grid-column: 1 / -1; }
+.recent-logs-scroll { max-height: 24rem; }
+.recent-logs-scroll th { position: sticky; top: 0; }
+.log-level { display: inline-block; border: 1px solid var(--danger-border); border-radius: .45rem;
+  padding: .1rem .45rem; background: var(--danger-background); color: var(--danger); }
+.log-level.warning { border-color: var(--warning-border); background: var(--warning-background); color: var(--warning-ink); }
+.log-request { padding: .1rem .35rem; min-height: 1.5rem; text-decoration: underline; overflow-wrap: anywhere; }
 table { width: 100%; border-collapse: collapse; text-align: left; font-size: .875rem; }
 th, td { padding: .55rem .65rem; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); background: var(--table-heading); }

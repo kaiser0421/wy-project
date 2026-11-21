@@ -181,6 +181,8 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 
 日誌以 COPY 分批寫 `access_logs` / `service_logs`。監控與業務計數分別批次寫 `metrics_1s`、`business_1s`。每日 UTC 分區保留門檻為日誌 7 天、監控與業務 14 天、`seat_events` 90 天。監控 SSE 每秒讀最近完成的秒，Edge 缺該秒時可帶上最近的 Edge 資料，判讀時看各列 `ts`。見 `backend/src/ticketing/telemetry/logs.py:316`、`backend/src/ticketing/telemetry/app_metrics.py:241`、`backend/migrations/versions/0005_monitoring.py:95`、`backend/src/ticketing/api/routes/monitoring.py:389`。
 
+Admin 的近期日誌面板在頁面可見時每 5 秒更新，預設讀取最近 15 分鐘內最新的 50 筆警告、錯誤及嚴重錯誤。`GET /api/v1/admin/logs/recent` 最多查詢 60 分鐘與 200 筆，依 `ts` 裁剪每日分區並使用部分索引，回傳的附加欄位限於例外類別與 HTTP 狀態碼。
+
 管理後台可用 `request_id` 查詢 nginx 存取日誌及共用目錄中的服務日誌。API 呼叫 paymock 時透過 `X-Request-ID` 傳遞識別碼，paymock 以該識別碼記錄請求處理。回呼傳送沿用觸發付款狀態變更的請求識別碼，並記錄傳送結果。付款頁日誌使用路由樣板遮蔽 checkout token。見 `backend/src/ticketing/core/http.py`、`paymock/src/paymock/main.py`、`paymock/src/paymock/delivery.py`。
 
 - **HTTP 全 200 仍受害**　例如模擬金流 confirm 回 200，買家輪詢訂單也一直回 200，但畫面長時間停在待付款。當 capture 經回呼或 poll 寫入，`PAYMENT_CALLBACK_LAG` 可在最近 60 秒記錄中指出超過 30 秒的落差。完全沒有觀測到 capture 時，這條規則沒有資料，需查看金流與訂單、`HOLD_EXPIRY_BACKLOG` 等旁證。另一種情境是瀏覽與監控正常，大量買家在有空位的活動反覆遇到 `hold_soldout`。 `PURCHASE_FUNNEL_COLLAPSE` 依活動看過去 30 秒，成功率低於 20%、conflict 與 limit 合計少於失敗的一半且仍有可用席，條件持續 30 秒才發出告警。單一小區的問題可能被同活動其他區的流量掩蓋。見 `backend/src/ticketing/telemetry/alerts.py:32`、`backend/src/ticketing/telemetry/alerts.py:45`、`backend/src/ticketing/telemetry/alerts.py:58`、`backend/src/ticketing/telemetry/alerts.py:205`、`backend/src/ticketing/booking/create.py:248`。

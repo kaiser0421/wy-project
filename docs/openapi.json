@@ -6174,6 +6174,231 @@
         ]
       }
     },
+    "/api/v1/admin/logs/recent": {
+      "get": {
+        "tags": [
+          "monitoring"
+        ],
+        "summary": "List recent service warnings and errors",
+        "description": "Admins can read warning, error, and critical entries in a rolling window of up to one hour, newest first. Filter by service or exact severity. Only bounded diagnostic attributes are returned.",
+        "operationId": "recent_logs_api_v1_admin_logs_recent_get",
+        "parameters": [
+          {
+            "name": "service",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "api",
+                    "worker",
+                    "relay",
+                    "collector",
+                    "paymock",
+                    "seed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Service to include.",
+              "title": "Service"
+            },
+            "description": "Service to include."
+          },
+          {
+            "name": "level",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "warning",
+                    "error",
+                    "critical"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact severity to include.",
+              "title": "Level"
+            },
+            "description": "Exact severity to include."
+          },
+          {
+            "name": "since_minutes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 60,
+              "minimum": 1,
+              "description": "Window in minutes.",
+              "default": 15,
+              "title": "Since Minutes"
+            },
+            "description": "Window in minutes."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Maximum entries.",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Maximum entries."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecentLogs"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "unauthenticated": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/unauthenticated",
+                      "title": "Unauthenticated",
+                      "status": 401,
+                      "code": "unauthenticated",
+                      "retryable": false
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "forbidden",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "forbidden": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/forbidden",
+                      "title": "Forbidden",
+                      "status": 403,
+                      "code": "forbidden",
+                      "retryable": false
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation-failed",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "validation-failed": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/validation-failed",
+                      "title": "Validation failed",
+                      "status": 422,
+                      "code": "validation-failed",
+                      "retryable": false
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "server-busy",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "server-busy": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/server-busy",
+                      "title": "Server busy",
+                      "status": 503,
+                      "code": "server-busy",
+                      "retryable": true
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal-error",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "internal-error": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/internal-error",
+                      "title": "Internal error",
+                      "status": 500,
+                      "code": "internal-error",
+                      "retryable": false
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-allowed-roles": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/requests/{request_id}/logs": {
       "get": {
         "tags": [
@@ -8547,6 +8772,121 @@
           "checks"
         ],
         "title": "ReadyResult"
+      },
+      "RecentLog": {
+        "properties": {
+          "ts": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Ts",
+            "description": "Service wall-clock timestamp.",
+            "examples": [
+              "2026-11-20T12:00:00Z"
+            ]
+          },
+          "service": {
+            "type": "string",
+            "title": "Service",
+            "description": "Service name.",
+            "examples": [
+              "worker"
+            ]
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "warning",
+              "error",
+              "critical"
+            ],
+            "title": "Level",
+            "description": "Logging severity.",
+            "examples": [
+              "warning"
+            ]
+          },
+          "event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event",
+            "description": "Structured event name.",
+            "examples": [
+              "request.db_overload"
+            ]
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id",
+            "description": "Request correlation identifier.",
+            "examples": [
+              "657f152f5d414b80b54903dde00693a8"
+            ]
+          },
+          "attrs": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Attrs",
+            "description": "Bounded diagnostic metadata: exception class and HTTP status when present.",
+            "examples": [
+              {
+                "error_type": "TimeoutError",
+                "status": 503
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "ts",
+          "service",
+          "level",
+          "event",
+          "request_id",
+          "attrs"
+        ],
+        "title": "RecentLog"
+      },
+      "RecentLogs": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecentLog"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "Service log entries, newest first.",
+            "examples": [
+              []
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "RecentLogs"
       },
       "Registration": {
         "properties": {

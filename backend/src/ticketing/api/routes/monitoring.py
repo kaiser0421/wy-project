@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 import asyncpg
@@ -30,12 +30,15 @@ router = SecureRouter(prefix="/api/v1/admin", tags=["monitoring"])
 ADMIN = Roles("admin")
 Source = Literal["edge", "app"]
 AlertState = Literal["pending", "firing", "resolved"]
+LogService = Literal["api", "worker", "relay", "collector", "paymock", "seed"]
+LogLevel = Literal["warning", "error", "critical"]
 EXAMPLE_TS = "2026-11-20T12:00:00Z"
 EXAMPLE_ID = "657f152f5d414b80b54903dde00693a8"
 TRACE_LIMIT = 1000
 LINK_LIMIT = 100
 REQUEST_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
 _REQUEST_ID = re.compile(REQUEST_ID_PATTERN)
+_ERROR_TYPE = re.compile(r"[A-Za-z_][A-Za-z_0-9]{0,79}")
 
 
 def _problem_responses(*, missing: bool = False, write: bool = False) -> dict[int, dict[str, Any]]:
@@ -233,6 +236,26 @@ class RequestLogs(BaseModel):
     )
 
 
+class RecentLog(BaseModel):
+    ts: datetime = Field(description="Service wall-clock timestamp.", examples=[EXAMPLE_TS])
+    service: str = Field(description="Service name.", examples=["worker"])
+    level: LogLevel = Field(description="Logging severity.", examples=["warning"])
+    event: str | None = Field(
+        description="Structured event name.", examples=["request.db_overload"]
+    )
+    request_id: str | None = Field(
+        description="Request correlation identifier.", examples=[EXAMPLE_ID]
+    )
+    attrs: dict[str, str | int] = Field(
+        description="Bounded diagnostic metadata: exception class and HTTP status when present.",
+        examples=[{"error_type": "TimeoutError", "status": 503}],
+    )
+
+
+class RecentLogs(BaseModel):
+    items: list[RecentLog] = Field(description="Service log entries, newest first.", examples=[[]])
+
+
 _METRICS_HISTORY = """
 SELECT ts, source, scope, req_total, err_4xx, err_5xx, status_classes,
        p50_ms, p95_ms, p99_ms, conns_active, conns_sse, clock_skew_ms, completeness,
@@ -268,6 +291,13 @@ _STREAM_ALERTS = """
 SELECT * FROM alert_events
 WHERE state <> 'resolved' OR updated_at >= clock_timestamp() - interval '5 minutes'
 ORDER BY (state = 'resolved'), id DESC LIMIT 250
+"""
+_RECENT_LOGS = """
+SELECT ts, service, level, event, request_id, attrs
+FROM service_logs
+WHERE ts >= $1 AND ts < $2 AND level IN ('warning', 'error', 'critical')
+  AND ($3::text IS NULL OR service = $3) AND ($4::text IS NULL OR level = $4)
+ORDER BY ts DESC LIMIT $5
 """
 _ACCESS_LOG = """
 SELECT *, extract(epoch FROM ingested_at - ts)::double precision * 1000 AS ingest_lag_ms
@@ -531,6 +561,51 @@ async def ack_alert(
         if row is None:
             raise ProblemError(404, "not-found", "Not found", "Alert occurrence not found.")
     return Alert.model_validate(dict(row))
+
+
+def _recent_log(row: asyncpg.Record) -> RecentLog:
+    # The trace receives producer-redacted attrs. Keep only bounded structured metadata here:
+    # raw paths, free-form details, and nested payloads can contain credentials or user input.
+    raw = orjson.loads(row["attrs"]) if row["attrs"] else None
+    attrs: dict[str, str | int] = {}
+    if isinstance(raw, dict):
+        error_type = raw.get("error_type")
+        if isinstance(error_type, str) and _ERROR_TYPE.fullmatch(error_type):
+            attrs["error_type"] = error_type
+        status = raw.get("status")
+        if type(status) is int and 100 <= status <= 599:
+            attrs["status"] = status
+    return RecentLog.model_validate({**dict(row), "attrs": attrs})
+
+
+@router.get(
+    "/logs/recent",
+    policy=ADMIN,
+    response_model=RecentLogs,
+    summary="List recent service warnings and errors",
+    description=(
+        "Admins can read warning, error, and critical entries in a rolling window of up to one "
+        "hour, newest first. Filter by service or exact severity. Only bounded diagnostic "
+        "attributes are returned."
+    ),
+    responses=_problem_responses(),
+)
+async def recent_logs(
+    request: Request,
+    response: Response,
+    service: Annotated[LogService | None, Query(description="Service to include.")] = None,
+    level: Annotated[LogLevel | None, Query(description="Exact severity to include.")] = None,
+    since_minutes: Annotated[int, Query(ge=1, le=60, description="Window in minutes.")] = 15,
+    limit: Annotated[int, Query(ge=1, le=200, description="Maximum entries.")] = 50,
+) -> RecentLogs:
+    now = datetime.now(UTC)
+    state = request.app.state
+    async with acquire(state.db, state.settings.db_pool_acquire_timeout_s) as conn:
+        rows = await conn.fetch(
+            _RECENT_LOGS, now - timedelta(minutes=since_minutes), now, service, level, limit
+        )
+    response.headers["Cache-Control"] = "private, no-store"
+    return RecentLogs(items=[_recent_log(row) for row in rows])
 
 
 def _service_log(row: asyncpg.Record) -> ServiceLog:

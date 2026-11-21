@@ -117,6 +117,18 @@ export interface TraceEntry {
   req_ms?: number;
   attrs?: Record<string, unknown>;
 }
+export const logServices = ["api", "worker", "relay", "collector", "paymock", "seed"] as const;
+type LogService = typeof logServices[number];
+type LogLevel = "warning" | "error" | "critical";
+export interface RecentLog {
+  ts: string;
+  service: string;
+  level: LogLevel;
+  event: string | null;
+  request_id: string | null;
+  attrs: Record<string, string | number>;
+}
+interface RecentLogFilters { service?: LogService; level?: LogLevel; since_minutes?: number; limit?: number }
 type OrderPayload = Omit<Order, "id"> & ({ id: string } | { public_id: string });
 type ImportPayload = ImportJob & { progress_percent?: number };
 type MetricReading = HttpMetrics & {
@@ -392,6 +404,8 @@ export const api = {
   alertsStream,
   ack: (id: Id, signal: AbortSignal) =>
     request(`/admin/alerts/${encodeURIComponent(id)}/ack`, { method: "POST", signal }),
+  recentLogs: async (filters: RecentLogFilters, signal: AbortSignal) =>
+    (await json<{ items: RecentLog[] }>("/admin/logs/recent" + query({ ...filters }), { signal })).items,
   trace: async (id: string, signal: AbortSignal) => {
     const data = await json<Collection<TraceEntry> | { entries: TraceEntry[] } | RequestLogs>(
       `/admin/requests/${encodeURIComponent(id)}/logs`, { signal },

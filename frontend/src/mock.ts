@@ -1,4 +1,4 @@
-import type { Alert, EventInfo, ImportJob, Metric, Order, Role, Seat, SeatChange, Session, Zone } from "./api";
+import type { Alert, EventInfo, ImportJob, Metric, Order, RecentLog, Role, Seat, SeatChange, Session, Zone } from "./api";
 
 const now = Date.now();
 const iso = (time: number) => new Date(time).toISOString();
@@ -27,6 +27,8 @@ const jobs = new Map<string, { data: ImportJob; started: number }>();
 const revisions = new Map<string | number, number>();
 const alerts: Alert[] = [{ id: 1, rule_id: "EDGE_P99", scope: "All traffic", state: "firing", ts: iso(now),
   value: 168, threshold: 150 }];
+const recentLogs: RecentLog[] = [{ ts: iso(now - 30_000), service: "api", level: "warning",
+  event: "request.db_overload", request_id: "demo-request-1", attrs: { error_type: "TimeoutError" } }];
 let seq = 0;
 const replay: { from: number; to: number; changes: SeatChange[] }[] = [];
 
@@ -271,6 +273,14 @@ export function mock(resource: string, init: RequestInit): Response {
     alerts[0]!.ack_at = iso(Date.now());
     return json(alerts[0]);
   }
+  if (path === "/admin/logs/recent") {
+    if (session.user.role !== "admin") return problem(403, "forbidden", "Admin access is required.");
+    const { service, level, since_minutes, limit } = Object.fromEntries(url.searchParams);
+    const cutoff = Date.now() - Number(since_minutes ?? 15) * 60_000;
+    return list(recentLogs.filter(entry => (!service || entry.service === service) && (!level || entry.level === level)
+      && Date.parse(entry.ts) >= cutoff).slice(0, Number(limit ?? 50)));
+  }
+  if (path === "/admin/requests/demo-request-1/logs") return json({ entries: recentLogs });
   if (path.startsWith("/admin/requests/")) return json({ entries: [
     { ts: iso(Date.now()), service: "edge", method: "GET", path: "/api/v1/events", status: 200, req_ms: 18 },
     { ts: iso(Date.now()), service: "api", level: "info", event: "request_finished" },
