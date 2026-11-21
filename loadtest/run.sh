@@ -167,29 +167,39 @@ scenario_b() {
   tail -10 "$OUT/b/writer.txt" | tee -a "$OUT/run.log"
 }
 
+# Run a command with a deadline when coreutils `timeout` is available (Linux/WSL).
+with_deadline() { if command -v timeout >/dev/null; then timeout "$@"; else shift; "$@"; fi; }
+
 service_logs() {
-  # Container logs since the run started, so failures can be diagnosed from the archive:
-  # <svc>-problems.log holds warnings/errors (capped), <svc>.log the log itself. Logs are
-  # structured and mask secrets.
-  mkdir -p "$OUT/logs"
-  local svc
-  for svc in api worker relay collector paymock nginx postgres redis; do
-    docker compose logs --no-color --no-log-prefix --since "$RUN_STARTED" "$svc" 2>&1 \
-      | grep -E '"level":"(warning|error|critical)"|Traceback|ERROR|FATAL|PANIC|\[(error|crit|alert|emerg)\]' \
-      | tail -n 5000 > "$OUT/logs/$svc-problems.log" || true
-    # The backend services log events, not every request (per-request data is in the nginx
-    # access log with request_id), so their full logs are small; the others keep the tail.
-    local keep=300
+  # Best effort: container logs since the run started, so failures can be diagnosed from the
+  # archive. <svc>-problems.log holds warnings/errors, <svc>.log the log itself, each capped.
+  # PostgreSQL is excluded: its log can echo bind values (checkout URLs) and bootstrap SQL.
+  mkdir -p "$OUT/logs" || return 0
+  local svc keep
+  for svc in api worker relay collector paymock nginx redis; do
+    # Backend services log events, not every request (per-request data is in the nginx access
+    # log with request_id), so their logs are small enough to keep whole.
+    keep=300
     case $svc in api|worker|relay|collector) keep=20000 ;; esac
-    docker compose logs --no-color --since "$RUN_STARTED" --tail "$keep" "$svc" \
-      > "$OUT/logs/$svc.log" 2>&1 || true
+    with_deadline 60 docker compose logs --no-color --since "$RUN_STARTED" --tail "$keep" "$svc" 2>&1 \
+      | head -c 20000000 > "$OUT/logs/$svc.log" || true
+    grep -E '"level":"(warning|error|critical)"|Traceback|ERROR|FATAL|PANIC|\[(error|crit|alert|emerg)\]' \
+      "$OUT/logs/$svc.log" | tail -n 5000 > "$OUT/logs/$svc-problems.log" || true
   done
-  log "Service logs: $(cat "$OUT"/logs/*-problems.log | wc -l | tr -d ' ') warning/error lines"
+  log "Service logs: $(cat "$OUT"/logs/*-problems.log 2>/dev/null | wc -l | tr -d ' ') warning/error lines"
+}
+
+# Checkout URLs carry a capability token; mask it in every text file of the archive.
+redact_archive() {
+  find "$OUT" -type f \( -name '*.log' -o -name '*.txt' -o -name '*.json' -o -name '*.csv' \) \
+    -exec sed -i.bak -E 's#(/pay/)[A-Za-z0-9._~%-]+#\1[redacted]#g' {} + 2>/dev/null || true
+  find "$OUT" -name '*.bak' -delete 2>/dev/null || true
 }
 
 bundle() {
-  service_logs
   find "$OUT" -name 'sessions.json' -delete          # live credentials never leave the machine
+  service_logs
+  redact_archive
   tar -czf "$OUT.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
   log "Results archive: $OUT.tar.gz"
 }
