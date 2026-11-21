@@ -21,6 +21,10 @@ from ticketing.payments.provider import Provider, ProviderUnavailable
 
 log = get_logger(__name__)
 _BATCH_SIZE = 50
+# Every open attempt is re-polled about every 15 s, so polling needs the larger budget: a
+# Scenario A run leaves a few hundred checkouts open. 200 polls at 6 concurrent rows fit well
+# within the phase timeout even at ~300 ms per provider call.
+_POLL_BATCH_SIZE = 200
 # Less than the 30-second durable lease so a stalled phase cannot outlive its claim.
 _PHASE_TIMEOUT_S = 12.0
 
@@ -43,7 +47,7 @@ async def _due_attempts(ctx: ServiceContext) -> list[asyncpg.Record]:
                )
                UPDATE payment_attempts p SET last_polled_at=app_now() FROM due
                WHERE p.id=due.id RETURNING p.*""",
-            _BATCH_SIZE,
+            _POLL_BATCH_SIZE,
         )
     return rows
 
