@@ -80,7 +80,7 @@ def _csv_rows(path: Path) -> Iterator[Row]:
             raise InvalidLayout("invalid_csv", line) from exc
 
 
-# A seat item is ~100 bytes; anything far larger is rejected as a row error without decoding.
+# A seat item is ~100 bytes; a file containing a far larger item is rejected without decoding it.
 MAX_JSON_ITEM_BYTES = 4096
 
 
@@ -121,12 +121,12 @@ def _json_rows(data: mmap) -> Iterator[Row]:
         end, depth = _item_end(data, start)
         if end == start or end == len(data):
             raise InvalidLayout("invalid_json", line, index)
-        if end - start > MAX_JSON_ITEM_BYTES:
+        if len(data[start:end].rstrip(b" \t\r\n")) > MAX_JSON_ITEM_BYTES:
             # Never decode an oversized item: a single huge value inside the 20 MiB upload limit
-            # could expand to gigabytes of Python objects and take down the shared worker.
-            yield _row(line, index, [], "item_too_large")
-        else:
-            yield from _decode_item(data, start, end, depth, line, index)
+            # could expand to gigabytes of Python objects. No seat item is this large, so the
+            # file is rejected as a whole (never partially applied with skip_invalid).
+            raise InvalidLayout("invalid_json", line, index)
+        yield from _decode_item(data, start, end, depth, line, index)
         if data[end] == ord("]"):
             if _whitespace(data, end + 1) != len(data):
                 raise InvalidLayout("invalid_json", line, index)
