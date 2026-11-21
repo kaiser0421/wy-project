@@ -28,6 +28,7 @@ export const options = {
   thresholds: {
     unexpected_errors: ['rate==0'],
     checks: ['rate==1'],
+    replay_progress: ['rate>0'],
   },
 };
 
@@ -35,6 +36,9 @@ const outcomes = new Counter('scenario_a_outcomes');
 const holds = new Counter('successful_holds');
 const conflicts = new Counter('business_conflicts');
 const busy = new Counter('server_busy');
+const replayUnverified = new Counter('replay_unverified');
+const replayVerified = new Counter('replay_verified');
+const replayProgress = new Rate('replay_progress');
 const modes = new Counter('scenario_a_iterations');
 const unexpected = new Rate('unexpected_errors');
 const expectedStatuses = http.expectedStatuses(200, 201, 409);
@@ -83,7 +87,8 @@ function request(method, path, name, session, body, idempotencyKey) {
   const serverBusy = response.status === 503 && code === 'server-busy';
   const business = (response.status === 409 && businessConflicts.has(code)) || serverBusy;
   const success = response.status === 200 || response.status === 201;
-  const result = success ? 'ok' : business ? 'business_conflict' : 'unexpected';
+  const gatewayRetry = name === 'replay_order' && (response.status === 502 || response.status === 504);
+  const result = success ? 'ok' : business ? 'business_conflict' : gatewayRetry ? 'transient_gateway' : 'unexpected';
   outcomes.add(1, { name, result, code });
   // Record zeroes as well so the summary includes each counter on every run.
   holds.add(Number(name === 'create_order' && response.status === 201));
@@ -110,6 +115,48 @@ function buy(session, body, idem) {
     result = request('POST', path, 'create_order', session, body, idem);
   }
   return result;
+}
+
+function retryAfterSeconds(header) {
+  if (header === undefined) return 1;
+  if (/^\d+$/.test(header)) return Number(header);
+  const retryAt = Date.parse(header);
+  return Number.isFinite(retryAt) ? Math.max(0, (retryAt - Date.now()) / 1000) : 1;
+}
+
+function replay(session, body, idem, manifest) {
+  // No samples when no replay is selected. Record the attempt before any request or sleep.
+  replayProgress.add(false);
+  const path = `/api/v1/events/${eventId}/orders`;
+  let result = request('POST', path, 'replay_order', session, body, idem);
+  for (let attempt = 1; attempt < 10; attempt += 1) {
+    const status = result.response.status;
+    if (status !== 502 && status !== 504 && !(status === 503 && result.code === 'server-busy')) break;
+    sleep(retryAfterSeconds(result.response.headers['Retry-After']));
+    result = request('POST', path, 'replay_order', session, body, idem);
+  }
+  const response = result.response;
+  manifest.resend_status = response.status;
+  manifest.resend_public_id = null;
+  const unanswered = [502, 503, 504].includes(response.status);
+  replayUnverified.add(Number(unanswered));
+  let verified = false;
+  if (!unanswered) {
+    if (response.status === 201) {
+      try {
+        manifest.resend_public_id = response.json('public_id');
+      } catch (_) {
+        // Leave the ID null so a malformed response fails the check.
+      }
+    }
+    verified = check(response, {
+      'booking replay returns the original order': (r) =>
+        r.status === 201 && r.headers['Idempotent-Replayed'] === 'true' &&
+        typeof manifest.resend_public_id === 'string' && manifest.resend_public_id === manifest.public_id,
+    });
+  }
+  replayVerified.add(Number(verified));
+  if (verified) replayProgress.add(true);
 }
 
 function pay(session, path) {
@@ -164,20 +211,7 @@ export default function () {
     resend_attempted: Math.random() < 0.02,
   };
   if (manifest.resend_attempted) {
-    // A replay is a retry: honour 503 server-busy / Retry-After like a real client, then verify.
-    let resend = request('POST', `/api/v1/events/${eventId}/orders`, 'replay_order', session, body, idem);
-    for (let tries = 1; tries < 5 && resend.response.status === 503; tries += 1) {
-      sleep(Number(resend.response.headers['Retry-After'] || 1));
-      resend = request('POST', `/api/v1/events/${eventId}/orders`, 'replay_order', session, body, idem);
-    }
-    manifest.resend_status = resend.response.status;
-    manifest.resend_public_id = resend.response.status === 201 ? resend.response.json('public_id') : null;
-    // Still shedding after the retries: nothing to compare (the outcome stays in the manifest).
-    if (resend.response.status !== 503) check(resend.response, {
-      'booking replay returns the original order': (r) =>
-        r.status === 201 && r.headers['Idempotent-Replayed'] === 'true' &&
-        manifest.resend_public_id === publicId,
-    });
+    replay(session, body, idem, manifest);
   }
   console.log(JSON.stringify(manifest));
   think();
