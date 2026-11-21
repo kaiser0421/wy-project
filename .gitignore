@@ -24,3 +24,6 @@ dist/
 data/
 *.log
 !docs/ai-defects.log
+
+# Load-test artifacts (sessions contain live tokens)
+loadtest/out/
