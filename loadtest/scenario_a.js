@@ -55,7 +55,7 @@ function key(operation) {
 }
 
 function request(method, path, name, session, body, idempotencyKey) {
-  const headers = { Origin: origin, 'X-Load-Run': runId };
+  const headers = { Origin: origin, 'X-Load-Run-ID': runId };
   if (session) {
     headers.Cookie = session.cookie;
     headers['X-CSRF-Token'] = session.csrf_token;

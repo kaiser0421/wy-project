@@ -39,8 +39,10 @@ def csrf_token(secret_key: str, session_id: uuid.UUID, version: int = 1) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://127.0.0.1:8080")
+    parser.add_argument("--origin", default="http://localhost:8080",
+                        help="Origin header (must be in ALLOWED_ORIGINS)")
     parser.add_argument("--database-url",
-                        default=os.environ.get("LOADTEST_DATABASE_URL",
+                        default=os.environ.get("LOADTEST_DATABASE_URL") or os.environ.get("DATABASE_URL",
                                                "postgresql://ticketing:ticketing@127.0.0.1:5432/ticketing"))
     parser.add_argument("--secret-key", default=os.environ.get("SECRET_KEY", "dev-insecure-change-me"))
     parser.add_argument("--buyers", type=int, default=3000)
@@ -50,7 +52,7 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
 
     base = args.base
-    organizer = httpx.Client(base_url=base, timeout=120, headers={"Origin": base})
+    organizer = httpx.Client(base_url=base, timeout=120, headers={"Origin": args.origin})
     login = organizer.post("/api/v1/auth/login",
                            json={"email": "user@example.com", "password": "User#Dev2026!"})
     login.raise_for_status()
