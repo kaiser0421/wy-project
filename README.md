@@ -140,7 +140,7 @@ uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.json --zone A
 `make test` 一行指令在 Docker 內執行單元、整合、併發、前端單元與預設的瀏覽器測試（後端約 230 個、前端約 60 個）；經 nginx 的端到端流程與 nginx 版 Playwright 需先啟動整套服務，另行執行（CI 會在 smoke 後執行端到端流程）。逐條驗收條件與對應測試見 [驗收條件](docs/ACCEPTANCE.md)。
 
 
-正式量測與擴容對照見 [壓測結論摘要](LOADTEST.md#結論摘要)。
+成功與失敗的標準、各輪逐條結果與擴容對照見 [壓測結論與結果總表](LOADTEST.md#一結論)。
 
 | 指令 | 驗證範圍 |
 | --- | --- |

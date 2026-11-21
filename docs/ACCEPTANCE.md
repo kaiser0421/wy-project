@@ -20,7 +20,7 @@
 | 1.5 | `.env.example` 列出所有可調參數並附說明 | 閱讀 [.env.example](../.env.example) | ✅ |
 | 1.6 | 提供 CSV 與 JSON 座位匯入範例 | [samples/](../samples/)；README 列出各範例在兩種匯入模式下的預期結果 | ✅ |
 | 1.7 | 系統架構圖呈現元件與資料流 | [docs/architecture.md](architecture.md)、[architecture.html](architecture.html) | ✅ |
-| 1.8 | LOADTEST 含機器規格、情境、RPS、p50/p95/p99、錯誤率、瓶頸分析、壓測後一致性 | [LOADTEST.md](../LOADTEST.md) 開頭的結論摘要與各節；原始輸出在 `docs/evidence/loadtest-*` | ✅ |
+| 1.8 | LOADTEST 含機器規格、情境、RPS、p50/p95/p99、錯誤率、瓶頸分析、壓測後一致性 | [LOADTEST.md](../LOADTEST.md) 開頭的結論、成功標準與結果總表，以及各節；原始輸出在 `docs/evidence/loadtest-*` | ✅ |
 | 1.9 | AI_USAGE 說明使用的 AI 工具與用途，並列出至少 3 處 AI 程式碼錯誤、如何發現與修正 | [AI_USAGE.md](../AI_USAGE.md)（6 例） | ✅ |
 | 1.10 | DESIGN 回答 Q1–Q6，並列出假設、替代方案、取捨、驗證方式 | [DESIGN.md](../DESIGN.md) | ✅ |
 
