@@ -1,0 +1,1 @@
+{"event_id": 6, "seats": 10000, "sessions": 2000}
