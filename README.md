@@ -39,7 +39,7 @@
 
 ## 畫面
 
-以預設帳號在 Compose 堆疊上操作的實際畫面（1440×900）。
+以預設帳號在 Compose 堆疊上操作的實際畫面（瀏覽器視窗 1440×900，長頁面為整頁截圖）。
 
 | 即時座位圖（User） | Admin 即時監控 |
 | --- | --- |
@@ -64,7 +64,7 @@
 | 前端 | TypeScript SPA、Vite、Canvas 座位圖、uPlot 監控圖表。見 `frontend/package.json:6`、`frontend/src/seat-canvas.ts:8`。 |
 | 應用 | Python 3.12、FastAPI、Uvicorn、Pydantic、asyncpg、Alembic、Argon2id、XlsxWriter。見 `backend/pyproject.toml:5`。 |
 | 資料 | PostgreSQL 16 保存座位、訂單、session 與監控資料。Redis 7 提供限流、Pub/Sub、遙測 stream 與背景心跳。模擬金流以 SQLite 保存付款與回呼佇列。見 `compose.yaml:45`、`compose.yaml:68`、`paymock/src/paymock/main.py:86`。 |
-| 部署與驗證 | Docker Compose、nginx 1.28、pytest、Vitest、Playwright、k6 與 Python SSE client。見 `infra/nginx/Dockerfile:12`、`compose.test.yaml:41`、[壓測工具包](loadtest/README.md)。 |
+| 部署與驗證 | Docker Compose、nginx 1.30、pytest、Vitest、Playwright、k6 與 Python SSE client。見 `infra/nginx/Dockerfile:12`、`compose.test.yaml:41`、[壓測工具包](loadtest/README.md)。 |
 
 ## 本機開發
 
@@ -74,6 +74,8 @@
 uv sync --python 3.12
 make lint typecheck
 ```
+
+`make lint` 另以 Docker 執行 ShellCheck（首次會下載映像檔）。
 
 用 Node.js 22 開發 UI。以下方式將 Compose nginx 移到 host port 8081，讓 Vite 以預設允許的瀏覽器 Origin `http://localhost:8080` 開發，並將 `/api`、`/pay/` 代理回 Compose。見 `frontend/vite.config.ts:3`、`backend/src/ticketing/core/settings.py:45`、`backend/src/ticketing/api/security.py:80`。
 

@@ -233,6 +233,37 @@ async def _clean_completed_keys(ctx: ServiceContext) -> None:
         )
 
 
+async def _unclaim_attempts(ctx: ServiceContext, rows: list[asyncpg.Record]) -> None:
+    """Make claimed-but-unpolled attempts due again (NULL falls back to updated_at)."""
+    async with transaction(ctx.db, ctx.settings) as conn:
+        await conn.execute(
+            "UPDATE payment_attempts SET last_polled_at=NULL WHERE id = ANY($1::uuid[])",
+            [row["id"] for row in rows],
+        )
+
+
+async def _unclaim_refunds(ctx: ServiceContext, owner: str, rows: list[asyncpg.Record]) -> None:
+    async with transaction(ctx.db, ctx.settings) as conn:
+        await conn.execute(
+            """UPDATE refunds SET lease_owner=NULL, lease_until=NULL
+               WHERE id = ANY($1::uuid[]) AND lease_owner=$2""",
+            [row["id"] for row in rows],
+            owner,
+        )
+
+
+async def _unclaim_cancellations(
+    ctx: ServiceContext, owner: str, rows: list[asyncpg.Record]
+) -> None:
+    async with transaction(ctx.db, ctx.settings) as conn:
+        await conn.execute(
+            """UPDATE provider_cancellations SET lease_owner=NULL, lease_until=NULL
+               WHERE attempt_id = ANY($1::uuid[]) AND lease_owner=$2""",
+            [row["attempt_id"] for row in rows],
+            owner,
+        )
+
+
 async def _run_phase(
     ctx: ServiceContext,
     name: str,
@@ -240,6 +271,7 @@ async def _run_phase(
     process: Callable[[asyncpg.Record], Awaitable[None]],
     budget: int,
     width: int,
+    unclaim: Callable[[list[asyncpg.Record]], Awaitable[None]],
 ) -> None:
     """Claim small batches as they can start, until the queue, the budget or the time runs out.
 
@@ -249,11 +281,14 @@ async def _run_phase(
     if ctx.stop.is_set():
         return
 
+    unfinished: list[asyncpg.Record] = []
+
     async def run_row(row: asyncpg.Record) -> None:
         try:
             await process(row)
         except Exception as exc:
             log.warning("payment.reconcile_row_failed", phase=name, error=type(exc).__name__)
+        unfinished.remove(row)
 
     handled = 0
     try:
@@ -263,11 +298,22 @@ async def _run_phase(
                 if not rows:
                     return
                 handled += len(rows)
+                unfinished.extend(rows)
                 async with asyncio.TaskGroup() as work:
                     for row in rows:
                         work.create_task(run_row(row))
     except Exception as exc:
         log.warning("payment.reconcile_phase_failed", phase=name, error=type(exc).__name__)
+    finally:
+        # A timeout or shutdown interrupted these rows: hand them back so they are due again
+        # instead of looking freshly polled or staying leased for 30 s.
+        if unfinished:
+            try:
+                await asyncio.shield(unclaim(list(unfinished)))
+            except Exception as exc:
+                log.warning(
+                    "payment.reconcile_unclaim_failed", phase=name, error=type(exc).__name__
+                )
 
 
 async def tick(ctx: ServiceContext) -> None:
@@ -285,6 +331,7 @@ async def tick(ctx: ServiceContext) -> None:
                     lambda row: _recover_attempt(ctx, provider, row),
                     _POLL_BATCH_SIZE,
                     _POLL_WIDTH,
+                    lambda rows: _unclaim_attempts(ctx, rows),
                 )
             )
             phases.create_task(
@@ -295,6 +342,7 @@ async def tick(ctx: ServiceContext) -> None:
                     lambda row: _cancel_provider(ctx, provider, owner, row),
                     _BATCH_SIZE,
                     _QUEUE_WIDTH,
+                    lambda rows: _unclaim_cancellations(ctx, owner, rows),
                 )
             )
             phases.create_task(
@@ -305,6 +353,7 @@ async def tick(ctx: ServiceContext) -> None:
                     lambda row: _refund(ctx, provider, owner, row),
                     _BATCH_SIZE,
                     _QUEUE_WIDTH,
+                    lambda rows: _unclaim_refunds(ctx, owner, rows),
                 )
             )
     if not ctx.stop.is_set():

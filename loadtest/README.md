@@ -31,7 +31,7 @@ loadtest/run.sh all
 | `OUT` | `loadtest/out/<時間戳>` | 使用 `loadtest/` 下的相對路徑，容器會映射到 `/lt/`。每輪用新的輸出目錄。 |
 | `HTTP_PORT` | `8080` | Runner 的 host probe 直接讀 shell。自訂 host port 可執行 `HTTP_PORT=8081 loadtest/run.sh smoke`。容器內仍走 `http://nginx:8080`。 |
 
-每個 API 副本的 PostgreSQL pool 最多使用 `DB_POOL_MAX` 條連線，預設為 10。API 的連線預算為實際副本數 × `DB_POOL_MAX`，例如 3 個副本最多 30 條。PostgreSQL 容量也需容納 worker、relay、collector、產壓工具及其他使用者的連線。調整 `DB_POOL_MAX` 後可用 `REBUILD=1` 套用 Compose 設定。見 `compose.yaml`。
+每個 API 副本的 PostgreSQL pool 最多使用 `DB_POOL_MAX` 條連線，預設為 10。每個副本另有座位串流 session 重驗使用的連線（最多 2 條），API 的連線預算為實際副本數 × (`DB_POOL_MAX` + 2)，例如 3 個副本最多 36 條。PostgreSQL 容量也需容納 worker、relay、collector、產壓工具及其他使用者的連線。調整 `DB_POOL_MAX` 後可用 `REBUILD=1` 套用 Compose 設定。見 `compose.yaml`。
 
 參數實作見 `loadtest/run.sh`、`loadtest/prepare_a.py:72`、`loadtest/scenario_b_writer.py`、`backend/src/ticketing/core/settings.py:90`。
 

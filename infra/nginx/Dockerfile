@@ -7,9 +7,9 @@ RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
-# 1.28 is the maintained stable branch (upstream `resolve` needs >= 1.27.3); apk upgrade
-# pulls distro security fixes published after the base image was built.
-FROM nginx:1.28-alpine
+# 1.30 is the current stable branch (upstream `resolve` needs >= 1.27.3); apk upgrade pulls
+# distro security fixes published after the base image was built.
+FROM nginx:1.30-alpine
 RUN apk upgrade --no-cache
 COPY infra/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY --from=web /web/dist /usr/share/nginx/html

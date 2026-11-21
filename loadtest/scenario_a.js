@@ -29,6 +29,8 @@ export const options = {
     unexpected_errors: ['rate==0'],
     checks: ['rate==1'],
     replay_progress: ['rate>0'],
+    // Every sampled replay must be answered and verified; exhausting the retries fails the run.
+    replay_unverified: ['count==0'],
   },
 };
 
