@@ -24,6 +24,7 @@ export const options = {
     rush: { executor: 'constant-vus', vus, duration: __ENV.DURATION || '60s' },
   },
   systemTags: ['status', 'method', 'name', 'scenario', 'expected_response'],
+  summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
   thresholds: {
     unexpected_errors: ['rate==0'],
     checks: ['rate==1'],
@@ -31,9 +32,12 @@ export const options = {
 };
 
 const outcomes = new Counter('scenario_a_outcomes');
+const holds = new Counter('successful_holds');
+const conflicts = new Counter('business_conflicts');
+const busy = new Counter('server_busy');
 const modes = new Counter('scenario_a_iterations');
 const unexpected = new Rate('unexpected_errors');
-const writeStatuses = http.expectedStatuses(200, 201, 409);
+const expectedStatuses = http.expectedStatuses(200, 201, 409);
 const businessConflicts = new Set([
   'seat-contended', 'seat-unavailable', 'allocation-contended', 'insufficient-seats',
   'purchase-limit-exceeded', 'event-not-on-sale', 'idempotency-in-progress',
@@ -65,21 +69,26 @@ function request(method, path, name, session, body, idempotencyKey) {
   const response = http.request(method, base + path, body || null, {
     headers,
     tags: { name },
-    responseCallback: writeStatuses,
+    responseCallback: expectedStatuses,
     timeout: '5s',
   });
   let code = '';
-  if (response.status === 409) {
+  if (response.status === 409 || response.status === 503) {
     try {
       code = response.json('code');
     } catch (_) {
       code = '';
     }
   }
-  const business = response.status === 409 && businessConflicts.has(code);
+  const serverBusy = response.status === 503 && code === 'server-busy';
+  const business = (response.status === 409 && businessConflicts.has(code)) || serverBusy;
   const success = response.status === 200 || response.status === 201;
   const result = success ? 'ok' : business ? 'business_conflict' : 'unexpected';
   outcomes.add(1, { name, result, code });
+  // Record zeroes as well so the summary includes each counter on every run.
+  holds.add(Number(name === 'create_order' && response.status === 201));
+  conflicts.add(Number(business));
+  busy.add(Number(serverBusy));
   unexpected.add(result === 'unexpected', { name });
   return { response, code };
 }
