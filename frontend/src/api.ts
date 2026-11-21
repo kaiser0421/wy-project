@@ -178,7 +178,7 @@ async function request(path: string, options: Options = {}): Promise<Response> {
     method, headers, signal: requestSignal, credentials: "same-origin", cache: "no-store",
     body: multipart ? body : body === undefined ? undefined : JSON.stringify(body),
   };
-  const response = mockMode ? await (await import("./mock")).mock(path, init) : await fetch(prefix + path, init);
+  const response = mockMode ? (await import("./mock")).mock(path, init) : await fetch(prefix + path, init);
   signal?.throwIfAborted();
   if (response.ok) return response;
   let problem: Problem = {};
