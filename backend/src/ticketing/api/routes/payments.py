@@ -10,11 +10,17 @@ from ticketing.api.routes.orders import CUSTOMER, Caller, OrderId
 from ticketing.api.security import Public, SecureRouter
 from ticketing.booking.api_docs import READ_ERRORS, REPLAY_HEADER, WRITE_ERRORS, problem_responses
 from ticketing.booking.database import connection, transaction
-from ticketing.booking.idempotency import RETRY_DESCRIPTION, Claim, IdempotencyKey, request_hash
+from ticketing.booking.idempotency import Claim, IdempotencyKey, request_hash
 from ticketing.core.errors import ProblemError
 from ticketing.payments.attempts import create_payment, list_attempts
 from ticketing.payments.callbacks import apply_event, verify_signature
-from ticketing.payments.models import CallbackResult, Checkout, PaymentAttempt, PaymentEvent
+from ticketing.payments.models import (
+    CallbackResult,
+    Checkout,
+    PaidPayment,
+    PaymentAttempt,
+    PaymentEvent,
+)
 from ticketing.payments.provider import Provider
 
 router = SecureRouter(prefix="/api/v1", tags=["payments"])
@@ -26,11 +32,15 @@ _MAX_CALLBACK_BYTES = 8192
     policy=CUSTOMER,
     status_code=201,
     response_model=Checkout,
-    summary="Start checkout for an order",
+    summary="Start or resume checkout for an order",
     description=(
         "The owner may request checkout while the hold is active. Concurrent keys use the same "
-        "chargeable attempt. The provider can be retried with that attempt's stable ID. "
-        "A definitive decline is saved and can be retried with a new key. " + RETRY_DESCRIPTION
+        "chargeable attempt. Retry the same request with the same Idempotency-Key within 24 "
+        "hours to resume that attempt and receive its current result with Idempotent-Replayed: "
+        "true. An active checkout returns 201, a paid order returns 200, and a terminal attempt "
+        "or closed order returns 402. A declined payment can be retried with a new key while "
+        "the hold remains active. Advisory-lock contention returns 409 with Retry-After: 1. "
+        "A committed key reused for another request returns 422."
     ),
     responses={
         **problem_responses(
@@ -38,8 +48,10 @@ _MAX_CALLBACK_BYTES = 8192
                 **WRITE_ERRORS,
                 402: ("payment-declined",),
                 409: ("idempotency-in-progress", "order-not-payable"),
+                422: (*WRITE_ERRORS[422], "payment-event-mismatch"),
             }
         ),
+        200: {"model": PaidPayment, "description": "Order is paid.", "headers": REPLAY_HEADER},
         201: {"headers": REPLAY_HEADER},
     },
 )

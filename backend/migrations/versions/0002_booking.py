@@ -1,4 +1,4 @@
-"""Index payment recovery work and retain the originating callback request ID.
+"""Index payment recovery work and retain callback tracking fields.
 
 Revision ID: 0002_booking
 Revises: 0001_baseline
@@ -16,6 +16,7 @@ depends_on = None
 def upgrade() -> None:
     op.execute("""
         ALTER TABLE payment_callbacks ADD COLUMN request_id text;
+        ALTER TABLE payment_attempts ADD COLUMN provider_captured_at timestamptz;
         CREATE INDEX idempotency_payment_pending ON idempotency_keys(resource_ref)
           WHERE operation='create-payment' AND status='in_progress';
         CREATE INDEX payment_attempts_poll_due
@@ -30,5 +31,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("""
         DROP INDEX provider_cancellations_due, payment_attempts_poll_due, idempotency_payment_pending;
+        ALTER TABLE payment_attempts DROP COLUMN provider_captured_at;
         ALTER TABLE payment_callbacks DROP COLUMN request_id;
     """)

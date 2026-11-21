@@ -7,6 +7,7 @@ import hmac
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -16,7 +17,7 @@ from ticketing.booking.idempotency import Result, finish_payment
 from ticketing.booking.orders import lock_order_seats, release_order
 from ticketing.core.context import current_request_id
 from ticketing.core.errors import ProblemError, server_busy
-from ticketing.payments.models import PaymentEvent
+from ticketing.payments.models import PaidPayment, PaymentEvent
 from ticketing.realtime.outbox import emit_seat_changes
 from ticketing.telemetry import business
 
@@ -51,6 +52,11 @@ def payment_declined(public_id: UUID) -> Result:
             request_id=current_request_id(),
         ),
     )
+
+
+def payment_paid(public_id: UUID, paid_at: datetime) -> Result:
+    model = PaidPayment(order_id=public_id, status="paid", paid_at=paid_at)
+    return Result(200, model.model_dump(mode="json"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,14 +99,14 @@ async def _accept_capture(
     conn: asyncpg.Connection,
     order: asyncpg.Record,
     attempt: asyncpg.Record,
-) -> None:
+) -> datetime:
     order_id = order["id"]
-    row = await conn.fetchval(
+    paid_at: datetime | None = await conn.fetchval(
         """UPDATE orders SET status='paid', paid_at=app_now(), version=version+1
-           WHERE id=$1 AND status='pending_payment' RETURNING id""",
+           WHERE id=$1 AND status='pending_payment' RETURNING paid_at""",
         order_id,
     )
-    if row is None:
+    if paid_at is None:
         raise RuntimeError("Locked order could not be paid.")
     await lock_order_seats(conn, order_id)
     seats = await conn.fetch(
@@ -132,6 +138,7 @@ async def _accept_capture(
         order["event_id"],
         [(s["seat_idx"], "sold", s["version"]) for s in seats],
     )
+    return paid_at
 
 
 async def _capture(
@@ -169,8 +176,16 @@ async def _capture(
         # Identical attempts already serialize on this order. A cross-order ID collision is invalid.
         raise inconsistent_event()
 
+    # Preserve the provider's first capture timestamp even when the charge needs a refund.
+    await conn.execute(
+        """UPDATE payment_attempts SET provider_captured_at=$2
+           WHERE id=$1 AND provider_captured_at IS NULL""",
+        attempt["id"],
+        event.captured_at,
+    )
     if accepted:
-        await _accept_capture(conn, order, attempt)
+        paid_at = await _accept_capture(conn, order, attempt)
+        await finish_payment(conn, attempt["id"], payment_paid(order["public_id"], paid_at))
         return AppliedEvent(disposition, order["event_id"], "pay_ok")
     if pending:
         released = await release_order(conn, order["id"], "pending_payment", "expired")

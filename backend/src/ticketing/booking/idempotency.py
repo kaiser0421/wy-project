@@ -77,34 +77,37 @@ class Claim:
         value = hashlib.sha256(orjson.dumps(["idempotency", self.user_id, self.key])).digest()
         return int.from_bytes(value[:8], byteorder="big", signed=True)
 
-    async def check(self, conn: asyncpg.Connection) -> Result | None:
+    async def _locked_row(self, conn: asyncpg.Connection) -> asyncpg.Record | None:
         if not await conn.fetchval(
             "SELECT pg_try_advisory_xact_lock($1::bigint)",
             self.lock_id,
         ):
             raise in_progress()
         row = await conn.fetchrow(
-            """SELECT request_hash, status, response_status, response_body, response_headers
+            """SELECT request_hash, status, resource_ref, response_status, response_body,
+                      response_headers
                FROM idempotency_keys WHERE user_id=$1 AND key=$2""",
             self.user_id,
             self.key,
         )
+        if row is not None and row["request_hash"] != self.digest:
+            raise ProblemError(422, "idempotency-key-reused", "Idempotency key already used")
+        return row
+
+    async def check(self, conn: asyncpg.Connection) -> Result | None:
+        row = await self._locked_row(conn)
         if row is None:
             return None
         if row["status"] == "in_progress":
             raise in_progress()
-        if row["request_hash"] != self.digest:
-            raise ProblemError(422, "idempotency-key-reused", "Idempotency key already used")
         return _stored_result(row, replayed=True)
 
-    async def completed_result(self, conn: asyncpg.Connection) -> Result | None:
-        row = await conn.fetchrow(
-            """SELECT response_status,response_body,response_headers FROM idempotency_keys
-               WHERE user_id=$1 AND key=$2 AND status='completed'""",
-            self.user_id,
-            self.key,
-        )
-        return _stored_result(row, replayed=False) if row is not None else None
+    async def payment_ref(self, conn: asyncpg.Connection) -> UUID | None:
+        """A committed claim names the attempt even while the provider outcome is unknown."""
+        row = await self._locked_row(conn)
+        if row is None:
+            return None
+        return UUID(row["resource_ref"])
 
     async def save(
         self,

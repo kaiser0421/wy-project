@@ -1,9 +1,10 @@
 import asyncio
 import time
 from contextlib import contextmanager
-from datetime import timedelta
+from dataclasses import replace
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import orjson
@@ -14,6 +15,7 @@ from paymock.delivery import signature
 from paymock.main import create_app
 from tests.booking.support import assert_invariants, book, cancel, inventory, race, ticket_users
 from ticketing.booking import sweeper
+from ticketing.booking.idempotency import Claim
 from ticketing.core.service import ServiceContext
 from ticketing.payments import reconciler
 from ticketing.payments.provider import Provider, ProviderUnavailable
@@ -118,6 +120,7 @@ async def test_payment_keys_and_callback_replay(db, settings, world):
     assert [result.status_code for result in pending] == [201, 201]
     assert pending[0].json() == pending[1].json()
     checkout = pending[0].json()
+    assert await db.fetchval("SELECT provider_captured_at FROM payment_attempts") is None
     replay = await start(buyer, public, "payment-0")
     assert replay.headers["Idempotent-Replayed"] == "true"
     assert replay.json() == checkout
@@ -145,11 +148,38 @@ async def test_payment_keys_and_callback_replay(db, settings, world):
     assert await db.fetchval("SELECT count(*) FROM payment_captures") == 1
     assert await db.fetchval("SELECT count(*) FROM refunds") == 0
     assert await db.fetchval("SELECT count(*) FROM outbox") == 2
+    paid_at = await db.fetchval("SELECT paid_at FROM orders")
+    schema = (await buyer.client.get("/api/openapi.json")).json()
+    payment_responses = schema["paths"]["/api/v1/orders/{order_id}/payments"]["post"]["responses"]
+    assert payment_responses["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/PaidPayment"
+    }
+    for key in ("payment-0", "payment-1"):
+        paid = await start(buyer, public, key)
+        assert paid.status_code == 200
+        assert paid.headers["Idempotent-Replayed"] == "true"
+        assert paid.json().keys() == {"order_id", "status", "paid_at"}
+        assert paid.json()["order_id"] == public
+        assert paid.json()["status"] == "paid"
+        assert datetime.fromisoformat(paid.json()["paid_at"]) == paid_at
+    assert await db.fetchval(
+        "SELECT provider_captured_at FROM payment_attempts"
+    ) == datetime.fromisoformat(capture["captured_at"])
 
-    extra = {**capture, "event_id": str(uuid4()), "capture_id": str(uuid4())}
+    extra = {
+        **capture,
+        "event_id": str(uuid4()),
+        "capture_id": str(uuid4()),
+        "captured_at": (
+            datetime.fromisoformat(capture["captured_at"]) + timedelta(seconds=1)
+        ).isoformat(),
+    }
     tracked = await callback(buyer, settings, extra)
     assert tracked.json() == {"disposition": "refund_required"}
     assert await db.fetchval("SELECT reason FROM refunds") == "duplicate_capture"
+    assert await db.fetchval(
+        "SELECT provider_captured_at FROM payment_attempts"
+    ) == datetime.fromisoformat(capture["captured_at"])
     await assert_invariants(db)
 
 
@@ -220,23 +250,36 @@ async def test_lost_create_response_and_paid_cancel(db, settings, test_clock, wo
         patch.setattr(Provider, "create", lose_response)
         assert (await start(buyer, public, "payment-key")).status_code == 503
     attempt = await db.fetchval("SELECT id FROM payment_attempts")
-    still_creating = await start(buyer, public, "payment-key")
-    assert still_creating.status_code == 409
-    assert still_creating.headers["Retry-After"] == "1"
+    assert (
+        await db.fetchval("SELECT status FROM idempotency_keys WHERE key='payment-key'")
+        == "in_progress"
+    )
+    lock = Claim(buyer.user_id, "payment-key", "create-payment", b"").lock_id
+    async with db.transaction():
+        await db.fetchval("SELECT pg_advisory_xact_lock($1)", lock)
+        contended = await start(buyer, uuid4(), "payment-key")
+        assert contended.status_code == 409
+        assert contended.json()["code"] == "idempotency-in-progress"
+        assert contended.headers["Retry-After"] == "1"
+    changed = await start(buyer, uuid4(), "payment-key")
+    assert changed.status_code == 422
+    assert changed.json()["code"] == "idempotency-key-reused"
     provider_intent = (await provider.get(f"/v1/intents/{attempt}")).json()
 
-    await test_clock.advance(timedelta(seconds=16))
-    await race([reconciler.tick(ctx), reconciler.tick(ctx)])
     checkout = await start(buyer, public, "payment-key")
     assert checkout.status_code == 201
     assert checkout.headers["Idempotent-Replayed"] == "true"
     assert checkout.json()["attempt_id"] == str(attempt)
     assert checkout.json()["checkout_url"].endswith(provider_intent["intent_id"])
+    assert await db.fetchval("SELECT count(*) FROM payment_attempts") == 1
 
-    await confirm(provider, checkout.json())
+    capture = await confirm(provider, checkout.json())
     await test_clock.advance(timedelta(seconds=16))
     await reconciler.tick(ctx)
     assert await db.fetchval("SELECT status FROM orders") == "paid"
+    assert await db.fetchval(
+        "SELECT provider_captured_at FROM payment_attempts"
+    ) == datetime.fromisoformat(capture["captured_at"])
     requested = await cancel(buyer, public, "refund-key")
     assert requested.status_code == 200
     assert requested.json()["refund_status"] == "pending"
@@ -281,7 +324,7 @@ async def test_definitive_decline_and_provider_cancellation(db, asgi_app, world)
     replay = await start(buyer, public, "payment-key")
     assert replay.status_code == 402
     assert replay.headers["Idempotent-Replayed"] == "true"
-    assert replay.json() == failure.json()
+    assert replay.json()["code"] == failure.json()["code"]
     next_attempt = await start(buyer, public, "another-key")
     assert next_attempt.status_code == 201
     assert (await cancel(buyer, public, "cancel-key")).status_code == 200
@@ -290,4 +333,225 @@ async def test_definitive_decline_and_provider_cancellation(db, asgi_app, world)
     assert (await provider.get(f"/v1/intents/{attempt}")).json()["status"] == "cancelled"
     assert await db.fetchval("SELECT status FROM provider_cancellations") == "succeeded"
     assert await db.fetchval("SELECT count(*) FROM refunds") == 0
+    await assert_invariants(db)
+
+
+async def test_declined_checkout_replays_bound_attempt(db, settings, world):
+    buyer, _, _, _ = world
+    _, _, order = await place(db, buyer)
+    public = order["public_id"]
+    checkout = await start(buyer, public, "payment-key")
+    assert checkout.status_code == 201
+    declined = {
+        "event_id": str(uuid4()),
+        "event_type": "declined",
+        "merchant_payment_id": checkout.json()["attempt_id"],
+        "amount_twd": order["total_twd"],
+        "currency": "TWD",
+    }
+    assert (await callback(buyer, settings, declined)).status_code == 200
+
+    other_checkout = await start(buyer, public, "another-key")
+    assert other_checkout.status_code == 201
+    assert other_checkout.json()["attempt_id"] != checkout.json()["attempt_id"]
+    replay = await start(buyer, public, "payment-key")
+    assert replay.status_code == 402
+    assert replay.headers["Idempotent-Replayed"] == "true"
+    assert replay.json()["code"] == "payment-declined"
+    assert "checkout_url" not in replay.json()
+    assert await db.fetchval("SELECT count(*) FROM payment_attempts") == 2
+    assert (
+        await db.fetchval("SELECT count(*) FROM payment_attempts WHERE status='awaiting_customer'")
+        == 1
+    )
+    await assert_invariants(db)
+
+
+async def test_open_response_after_hold_expires(db, test_clock, world, monkeypatch):
+    buyer, _, _, _ = world
+    await test_clock.advance(timedelta())
+    _, _, order = await place(db, buyer)
+    public = order["public_id"]
+    original_create = Provider.create
+    responses = asyncio.Barrier(3)
+    resume = asyncio.Event()
+
+    async def delay_response(self, *args):
+        intent = await original_create(self, *args)
+        assert intent.status == "open"
+        await responses.wait()
+        await resume.wait()
+        return intent
+
+    monkeypatch.setattr(Provider, "create", delay_response)
+    async with asyncio.timeout(10), asyncio.TaskGroup() as work:
+        requests = [work.create_task(start(buyer, public, f"payment-{n}")) for n in range(2)]
+        await responses.wait()
+        assert await db.fetchval("SELECT status FROM orders") == "pending_payment"
+        await test_clock.set(datetime.fromisoformat(order["expires_at"]))
+        resume.set()
+
+    for request in requests:
+        assert request.result().status_code == 402
+        assert request.result().json()["code"] == "payment-declined"
+    assert await db.fetchval("SELECT status FROM orders") == "expired"
+    assert await db.fetchval("SELECT checkout_url FROM payment_attempts") is None
+    assert (
+        await db.fetchval(
+            "SELECT count(*) FROM idempotency_keys WHERE operation='create-payment' "
+            "AND status='completed' AND response_status=402"
+        )
+        == 2
+    )
+    assert await db.fetchval("SELECT count(*) FROM outbox") == 2
+    assert await db.fetchval("SELECT count(*) FROM provider_cancellations") == 1
+    await assert_invariants(db)
+
+
+async def test_reconciler_polls_when_callback_url_changes(db, test_clock, world, monkeypatch):
+    buyer, _, provider, ctx = world
+    _, _, order = await place(db, buyer)
+    public = order["public_id"]
+    original_create = Provider.create
+
+    async def lose_response(self, *args):
+        await original_create(self, *args)
+        raise ProviderUnavailable
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Provider, "create", lose_response)
+        assert (await start(buyer, public, "payment-key")).status_code == 503
+    attempt_id = await db.fetchval("SELECT id FROM payment_attempts")
+    original = (await provider.get(f"/v1/intents/{attempt_id}")).json()
+    changed_url = "http://api-new/api/v1/payments/callbacks"
+    ctx = replace(
+        ctx, settings=ctx.settings.model_copy(update={"payment_callback_url": changed_url})
+    )
+    conflict = await provider.post(
+        "/v1/intents",
+        json={
+            "merchant_payment_id": str(attempt_id),
+            "amount_twd": original["amount_twd"],
+            "currency": "TWD",
+            "expires_at": original["expires_at"],
+            "callback_url": changed_url,
+        },
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["code"] == "intent-key-reused"
+
+    original_poll = Provider.poll
+    for field, change in (("amount_twd", 1), ("expires_at", timedelta(seconds=1))):
+
+        async def mismatched_intent(self, merchant_id, field=field, change=change):
+            intent = await original_poll(self, merchant_id)
+            return intent.model_copy(update={field: getattr(intent, field) + change})
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Provider, "poll", mismatched_intent)
+            await test_clock.advance(timedelta(seconds=16))
+            await reconciler.tick(ctx)
+        assert await db.fetchval("SELECT status FROM payment_attempts") == "creating"
+        assert await db.fetchval("SELECT status FROM idempotency_keys WHERE key='payment-key'") == (
+            "in_progress"
+        )
+
+    await test_clock.advance(timedelta(seconds=16))
+    await race([reconciler.tick(ctx), reconciler.tick(ctx)])
+    assert await db.fetchval("SELECT status FROM payment_attempts") == "awaiting_customer"
+    assert await db.fetchval("SELECT count(*) FROM payment_attempts") == 1
+    assert (
+        await db.fetchval("SELECT response_status FROM idempotency_keys WHERE key='payment-key'")
+        == 201
+    )
+    recovered = await start(buyer, public, "payment-key")
+    assert recovered.status_code == 201
+    assert recovered.headers["Idempotent-Replayed"] == "true"
+    assert recovered.json()["checkout_url"].endswith(original["intent_id"])
+    await assert_invariants(db)
+
+
+@pytest.mark.parametrize("lock_job", [False, True])
+async def test_cancellation_lock_timeout_does_not_skip_refunds(
+    db, settings, test_clock, world, monkeypatch, lock_job
+):
+    buyer, _, provider, ctx = world
+    now = await test_clock.advance(timedelta())
+    event, seats = await inventory(db, buyer.user_id, 3)
+    order_ids = []
+    checkouts = []
+    for index, seat in enumerate(seats):
+        hold = await book(buyer, event, f"order-key-{index}", seat_ids=[seat])
+        assert hold.status_code == 201
+        public_id = hold.json()["public_id"]
+        checkout = await start(buyer, public_id, f"payment-key-{index}")
+        assert checkout.status_code == 201
+        order_ids.append(public_id)
+        checkouts.append(checkout.json())
+
+    capture = await confirm(provider, checkouts[2])
+    assert (await callback(buyer, settings, capture)).json() == {"disposition": "accepted"}
+    for index, public_id in enumerate(order_ids):
+        assert (await cancel(buyer, public_id, f"cancel-key-{index}")).status_code == 200
+
+    blocked_attempt = UUID(checkouts[0]["attempt_id"])
+    original_cancel = Provider.cancel
+
+    async def cancel_with_lock(self, attempt_id):
+        if lock_job and attempt_id == blocked_attempt:
+            # The worker must have committed its claim before the retry write is blocked.
+            await db.fetchval(
+                "SELECT attempt_id FROM provider_cancellations WHERE attempt_id=$1 FOR UPDATE",
+                attempt_id,
+            )
+        return await original_cancel(self, attempt_id)
+
+    async with db.transaction():
+        await db.fetchval("SELECT id FROM orders WHERE public_id=$1 FOR UPDATE", UUID(order_ids[0]))
+        with monkeypatch.context() as patch:
+            patch.setattr(Provider, "cancel", cancel_with_lock)
+            await reconciler.tick(ctx)
+
+    blocked = await db.fetchrow(
+        "SELECT * FROM provider_cancellations WHERE attempt_id=$1", blocked_attempt
+    )
+    assert blocked["attempts"] == 1
+    if lock_job:
+        assert blocked["status"] == "pending"
+        assert blocked["lease_owner"] is not None
+        assert blocked["lease_until"] == now + timedelta(seconds=30)
+        await test_clock.advance(timedelta(seconds=30))
+    else:
+        assert blocked["status"] == "failed_retryable"
+        assert blocked["lease_owner"] is None
+        assert blocked["lease_until"] is None
+        assert blocked["next_try_at"] == now + timedelta(seconds=2)
+        await test_clock.advance(timedelta(seconds=2))
+
+    assert (
+        await db.fetchval(
+            "SELECT status FROM provider_cancellations WHERE attempt_id=$1",
+            UUID(checkouts[1]["attempt_id"]),
+        )
+        == "succeeded"
+    )
+    assert await db.fetchval("SELECT status FROM refunds") == "succeeded"
+    assert (
+        await db.fetchval("SELECT status FROM orders WHERE public_id=$1", UUID(order_ids[2]))
+        == "refunded"
+    )
+
+    await reconciler.tick(ctx)
+    assert (
+        await db.fetchval(
+            "SELECT status FROM provider_cancellations WHERE attempt_id=$1", blocked_attempt
+        )
+        == "succeeded"
+    )
+    assert (
+        await db.fetchval(
+            "SELECT attempts FROM provider_cancellations WHERE attempt_id=$1", blocked_attempt
+        )
+        == 2
+    )
     await assert_invariants(db)

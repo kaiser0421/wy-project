@@ -22,6 +22,15 @@ class Checkout(BaseModel):
     )
 
 
+class PaidPayment(BaseModel):
+    order_id: UUID = Field(description="Public ID of the paid order.", examples=[_EXAMPLE_ID])
+    status: Literal["paid"] = Field(description="Current order status.", examples=["paid"])
+    paid_at: datetime = Field(
+        description="When the merchant accepted payment in UTC.",
+        examples=["2026-12-01T12:08:01Z"],
+    )
+
+
 class PaymentAttempt(BaseModel):
     attempt_id: UUID = Field(description="Merchant payment attempt ID.", examples=[_EXAMPLE_ID])
     status: AttemptStatus = Field(
