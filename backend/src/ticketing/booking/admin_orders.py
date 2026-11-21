@@ -28,6 +28,7 @@ class AdminOrderQuery(BaseModel):
         Field(
             min_length=1,
             max_length=254,
+            pattern=r"^[^\x00]+$",
             description="Literal, case-insensitive buyer email prefix.",
             examples=["buyer@"],
         ),

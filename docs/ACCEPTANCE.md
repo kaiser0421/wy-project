@@ -43,7 +43,7 @@
 | 3.5 | **User** 只能修改／刪除自己的活動；修改他人活動回 403 | `test_event_access` | ✅ |
 | 3.6 | **User** 只能查看自己的訂單；查看他人訂單回 404（不透露存在） | `test_admin_order_access_and_cancellation_replay` | ✅ |
 | 3.7 | **User** 只能下載自己活動的報表 | `test_report_authorization` | ✅ |
-| 3.8 | **Viewer** 只能瀏覽活動、座位與所有活動的報表；任何寫入回 403 | Viewer 登入：無 Organizer／Monitoring；`test_report_authorization`、角色矩陣測試 | ✅ |
+| 3.8 | **Viewer** 只能瀏覽活動、座位與所有活動的報表；建立／修改活動、匯入、下單、付款等業務寫入一律回 403（登出等自身帳號操作除外） | Viewer 登入：無 Organizer／Monitoring；`test_report_authorization`、角色矩陣測試 | ✅ |
 | 3.9 | 每個 API 端點都宣告權限政策，未宣告者無法註冊 | `test_every_api_route_declares_a_policy`、`test_route_without_policy_is_rejected_at_registration` | ✅ |
 
 ## 四、API 設計

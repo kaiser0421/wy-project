@@ -58,7 +58,7 @@ sequenceDiagram
 
 *圖：指定席購買交易的步驟順序，三層防線都位於同一個交易內，任一層失敗即整筆回滾。*
 
-**答案**　指定席的交易內保護在 PostgreSQL 執行 `FOR NO KEY UPDATE NOWAIT` 時取得（`backend/src/ticketing/booking/create.py:51`），在交易 context 結束時由 COMMIT 或 ROLLBACK 釋放（`backend/src/ticketing/booking/database.py:31`，呼叫端離開交易前最後一行為 `backend/src/ticketing/booking/create.py:245`）。已提交的 active claim 由 partial unique index 持續約束，直到該 item 寫入 `released_at`。
+**答案**　指定席的交易內保護在 PostgreSQL 執行 `FOR NO KEY UPDATE NOWAIT` 時取得（`backend/src/ticketing/booking/create.py:51`），在交易 context 結束時由 COMMIT 或 ROLLBACK 釋放（`backend/src/ticketing/booking/database.py:31`，呼叫端離開交易前最後一行為 `backend/src/ticketing/booking/create.py:248`）。已提交的 active claim 由 partial unique index 持續約束，直到該 item 寫入 `released_at`。
 
 **機制**
 
@@ -326,8 +326,8 @@ flowchart LR
   Dd --> PG
   Cn --> PG
   PG --> Al
-  Al -->|"狀態變化"| Pub --> Adm
-  PG -->|"每秒讀已保存資料"| Adm
+  Al -->|"狀態變化通知"| Pub
+  PG -->|"指標與告警 SSE 每秒讀已保存資料"| Adm
 ```
 
 *圖：Edge 日誌、App 樣本與連線取樣經 collector 入庫，再供 Admin 即時圖表、告警與 request_id 查詢使用。*

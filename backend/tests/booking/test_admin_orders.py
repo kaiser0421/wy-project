@@ -176,3 +176,9 @@ async def test_admin_order_keyset_pagination_with_insertions(db, actors):
     assert seen == expected
     fresh = (await admin.get(ADMIN_ORDERS)).json()
     assert [item["public_id"] for item in fresh["items"]] == [newer, *expected, backdated]
+
+
+async def test_buyer_email_with_nul_is_rejected_as_validation_error(actors) -> None:
+    admin = actors["operator"].client
+    response = await admin.get("/api/v1/admin/orders", params={"buyer_email": "a\x00b"})
+    assert response.status_code == 422

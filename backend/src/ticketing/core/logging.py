@@ -12,10 +12,10 @@ import logging
 import os
 import sys
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from queue import Empty, Queue
-from threading import Thread
+from queue import Empty, Full, Queue
+from threading import Lock, Thread
 from typing import Any
 
 import orjson
@@ -64,9 +64,15 @@ def _dumps(obj: Any, **_: Any) -> str:
 class _TeeWriter:
     """Writes each rendered line to stdout and, optionally, a per-process JSON file."""
 
-    def __init__(self, path: Path | None, *, background: bool) -> None:
+    # Never block the event loop on logging: when the sink cannot keep up, records are dropped
+    # and counted, and the count is written as its own record once the sink recovers.
+    CLOSE_TIMEOUT_S = 5.0
+
+    def __init__(self, path: Path | None, *, background: bool, capacity: int = 8192) -> None:
         self._file = path.open("a", encoding="utf-8") if path else None
-        self._queue: Queue[str | None] | None = Queue(maxsize=8192) if background else None
+        self._queue: Queue[str | None] | None = Queue(maxsize=capacity) if background else None
+        self._dropped = 0
+        self._lock = Lock()
         self._thread = (
             Thread(target=self._drain, name="service-logs", daemon=True) if background else None
         )
@@ -77,8 +83,21 @@ class _TeeWriter:
         if self._queue is None:
             self._write(message + "\n")
         else:
-            # Bound memory and preserve records. A saturated sink applies backpressure.
-            self._queue.put(message)
+            try:
+                self._queue.put_nowait(message)
+            except Full:
+                with self._lock:
+                    self._dropped += 1
+
+    @property
+    def dropped(self) -> int:
+        with self._lock:
+            return self._dropped
+
+    def _take_dropped(self) -> int:
+        with self._lock:
+            dropped, self._dropped = self._dropped, 0
+            return dropped
 
     def _write(self, lines: str) -> None:
         if self._file is not None:
@@ -103,6 +122,13 @@ class _TeeWriter:
                     stopping = True
                     break
                 batch.append(message)
+            dropped = self._take_dropped()
+            if dropped:
+                batch.append(
+                    orjson.dumps(
+                        {"event": "service_logs.dropped", "level": "warning", "count": dropped}
+                    ).decode()
+                )
             try:
                 self._write("\n".join(batch) + "\n")
             except (OSError, ValueError) as exc:
@@ -113,8 +139,19 @@ class _TeeWriter:
 
     def close(self) -> None:
         if self._thread is not None and self._queue is not None:
-            self._queue.put(None)
-            self._thread.join()
+            # Drain accepted records within a deadline; a stalled sink must not hang shutdown.
+            with suppress(Full):
+                self._queue.put(None, timeout=self.CLOSE_TIMEOUT_S)
+            self._thread.join(timeout=self.CLOSE_TIMEOUT_S)
+            if self._thread.is_alive():
+                print(
+                    f"Service log writer did not drain within {self.CLOSE_TIMEOUT_S:.0f} s; "
+                    f"about {self._queue.qsize()} records not written",
+                    file=sys.stderr,
+                )
+                return
+            if self.dropped:
+                print(f"Service log records dropped: {self.dropped}", file=sys.stderr)
         if self._file is not None:
             self._file.close()
 

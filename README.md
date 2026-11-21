@@ -137,7 +137,7 @@ uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.json --zone A
 | 瀏覽器測試 | Playwright（Chromium） | `frontend/tests/e2e/` | 介面流程；另有經 nginx 的整合版本 |
 | 端到端流程 | Python 腳本 | `scripts/e2e_flow.py` | 經 nginx 跑完建活動、匯入、發布、鎖位、付款回呼、報表、日誌追查（CI 也會執行） |
 
-`make test` 一行指令在 Docker 內執行以上全部（後端約 230 個、前端約 60 個測試）。逐條驗收條件與對應測試見 [驗收條件](docs/ACCEPTANCE.md)。
+`make test` 一行指令在 Docker 內執行單元、整合、併發、前端單元與預設的瀏覽器測試（後端約 230 個、前端約 60 個）；經 nginx 的端到端流程與 nginx 版 Playwright 需先啟動整套服務，另行執行（CI 會在 smoke 後執行端到端流程）。逐條驗收條件與對應測試見 [驗收條件](docs/ACCEPTANCE.md)。
 
 
 正式量測與擴容對照見 [壓測結論摘要](LOADTEST.md#結論摘要)。
@@ -209,6 +209,10 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 | 二.8 設計問答、假設、取捨與驗證 | [DESIGN.md](DESIGN.md) |
 
 ## 已知問題與未完成項目
+
+- **服務日誌檔的保留**。各服務寫入共用目錄的 JSON 日誌檔由 collector 讀取入庫，容器 stdout 有輪替，但這些檔案本身不會自動輪替刪除；長時間或大量壓測後需手動清理（資料庫中的日誌依分區保留）。
+- **Admin 全站訂單翻頁**。以訂單建立時間與 ID 作 keyset 分頁；翻頁期間若有較早取得 ID、較晚才提交的訂單，可能出現在已翻過的範圍而未顯示，重新從第一頁查詢即可看到。
+- **背景服務日誌**。worker、relay、collector 的日誌仍在事件迴圈中同步寫檔；磁碟異常緩慢時可能延遲這些服務（API 已改為背景寫入、佇列滿時丟棄並計數）。
 
 - **水平擴充**。同一台桌機改用 6 個 API 副本重跑 Scenario A，排空後快照中 10,000 席全數被占用、過載 503 由 84% 降至 40%、一致性 0 違規；研判下一個瓶頸可能是 PostgreSQL 與付款路徑（尚待持續量測）。見 [LOADTEST.md](LOADTEST.md#7-瓶頸分析)。
 - **正式 Scenario A 過載**。第 2 輪 k6 正式判定 **FAILED**，17 筆重放重試後仍遭拒，另有 6 筆付款請求逾時。抽樣的 89 筆重放中 72 筆回傳原訂單、驗證正確，約 84% 的 HTTP 請求回 `503 server-busy`。[k6 原始輸出](docs/evidence/loadtest-run2-20261121/a/k6-summary.json) · [nginx 狀態摘要](docs/evidence/loadtest-run2-20261121/a/nginx-summary.txt)
