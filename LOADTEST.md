@@ -43,8 +43,8 @@
 
 | 正式輪次 | 日期（台北） | 測試版本 | B 寫入目標 | 證據 |
 |---|---|---|---:|---|
-| 第 1 輪 | 2026-11-21 | `91b2345` | 300 changes/s | [環境](docs/evidence/loadtest-run1-20261121/environment.txt) · [原始輸出](docs/evidence/loadtest-run1-20261121/) |
-| 第 2 輪 | 2026-11-21 | `31d87c1` | 100 changes/s | [環境與映像 digest](docs/evidence/loadtest-run2-20261121/environment.txt) · [原始輸出](docs/evidence/loadtest-run2-20261121/) |
+| 第 1 輪 | 2026-11-21 | `9588f50` | 300 changes/s | [環境](docs/evidence/loadtest-run1-20261121/environment.txt) · [原始輸出](docs/evidence/loadtest-run1-20261121/) |
+| 第 2 輪 | 2026-11-21 | `5be8721` | 100 changes/s | [環境與映像 digest](docs/evidence/loadtest-run2-20261121/environment.txt) · [原始輸出](docs/evidence/loadtest-run2-20261121/) |
 
 `compose.yaml` 預設啟動三個 API 副本（各 512 MiB）與 PostgreSQL 16。宿主機 nginx 預設 `127.0.0.1:8080`，產壓容器走 Compose network 的 `http://nginx:8080`。A 使用 `grafana/k6:0.57.0`，B 的 writer 與 SSE probe 使用專案 API image 中的 Python。兩個情境各自建立活動。見 `compose.yaml:55`、`compose.yaml:120`、`compose.yaml:122`、`compose.yaml:227`、`loadtest/run.sh`。
 
@@ -66,7 +66,7 @@
 | 冪等重放 | 68 筆中 60 筆遭拒（53 筆 503、7 筆 502），其餘 8 筆均回原訂單 | 抽樣 89 筆：72 筆回傳原訂單（驗證正確，72/72），17 筆用完 10 次嘗試仍收到過載回應（503），列為未驗證 |
 | 正式判定 | **FAILED**。k6 非預期錯誤率與重放查核未達門檻，SQL 回報付款待辦滯留 | **FAILED**。k6 門檻 `replay_unverified`、`unexpected_errors` 未達，runner 另因重放開始 89 筆、驗證 72 筆不相等而判定失敗（[執行紀錄](docs/evidence/loadtest-run2-20261121/run-log.txt)）。失敗項皆為過載拒絕與 6 筆逾時；驗證到的重放全部正確 |
 
-吞吐與 k6 延遲取自 `http_reqs`、`http_req_duration`。nginx 延遲以 access log 的請求時間計算。第 1 輪 502 與重放拒絕的細項見 Git 紀錄 `b117cbb`、`d651c32`。[第 1 輪 k6](docs/evidence/loadtest-run1-20261121/a/k6-summary.json) · [第 2 輪 k6](docs/evidence/loadtest-run2-20261121/a/k6-summary.json) · [第 2 輪 nginx](docs/evidence/loadtest-run2-20261121/a/nginx-summary.txt)
+吞吐與 k6 延遲取自 `http_reqs`、`http_req_duration`。nginx 延遲以 access log 的請求時間計算。第 1 輪 502 與重放拒絕的細項見 Git 紀錄 `f089de4`、`759e64e`。[第 1 輪 k6](docs/evidence/loadtest-run1-20261121/a/k6-summary.json) · [第 2 輪 k6](docs/evidence/loadtest-run2-20261121/a/k6-summary.json) · [第 2 輪 nginx](docs/evidence/loadtest-run2-20261121/a/nginx-summary.txt)
 
 | 排空後狀態 | 第 1 輪 | 第 2 輪 |
 |---|---:|---:|
@@ -176,7 +176,7 @@ docker compose exec -T postgres psql -XAt -U ticketing -d ticketing \
 | B 桌機 | 第 1 輪單程序 client 飽和，服務端 session 重驗失敗也造成整批斷線。第 2 輪仍有進度停滯觸發重連，但最終全部對上 DB，outbox 待編序與 archive 差異均為 0。見 `backend/src/ticketing/realtime/reader.py:161`、`backend/src/ticketing/realtime/revocation.py:101`。[第 1 輪 SSE client](docs/evidence/loadtest-run1-20261121/b/sse-client.txt) · [第 2 輪 SSE client](docs/evidence/loadtest-run2-20261121/b/sse-client.txt) |
 | 座位匯入／Excel 匯出 | 匯入計時含背景作業與回報。Excel 在同機實測已完成，`memory.current` 的峰值接近上限，同時可見大量可回收 page cache。更高磁碟 I/O 或與其他流量共用資源時的影響尚待量測。 |
 
-**水平擴充驗證（3 → 6 個 API 副本）**　同一台桌機、同一 commit `31d87c1`，以 `API_REPLICAS=6 loadtest/run.sh a` 重跑 Scenario A（10,000 席、3,000 VUs、60 秒）。
+**水平擴充驗證（3 → 6 個 API 副本）**　同一台桌機、同一 commit `5be8721`，以 `API_REPLICAS=6 loadtest/run.sh a` 重跑 Scenario A（10,000 席、3,000 VUs、60 秒）。
 
 | Scenario A | 3 個副本（第 2 輪） | 6 個副本 |
 |---|---:|---:|
@@ -200,11 +200,11 @@ docker compose exec -T postgres psql -XAt -U ticketing -d ticketing \
 
 | 第 1 輪發現 | 修正（Git commit） | 第 2 輪觀察 |
 |---|---|---|
-| A 過載期間，nginx 預設 `max_fails` 將 3 個 API 副本全部暫時移出 upstream，回出大量立即 502。 | `b117cbb` 設 `max_fails=0`，nginx upstream keepalive 縮至 60 秒，早於 API 的 Uvicorn 75 秒。`654e775` 對齊 paymock 的 Uvicorn 設定。 | 502 為 0，過載主要回 503。 |
-| A 的付款 reconciler 來不及輪詢，SQL 回報 `attempt_stalled`。 | `b117cbb`、`a6fc12d`、`654e775` 重設各階段預算與領取批次。`b159b0e` 在逾時或關停時交還未完成的工作。 | `attempt_stalled` 為 0。 |
-| A 的重放受過載拒絕，收到回應的重放均正確。 | `d651c32` 依 `Retry-After` 重試，`593316c` 加入重放驗證與進度計數，`b159b0e` 要求每筆重放均須驗證。 | 仍有重放在重試後遭拒，k6 判定 **FAILED**。 |
-| B 單程序 client 飽和，副本的 session 重驗在 0.2 秒取連線／0.3 秒查詢預算下連續失敗 2 次即關閉串流。 | `8276c17`、`0c5c3a7` 分流及精簡 client 狀態，第 2 輪實際用 8 程序、10 秒爬升。`ea3f0cc` 將重驗取連線與查詢預算各調為 1 秒，連續失敗 5 次才關閉。`9a6deb3` 記錄寫入目標由 300 調至 100 changes/s。 | 峰值及最終 DB 比對均達 2,000。兩輪寫入速率不同。 |
-| 冷啟動試跑曾出現 DB timeout 造成的 500，服務映像及資源設定也需更新。 | `a31d86a`、`654e775` 將 DB timeout 映射為可重試 503，`b159b0e`、`ea3f0cc` 調整連線釋放。`2b3c0d1`、`b159b0e` 更新映像，`73221cd` 設容器記憶體上限及日誌輪替，`7ff3b9a` 記錄運行映像 digest。 | A 的 500 為 0，運行映像可由 [環境紀錄](docs/evidence/loadtest-run2-20261121/environment.txt) 追溯。 |
+| A 過載期間，nginx 預設 `max_fails` 將 3 個 API 副本全部暫時移出 upstream，回出大量立即 502。 | `f089de4` 設 `max_fails=0`，nginx upstream keepalive 縮至 60 秒，早於 API 的 Uvicorn 75 秒。`e9136b3` 對齊 paymock 的 Uvicorn 設定。 | 502 為 0，過載主要回 503。 |
+| A 的付款 reconciler 來不及輪詢，SQL 回報 `attempt_stalled`。 | `f089de4`、`9b01a95`、`e9136b3` 重設各階段預算與領取批次。`9e396c2` 在逾時或關停時交還未完成的工作。 | `attempt_stalled` 為 0。 |
+| A 的重放受過載拒絕，收到回應的重放均正確。 | `759e64e` 依 `Retry-After` 重試，`29d652a` 加入重放驗證與進度計數，`9e396c2` 要求每筆重放均須驗證。 | 仍有重放在重試後遭拒，k6 判定 **FAILED**。 |
+| B 單程序 client 飽和，副本的 session 重驗在 0.2 秒取連線／0.3 秒查詢預算下連續失敗 2 次即關閉串流。 | `638a7e3`、`6951030` 分流及精簡 client 狀態，第 2 輪實際用 8 程序、10 秒爬升。`7052866` 將重驗取連線與查詢預算各調為 1 秒，連續失敗 5 次才關閉。`f4b803c` 記錄寫入目標由 300 調至 100 changes/s。 | 峰值及最終 DB 比對均達 2,000。兩輪寫入速率不同。 |
+| 冷啟動試跑曾出現 DB timeout 造成的 500，服務映像及資源設定也需更新。 | `cbb25a5`、`e9136b3` 將 DB timeout 映射為可重試 503，`9e396c2`、`7052866` 調整連線釋放。`1d43c8b`、`9e396c2` 更新映像，`84960da` 設容器記憶體上限及日誌輪替，`7d5bbbe` 記錄運行映像 digest。 | A 的 500 為 0，運行映像可由 [環境紀錄](docs/evidence/loadtest-run2-20261121/environment.txt) 追溯。 |
 
 ## 8. 重現指令與產物
 

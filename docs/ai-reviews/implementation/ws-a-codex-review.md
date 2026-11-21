@@ -10,4 +10,4 @@
 
 6. **P2 · Release checks counts but misses mismatched seat IDs.** If seat ownership and active items have drifted, equal counts let release free one set of seats, clear another set of claims, and decrement quota. **Fix:** Return seat IDs from the seat update and require exact equality with the released item IDs before decrementing quota. Roll back on mismatch. [orders.py](/Users/kaiser/workspace/wy_test/backend/src/ticketing/booking/orders.py:100)
 
-Static review of `main` at `76e6a21`. I did not rerun the tests.
+Static review of `main` at `b22e295`. I did not rerun the tests.
