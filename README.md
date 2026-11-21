@@ -35,7 +35,27 @@
 
 首次建置需下載 base images 並安裝 Python 與 npm 依賴，時間取決於網路。已有 Docker 建置快取時，從全新 clone 執行 `docker compose up -d --build` 到全部服務 healthy 約 40 秒（開發筆電實測）。
 
-[本機開發](#本機開發) · [測試與實測](#測試與實測) · [API 與架構](#api-與架構) · [服務與設定](#服務與設定) · [需求對照](#需求對照) · [已知問題與未完成項目](#已知問題與未完成項目)
+[畫面](#畫面) · [本機開發](#本機開發) · [測試與實測](#測試與實測) · [API 與架構](#api-與架構) · [服務與設定](#服務與設定) · [需求對照](#需求對照) · [已知問題與未完成項目](#已知問題與未完成項目)
+
+## 畫面
+
+以預設帳號在 Compose 堆疊上操作的實際畫面（1440×900）。
+
+| 即時座位圖（User） | Admin 即時監控 |
+| --- | --- |
+| [![即時座位圖](docs/screenshots/03-seat-map-live.png)](docs/screenshots/03-seat-map-live.png) | [![即時監控](docs/screenshots/06-admin-monitoring.png)](docs/screenshots/06-admin-monitoring.png) |
+| 座位狀態經 SSE 即時更新，可指定座位或由系統依區域配位。 | Edge／App 的每秒 RPS、延遲分位數、錯誤率、連線數、銷售活動、告警與 `request_id` 追查。 |
+
+<details>
+<summary>其他畫面：登入、活動列表、主辦管理、我的訂單、使用者管理、Swagger</summary>
+
+| | |
+| --- | --- |
+| [![登入](docs/screenshots/01-login.png)](docs/screenshots/01-login.png) 登入 | [![活動列表](docs/screenshots/02-events-list.png)](docs/screenshots/02-events-list.png) 活動列表 |
+| [![主辦管理](docs/screenshots/04-organizer.png)](docs/screenshots/04-organizer.png) 主辦管理（建立、匯入、發布） | [![我的訂單](docs/screenshots/05-my-orders.png)](docs/screenshots/05-my-orders.png) 我的訂單（鎖位倒數、付款） |
+| [![使用者管理](docs/screenshots/07-admin-users.png)](docs/screenshots/07-admin-users.png) Admin 使用者管理 | [![Swagger](docs/screenshots/08-api-docs-swagger.png)](docs/screenshots/08-api-docs-swagger.png) Swagger API 文件 |
+
+</details>
 
 ## 技術棧
 
