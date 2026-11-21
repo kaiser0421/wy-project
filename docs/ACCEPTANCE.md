@@ -51,8 +51,8 @@
 | # | 驗收條件 | 驗證方式 | 狀態 |
 |---|---|---|---|
 | 4.1 | 所有端點有 OpenAPI 文件（摘要、說明、參數、回應、錯誤碼、權限） | `/api/docs`；`test_openapi_covers_each_operation` | ✅ |
-| 4.2 | 錯誤一律 RFC 9457 problem+json，含 `code`、`retryable`、`request_id` | `test_problem_error_is_rfc9457`、`test_not_found_is_problem_json` | ✅ |
-| 4.3 | 寫入操作支援 Idempotency-Key；並發更新以 ETag／If-Match 防止覆蓋 | `test_idempotency_contention_and_canonical_replay`、`test_if_match_is_required_and_checked` | ✅ |
+| 4.2 | API 錯誤一律 RFC 9457 problem+json，含 `code`、`retryable`、`request_id`（例外：`/healthz/ready` 的 503 回傳供容器健康檢查判讀的診斷 JSON） | `test_problem_error_is_rfc9457`、`test_not_found_is_problem_json` | ✅ |
+| 4.3 | 會產生副作用、客戶端可能重送的寫入（下單、付款、取消訂單）必須帶 Idempotency-Key，重送取得原結果；活動、使用者的更新與發布以 ETag／If-Match 防止互相覆蓋（建立活動不使用冪等鍵，重送會建立另一份草稿） | `test_idempotency_contention_and_canonical_replay`、`test_if_match_is_required_and_checked` | ✅ |
 | 4.4 | 版控的 `docs/openapi.json` 與程式產生的一致 | `test_openapi_export_matches_the_application` | ✅ |
 
 ## 五、功能需求
