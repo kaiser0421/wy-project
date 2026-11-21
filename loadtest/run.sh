@@ -207,6 +207,12 @@ bundle() {
     log "Could not scrub checkout tokens from $OUT; not packing. Inspect or delete it manually."
     return 1
   fi
+  # find -delete can warn yet exit 0 on macOS: verify nothing sensitive is left before packing.
+  local leftovers
+  if ! leftovers=$(find "$OUT" \( -name 'sessions.json' -o -name '*.bak' \) -print) || [[ -n $leftovers ]]; then
+    log "Session files or unscrubbed copies may remain in $OUT; not packing. Delete them manually."
+    return 1
+  fi
   tar -czf "$OUT.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
   log "Results archive: $OUT.tar.gz"
 }
