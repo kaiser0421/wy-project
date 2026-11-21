@@ -30,6 +30,7 @@ ROUTES = [
     ("GET", "/alerts"),
     ("GET", "/alerts/stream"),
     ("POST", "/alerts/1/ack"),
+    ("GET", "/logs/recent"),
     ("GET", "/requests/request-1/logs"),
 ]
 
@@ -50,6 +51,75 @@ async def test_monitoring_routes_require_admin(
         response = await client.request(method, BASE + path, headers=session.headers())
         assert response.status_code == 403
         assert response.json()["code"] == "forbidden"
+
+
+async def test_admin_recent_logs_filter_by_time_service_and_level_and_cap_attrs(
+    client: httpx.AsyncClient, db: asyncpg.Connection
+) -> None:
+    await create_user(db, "admin@example.com", role="admin")
+    await login(client, "admin@example.com")
+    now = datetime.now(UTC)
+    metadata = orjson.dumps(
+        {
+            "error_type": "TimeoutError",
+            "status": 503,
+            "detail": "Bearer private-token",
+            "path": "/private-token",
+            "token": "private-token",
+            "nested": {"password": "private-token"},
+        }
+    ).decode()
+    oversized = orjson.dumps({"error_type": "E" * 4096, "status": {"token": "private"}}).decode()
+    await db.executemany(
+        "INSERT INTO service_logs (ts, service, level, event, request_id, attrs) "
+        "VALUES ($1, $2, $3, $4, $5, $6)",
+        [
+            (now + timedelta(minutes=2), "api", "critical", "future", None, None),
+            (now - timedelta(seconds=2), "api", "info", "ordinary", None, None),
+            (now - timedelta(seconds=3), "api", "warning", "overload", "request-1", metadata),
+            (now - timedelta(seconds=4), "worker", "error", "retry", None, oversized),
+            (now - timedelta(minutes=2), "api", "error", "timeout", "request-2", None),
+            (now - timedelta(minutes=3), "api", "critical", "failed", None, None),
+            (now - timedelta(minutes=20), "api", "error", "older", None, None),
+            (now - timedelta(minutes=61), "api", "error", "too-old", None, None),
+        ],
+    )
+    path = BASE + "/logs/recent"
+    response = await client.get(path)
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "private, no-store"
+    rows = response.json()["items"]
+    assert [row["event"] for row in rows] == ["overload", "retry", "timeout", "failed"]
+    assert rows[0] == {
+        "ts": (now - timedelta(seconds=3)).isoformat().replace("+00:00", "Z"),
+        "service": "api",
+        "level": "warning",
+        "event": "overload",
+        "request_id": "request-1",
+        "attrs": {"error_type": "TimeoutError", "status": 503},
+    }
+    assert rows[1]["attrs"] == {}
+
+    for params, expected in (
+        ({"since_minutes": 1}, ["overload", "retry"]),
+        ({"since_minutes": 60, "level": "error"}, ["retry", "timeout", "older"]),
+        ({"service": "api", "level": "error", "limit": 1}, ["timeout"]),
+        ({"service": "paymock"}, []),
+    ):
+        response = await client.get(path, params=params)
+        assert response.status_code == 200, response.text
+        assert [row["event"] for row in response.json()["items"]] == expected
+
+    for key, value in (
+        ("service", "nginx"),
+        ("level", "info"),
+        ("since_minutes", 0),
+        ("since_minutes", 61),
+        ("limit", 0),
+        ("limit", 201),
+    ):
+        response = await client.get(path, params={key: value})
+        assert (response.status_code, response.json()["code"]) == (422, "validation-failed")
 
 
 async def test_admin_request_trace_returns_linked_entries_in_timestamp_sequence_order(
