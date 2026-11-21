@@ -31,13 +31,13 @@ it("shows the import stage as a recovered job advances through validation and wr
     await vi.advanceTimersByTimeAsync(0);
     const progress = root.querySelector("progress")!;
     const status = progress.closest("section")!.querySelector('[role="status"]')!;
-    expect(status.textContent).toBe("解析座位檔案…");
+    expect(status.textContent).toBe("Parsing seat file…");
     expect(progress.value).toBe(1);
     await vi.advanceTimersByTimeAsync(650);
-    expect(status.textContent).toBe("驗證座位…");
+    expect(status.textContent).toBe("Validating seats…");
     expect(progress.value).toBe(98);
     await vi.advanceTimersByTimeAsync(650);
-    expect(status.textContent).toBe("寫入座位…");
+    expect(status.textContent).toBe("Writing seats…");
     expect(progress.value).toBe(99);
   } finally {
     navigation.abort();

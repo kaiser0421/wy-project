@@ -113,7 +113,7 @@ uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.csv --zone A
 uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.json --zone A
 ```
 
-每個檔案與模式各用一個尚無座位、只含區域 `A` 的草稿活動驗證。介面先顯示「上傳座位檔案…」，再輪詢匯入作業，顯示「等待匯入…」、「解析座位檔案…」、「驗證座位…」與「寫入座位…」。完成後可查看作業結果及錯誤報告。
+每個檔案與模式各用一個尚無座位、只含區域 `A` 的草稿活動驗證。介面先顯示 `Uploading seat file…`，再輪詢匯入作業，依階段顯示 `Waiting to start…`、`Parsing seat file…`、`Validating seats…` 與 `Writing seats…`。完成後可查看作業結果及錯誤報告。
 
 | 檔案 | `all_or_nothing` | `skip_invalid` |
 |---|---|---|

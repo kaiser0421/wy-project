@@ -179,11 +179,11 @@ function importPanel(event: EventInfo, user: User, signal: AbortSignal): HTMLEle
           const working = job.status === "queued" || job.status === "running";
           const failed = /failed|cancelled/.test(job.status);
           let status = label(job.status);
-          if (job.status === "queued") status = "等待匯入…";
+          if (job.status === "queued") status = "Waiting to start…";
           if (job.status === "running") {
-            status = total !== null && percent === 99 ? "寫入座位…"
-              : total !== null && percent === 98 ? "驗證座位…"
-              : percent !== undefined && percent >= 98 ? "驗證及寫入座位…" : "解析座位檔案…";
+            status = total !== null && percent === 99 ? "Writing seats…"
+              : total !== null && percent === 98 ? "Validating seats…"
+              : percent !== undefined && percent >= 98 ? "Validating and writing seats…" : "Parsing seat file…";
           }
           show(feedback, `${status}${job.failure_reason ? ` · ${label(job.failure_reason)}` : ""}`, failed);
           if (!working) {
@@ -225,7 +225,7 @@ function importPanel(event: EventInfo, user: User, signal: AbortSignal): HTMLEle
     progress.hidden = false;
     progress.removeAttribute("value");
     details.textContent = "";
-    show(feedback, "上傳座位檔案…");
+    show(feedback, "Uploading seat file…");
     try {
       const job = await api.upload(event.id, chosen, mode.value as ImportMode, signal);
       if (!signal.aborted) {

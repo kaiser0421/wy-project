@@ -344,7 +344,8 @@ progress { width: 100%; accent-color: var(--primary); }
 .metric-strip dt { color: var(--muted); font-size: .875rem; }
 .metric-strip dd { font-size: 1.3rem; font-weight: 700; margin: 0; }
 .table-scroll { max-width: 100%; overflow: auto; }
-.admin-lower > :has(.recent-logs-scroll) { grid-column: 1 / -1; }
+.admin-lower > :has(.recent-logs-scroll),
+.admin-lower > :has(.request-trace-scroll) { grid-column: 1 / -1; }
 .recent-logs-scroll { max-height: 24rem; }
 .recent-logs-scroll th { position: sticky; top: 0; }
 .request-trace-scroll table { min-width: 48rem; }
