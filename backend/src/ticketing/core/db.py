@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import asyncpg
 
@@ -41,8 +41,8 @@ async def acquire(pool: asyncpg.Pool, timeout_s: float) -> AsyncIterator[asyncpg
 
     A client-side command timeout (`command_timeout`) while the connection is held means the
     database is not answering in time: that is overload, reported as the same retryable 503.
-    A connection that cannot be reset in time on release is discarded instead of failing a
-    request that has already finished its work.
+    Any TimeoutError raised while the connection is held is treated this way; code that holds a
+    connection only waits on the database.
     """
     try:
         conn = await pool.acquire(timeout=timeout_s)
@@ -53,7 +53,7 @@ async def acquire(pool: asyncpg.Pool, timeout_s: float) -> AsyncIterator[asyncpg
     except TimeoutError as exc:
         raise server_busy("The database did not answer in time.") from exc
     finally:
-        try:
+        # asyncpg terminates a connection whose reset fails before re-raising; the request has
+        # already finished its work, so it must not fail because of this.
+        with suppress(TimeoutError):
             await pool.release(conn, timeout=timeout_s)
-        except TimeoutError:
-            conn.terminate()
