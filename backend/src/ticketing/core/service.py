@@ -48,7 +48,11 @@ async def _heartbeat_loop(redis: Redis, name: str, stop: asyncio.Event) -> None:
 
 async def _run(name: str, tick: Tick, interval_s: float) -> None:
     settings = get_settings()
-    db = await create_pool(settings, min_size=1, max_size=4, application_name=name)
+    # The worker runs several job loops on one pool; DB_POOL_MAX (default 10) leaves room for an
+    # import, the sweeper and the bounded reconciler at the same time.
+    db = await create_pool(
+        settings, min_size=1, max_size=settings.db_pool_max, application_name=name
+    )
     redis = create_redis(settings)
 
     async def body(stop: asyncio.Event) -> None:

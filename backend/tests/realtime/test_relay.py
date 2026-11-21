@@ -124,3 +124,23 @@ async def test_two_relays_only_one_active(
         release.set()
     assert await db.fetchval("SELECT seq FROM outbox") == 1
     assert await db.fetchval("SELECT count(*) FROM seat_events") == 2
+
+
+async def test_maintenance_prunes_only_old_assigned_outbox_rows(
+    db: asyncpg.Connection, relay_context: ServiceContext
+) -> None:
+    from ticketing import maintenance
+
+    await db.execute(
+        """
+        INSERT INTO outbox (event_id, kind, changes, seq, assigned_at)
+        VALUES (1, 'seat_changes', '[]', 1, clock_timestamp() - interval '2 hours'),
+               (1, 'seat_changes', '[]', 2, clock_timestamp() - interval '5 minutes');
+        INSERT INTO outbox (event_id, kind, changes, created_at)
+        VALUES (1, 'seat_changes', '[]', clock_timestamp() - interval '2 hours');
+        """
+    )
+    await maintenance.tick(relay_context)
+    remaining = await db.fetch("SELECT seq FROM outbox ORDER BY id")
+    # The old delivered row is gone; the recent one and the never-assigned one stay.
+    assert [r["seq"] for r in remaining] == [2, None]

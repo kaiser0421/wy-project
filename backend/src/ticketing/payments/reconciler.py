@@ -225,11 +225,16 @@ async def _clean_completed_keys(ctx: ServiceContext) -> None:
         )
 
 
+# Rows processed concurrently across the poll, cancel and refund phases of one tick.
+_MAX_CONCURRENT_ROWS = 4
+
+
 async def _run_phase(
     ctx: ServiceContext,
     name: str,
     claim: Callable[[], Awaitable[list[asyncpg.Record]]],
     process: Callable[[asyncpg.Record], Awaitable[None]],
+    slots: asyncio.Semaphore,
 ) -> None:
     """Spend each queue's budget independently and let unprocessed leases become due again."""
     if ctx.stop.is_set():
@@ -237,7 +242,8 @@ async def _run_phase(
 
     async def run_row(row: asyncpg.Record) -> None:
         try:
-            await process(row)
+            async with slots:  # shared across phases so the worker pool keeps room for other jobs
+                await process(row)
         except Exception as exc:
             log.warning("payment.reconcile_row_failed", phase=name, error=type(exc).__name__)
 
@@ -257,6 +263,7 @@ async def tick(ctx: ServiceContext) -> None:
     owner = str(uuid4())
     async with create_http_client(ctx.settings.payment_provider_url) as http:
         provider = Provider(http, ctx.settings)
+        slots = asyncio.Semaphore(_MAX_CONCURRENT_ROWS)
         async with asyncio.TaskGroup() as phases:
             phases.create_task(
                 _run_phase(
@@ -264,6 +271,7 @@ async def tick(ctx: ServiceContext) -> None:
                     "poll",
                     lambda: _due_attempts(ctx),
                     lambda row: _recover_attempt(ctx, provider, row),
+                    slots,
                 )
             )
             phases.create_task(
@@ -272,6 +280,7 @@ async def tick(ctx: ServiceContext) -> None:
                     "cancel",
                     lambda: _claim_cancellations(ctx, owner),
                     lambda row: _cancel_provider(ctx, provider, owner, row),
+                    slots,
                 )
             )
             phases.create_task(
@@ -280,6 +289,7 @@ async def tick(ctx: ServiceContext) -> None:
                     "refund",
                     lambda: _claim_refunds(ctx, owner),
                     lambda row: _refund(ctx, provider, owner, row),
+                    slots,
                 )
             )
     if not ctx.stop.is_set():

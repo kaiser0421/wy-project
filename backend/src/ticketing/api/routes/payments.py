@@ -37,8 +37,10 @@ _MAX_CALLBACK_BYTES = 8192
         "The owner may request checkout while the hold is active. Concurrent keys use the same "
         "chargeable attempt. Retry the same request with the same Idempotency-Key within 24 "
         "hours to resume that attempt and receive its current result with Idempotent-Replayed: "
-        "true. An active checkout returns 201, a paid order returns 200, and a terminal attempt "
-        "or closed order returns 402. A declined payment can be retried with a new key while "
+        "true. An active checkout returns 201. Replaying the same key after the order was paid "
+        "returns 200, and after a terminal attempt returns 402. A new key for an order that is "
+        "no longer awaiting payment returns 409 order-not-payable. A declined payment can be "
+        "retried with a new key while "
         "the hold remains active. Advisory-lock contention returns 409 with Retry-After: 1. "
         "A committed key reused for another request returns 422."
     ),
