@@ -76,7 +76,7 @@
 | 5.2.5 | 草稿／已發布：草稿可匯入座位；發布後在開賣時間內才能購買，時間外下單被拒 | `test_lifecycle_and_concurrent_patch`、訂票測試的開賣時窗案例 | ✅ |
 | 5.2.6 | 匯入支援 CSV 與 JSON，欄位 `zone_code,row_label,seat_number` | samples 匯入成功；`test_parser.py` | ✅ |
 | 5.2.7 | 單檔上限 20 MB、100,000 列；超過即拒絕 | `test_upload_byte_cap_and_worker_row_cap` | ✅ |
-| 5.2.8 | 100,000 列在 60 秒內完成（CSV 與 JSON 各自） | 完整 Docker 服務實測：閒置時 CSV 11.6–15.6 秒、JSON 17.0–22.2 秒，資源競爭下 JSON 47.8 秒；`test_import_100k_under_60s`：CSV 15.14 秒、JSON 15.35 秒（[證據](evidence/import-100k.md)） | ✅ |
+| 5.2.8 | 100,000 列在 60 秒內完成（CSV 與 JSON 各自） | 完整 Docker 服務實測：閒置時 CSV 11.6–15.6 秒、JSON 17.0–22.2 秒，同時跑完整測試套件時 CSV 21.0 秒、JSON 47.8 秒；`test_import_100k_under_60s`：CSV 15.14 秒、JSON 15.35 秒（[證據](evidence/import-100k.md)） | ✅ |
 | 5.2.9 | 匯入在背景執行，使用者即時看到進度 | Organizer 匯入時的進度條（前端輪詢 job 狀態並顯示目前階段；另有 `GET /api/v1/seat-imports/{job_id}/stream` 供 SSE 訂閱）；`test_imports.py` | ✅ |
 | 5.2.10 | `all_or_nothing`（預設）有任一錯誤即全部不寫；`skip_invalid` 只寫有效列 | `test_imports.py`；README 範例預期結果 | ✅ |
 | 5.2.11 | 錯誤報告含原始列號（CSV 含表頭、JSON 對應實體行）與錯誤原因，可下載 | `test_csv_multiline_record_reports_physical_line`、`test_json_line_numbers_match_physical_source` | ✅ |

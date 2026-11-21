@@ -13,13 +13,16 @@
 | 同時執行 `make test` | 20.96 秒 | 47.75 秒 | 60 秒 |
 
 - 每次都成功寫入 100,000 席，worker 日誌沒有逾時或重試。
-- 資源競爭下 JSON 的寫入階段明顯變慢：最長的一個 finalize 陳述句約 29 秒，可調上限為 45 秒（`IMPORT_FINALIZE_TIMEOUT_MS`）。若逾時，重試時已寫入 staging 的批次會保留並跳過（`backend/src/ticketing/imports/runner.py:331–341`），只重做驗證與 finalize。
+- 資源競爭下 JSON 的寫入階段明顯變慢：最長的一個 finalize 陳述句約 29 秒，每個 SQL 陳述句的上限預設 45 秒（`IMPORT_FINALIZE_TIMEOUT_MS`，最高可設 55 秒）。finalize 逾時只回滾 finalize 交易，已提交的 staging 資料保留；重試時依 `total_rows` 與 `file_validated` 跳過解析、staging 與檔案驗證，只重跑 finalize（含與既有座位的比對），見 `backend/src/ticketing/imports/runner.py:369–394`、`backend/src/ticketing/imports/runner.py:217–263`。staging 中途中斷時則從已提交的批次接續（`runner.py:331–341`）。
 
 ```text
-csv: upload 202 in 0.13s, finished succeeded at 20.96s, db seats 100000, viewer -> 403
-json: upload 202 in 0.52s, finished succeeded at 47.75s, db seats 100000, viewer -> 403
-csv: upload 202 in 0.13s, finished succeeded at 20.96s, db seats 100000, viewer -> 403
-json: upload 202 in 0.52s, finished succeeded at 47.75s, db seats 100000, viewer -> 403
+# idle, run 1
+csv: upload 202 in 0.13s, finished succeeded at 15.61s, db seats 100000, viewer -> 403
+json: upload 202 in 0.59s, finished succeeded at 22.22s, db seats 100000, viewer -> 403
+# idle, run 2
+csv: upload 202 in 0.10s, finished succeeded at 11.59s, db seats 100000, viewer -> 403
+json: upload 202 in 0.81s, finished succeeded at 17.00s, db seats 100000, viewer -> 403
+# while make test was running
 csv: upload 202 in 0.13s, finished succeeded at 20.96s, db seats 100000, viewer -> 403
 json: upload 202 in 0.52s, finished succeeded at 47.75s, db seats 100000, viewer -> 403
 ```

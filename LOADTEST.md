@@ -63,7 +63,7 @@
 
 | 標準（題目要求） | 結果 | 證據 |
 | --- | --- | --- |
-| 100,000 列座位匯入在 60 秒內完成 | ✅ 完整服務閒置時 CSV 11.6–15.6 秒、JSON 17.0–22.2 秒；同時跑完整測試套件時 JSON 47.8 秒 | [匯入實測](docs/evidence/import-100k.md) |
+| 100,000 列座位匯入在 60 秒內完成 | ✅ 完整服務閒置時 CSV 11.6–15.6 秒、JSON 17.0–22.2 秒；同時跑完整測試套件時 CSV 21.0 秒、JSON 47.8 秒 | [匯入實測](docs/evidence/import-100k.md) |
 | 500,000 筆訂單 Excel 在 512 MB 記憶體上限內完成匯出 | ✅ 217 秒、程式記憶體峰值約 108 MiB、無 OOM | [Excel 實測](docs/evidence/cp4-excel-500k.md) |
 
 原始數據：[第 1 輪](docs/evidence/loadtest-run1-20261121/) · [第 2 輪](docs/evidence/loadtest-run2-20261121/) · [6 副本](docs/evidence/loadtest-run3-6replicas-20261121/)。重跑方式見 [8. 重現指令與產物](#8-重現指令與產物)。
@@ -185,8 +185,8 @@ Burst 的 8,337 次串流嘗試包含 6,110 次 HTTP request errors，並出現 
 | 項目 | 結果 | 量測起訖 |
 |---|---|---|
 | 10,000 列 CSV | **3.3 秒**（筆電 API 試跑摘要） | 從提交 multipart 檔案到輪詢 job 為 `succeeded`，包含輪詢間隔。準備腳本的量測點見 `loadtest/prepare_a.py:96`、`loadtest/prepare_a.py:105–111`。 |
-| 100,000 列 CSV | 完整服務 **11.6–15.6 秒**；整合測試 15.14 秒（門檻 60 秒） | 先產檔才開始計時，包含經 nginx 上傳、worker 處理與讀取終態。 |
-| 100,000 列 JSON | 完整服務 **17.0–22.2 秒**；同時跑完整測試套件 47.8 秒；整合測試 15.35 秒（門檻 60 秒） | 同上，各格式獨立執行。 |
+| 100,000 列 CSV | 完整服務閒置 **11.6–15.6 秒**；同時跑完整測試套件 21.0 秒；整合測試（隔離資料庫）15.14 秒（門檻 60 秒） | 先產檔才開始計時。完整服務經 nginx 上傳，整合測試直接呼叫 API；兩者都計到 worker 完成、讀到終態。 |
+| 100,000 列 JSON | 完整服務閒置 **17.0–22.2 秒**；同時跑完整測試套件 47.8 秒；整合測試（隔離資料庫）15.35 秒（門檻 60 秒） | 同上，各格式獨立執行。 |
 
 2026-11-22 以目前程式在閒置開發筆電測得 100,000 列結果，量測紀錄見 [10 萬列匯入實測](docs/evidence/import-100k.md)。測試也確認 job 回報及 PostgreSQL 實際座位數都為 100,000。見 [test_import_100k_under_60s](backend/tests/imports/test_import_perf.py)（`backend/tests/imports/test_import_perf.py:17–36`）。可在已備妥 PostgreSQL 整合測試環境執行 `uv run pytest -s backend/tests/imports/test_import_perf.py`，或透過 `make test` 跑 Compose 測試。檔案上限及列數預設見 `backend/src/ticketing/core/settings.py:89–90`。
 
