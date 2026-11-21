@@ -1,0 +1,105 @@
+
+==> Recording environment
+
+==> Stack already running (set REBUILD=1 to rebuild)
+
+==> Scenario A: preparing event with 10000 seats and 3000 buyer sessions
+imported 10000 seats in 1.0s
+event 3: 10000 seats, 3000 buyer sessions -> /lt/out/20261121-174356/a
+
+==> Scenario A: k6 3000 VUs for 60s against event 3
+time="2026-11-21T09:45:32Z" level=info msg="{\"user_id\":715,\"key\":\"a-20261121-174356-661-72-order\",\"event_id\":3,\"public_id\":\"5010b6d8-119f-46be-946d-688cb62004b1\",\"resend_attempted\":false}" source=console
+time="2026-11-21T09:45:32Z" level=info msg="{\"user_id\":857,\"key\":\"a-20261121-174356-803-77-order\",\"event_id\":3,\"public_id\":\"15132aeb-fa55-460c-b3d3-7ff860658263\",\"resend_attempted\":false}" source=console
+
+running (1m02.2s), 0243/3000 VUs, 205255 complete and 0 interrupted iterations
+rush ↓ [ 100% ] 3000 VUs  1m0s
+
+running (1m03.2s), 0129/3000 VUs, 205369 complete and 0 interrupted iterations
+rush ↓ [ 100% ] 3000 VUs  1m0s
+
+running (1m04.2s), 0039/3000 VUs, 205459 complete and 0 interrupted iterations
+rush ↓ [ 100% ] 3000 VUs  1m0s
+
+     business_conflicts.............: 104032 1604.268579/s
+   ✗ checks.........................: 11.76% 8 out of 68
+     data_received..................: 116 MB 1.8 MB/s
+     data_sent......................: 93 MB  1.4 MB/s
+     http_req_blocked...............: avg=1.37ms   min=1.3µs   med=4.5µs    max=299.38ms p(90)=6.3µs   p(95)=8µs      p(99)=72ms   
+     http_req_connecting............: avg=1.32ms   min=0s      med=0s       max=288.95ms p(90)=0s      p(95)=0s       p(99)=67.96ms
+     http_req_duration..............: avg=620.14ms min=111.4µs med=156.78ms max=4.7s     p(90)=1.28s   p(95)=1.94s    p(99)=2.27s  
+       { expected_response:true }...: avg=916.9ms  min=1.93ms  med=974.34ms max=4.46s    p(90)=1.9s    p(95)=2.01s    p(99)=2.43s  
+     http_req_failed................: 91.71% 199958 out of 218032
+     http_req_receiving.............: avg=571.71µs min=6.9µs   med=35.1µs   max=241.02ms p(90)=112.1µs p(95)=385.79µs p(99)=15.42ms
+     http_req_sending...............: avg=1.2ms    min=5.4µs   med=14.5µs   max=241.51ms p(90)=263.7µs p(95)=4.25ms   p(99)=29.98ms
+     http_req_tls_handshaking.......: avg=0s       min=0s      med=0s       max=0s       p(90)=0s      p(95)=0s       p(99)=0s     
+     http_req_waiting...............: avg=618.36ms min=78.89µs med=143.02ms max=4.7s     p(90)=1.28s   p(95)=1.94s    p(99)=2.27s  
+     http_reqs......................: 218032 3362.252834/s
+     iteration_duration.............: avg=885.36ms min=50.43ms med=517.58ms max=22.76s   p(90)=2s      p(95)=2.3s     p(99)=3.31s  
+     iterations.....................: 205498 3168.967091/s
+     scenario_a_iterations..........: 205498 3168.967091/s
+     scenario_a_outcomes............: 218118 3363.579032/s
+     server_busy....................: 93772  1446.049996/s
+     successful_holds...............: 4228   65.199627/s
+   ✗ unexpected_errors..............: 48.70% 106186 out of 218032
+     vus............................: 39     min=0                max=3000
+     vus_max........................: 3000   min=84               max=3000
+
+
+running (1m04.8s), 0000/3000 VUs, 205498 complete and 0 interrupted iterations
+rush ✓ [ 100% ] 3000 VUs  1m0s
+time="2026-11-21T09:45:35Z" level=error msg="thresholds on metrics 'checks, unexpected_errors' have been crossed"
+
+==> Scenario A: waiting for holds, payments and outbox to drain (90 s)
+
+==> Scenario A: consistency checks (zero rows = consistent)
+attempt_stalled|e2d5d7ef-b3b4-465f-be5c-095851bfb7ed
+attempt_stalled|e5260a72-b8e7-4284-b005-b79da1f70d3d
+attempt_stalled|e71ebfbb-0bb5-4866-94e3-f8dd8b699b7f
+attempt_stalled|e7c80fdc-f15f-447d-bd53-4d08f0b0e1c4
+attempt_stalled|e86e53f3-b277-4d01-8660-cf4637a69cfe
+attempt_stalled|ea8a86a6-8994-4084-9400-11ff31cbebdc
+attempt_stalled|eaa56a4a-dd2e-4e53-9f83-6c3ec80a79e3
+attempt_stalled|ed66eaa1-6afc-45c5-b690-a379ab65284e
+attempt_stalled|ee827e09-8546-41ed-994d-1a07ba7c282b
+attempt_stalled|ef4ca048-74a3-4d95-910f-2376d1e0f9bd
+attempt_stalled|f0b8ddaa-b5eb-4d4e-be35-482e7e633e7a
+attempt_stalled|f4386050-1495-4bba-9706-20ffc3e9472c
+attempt_stalled|f493e666-4a01-4770-9c01-28cd06d6b671
+attempt_stalled|f49b77e1-d704-4480-9083-dd9bd2737cea
+attempt_stalled|f62a6721-c637-4125-a31c-a556aaccaae4
+attempt_stalled|f788a1ce-0aa0-44c1-980c-3fc1c412c8e5
+attempt_stalled|f86e373a-46f7-4d8b-90cb-7f7665e82c5e
+attempt_stalled|faed8980-4377-4d06-8135-5769091ede25
+attempt_stalled|fb36f52f-5717-4294-9f75-7d7f4e9780de
+attempt_stalled|fdf27500-cba2-454a-b82e-50e14e534b1b
+     status      | orders | tickets 
+-----------------+--------+---------
+ pending_payment |   3842 |    7928
+ paid            |    320 |     584
+ cancelled       |     66 |     134
+(3 rows)
+
+  status   | count 
+-----------+-------
+ available |  1488
+ held      |  7928
+ sold      |   584
+(3 rows)
+
+
+==> Scenario B: seeding event and 2000 subscriber sessions
+{"event_id": 4, "seats": 10000, "sessions": 2000}
+
+==> Scenario B: 2000 subscribers for 80s, writer at 300 changes/s (event 4)
+ Container wy-project-api-run-c6fd78805330 Creating 
+ Container wy-project-api-run-c6fd78805330 Created 
+{"archive_mismatches": 0, "connect_ms": {"p50": 7474, "p95": 26176, "p99": 54324}, "connections_established": 2000, "delta_apply_ms": {"p50": 3614, "p95": 38833, "p99": 79780}, "delta_apply_samples": 248001, "deltas_applied": 248001, "final_head": 4128, "gaps": 6064, "matching_clients": 1326, "outbox_pending": 0, "peak_active": 2000, "pg_state_sha256": "524875bbfc34af3f018d8d607fdcf773b94e458db2f55ee35d84f028866b7ec7", "request_errors": 1296, "resyncs": 1111, "snapshot_ms": {"p50": 63995, "p95": 73733, "p99": 75981}, "snapshot_request_errors": 359, "sse_body_bytes": 491922541, "sse_body_bytes_per_second": 3011787, "stalled_progress": 6064, "stream_attempts": 9673, "stream_error_rate": 0.096868, "stream_request_errors": 937, "target_connections": 2000}
+
+ Container wy-project-api-run-beb7a62c58c6 Creating 
+ Container wy-project-api-run-beb7a62c58c6 Created 
+{"changes": 16512, "seconds": 55.08516342899998, "changes_per_sec": 299.75403488241517}
+
+==> FAILED
+  - Scenario A k6 failed (exit 99)
+  - Scenario A consistency SQL reported violations
+  - Scenario B SSE client or audit failed (exit 1)

@@ -30,7 +30,7 @@
 
 ## 2. Scenario A
 
-**參數與流量（第 2 輪腳本）**　單一開賣活動 10,000 席、3,000 個 `constant-vus`，持續 60 秒。準備腳本以 `POST /api/v1/auth/login` 登入主辦人，透過 API 建立活動、匯入座位並發布，並直接在 PostgreSQL 建立每位買家的獨立 session。初始 idle 與 absolute deadline 均為 12 小時。正常登入的預設分別為 30 分鐘與 12 小時。每次購買抽 1–4 張，約 70% 指定席、30% 區域配位。成功後約 80% 模擬付款並輪詢訂單、10% 取消、10% 保留至期限，另抽約 2% 用原請求內容及 Idempotency-Key 驗證重放。重放遇 502／504 或 `503 server-busy` 時依 `Retry-After`（預設 1 秒）重送，合計最多 10 次嘗試。每筆發起的重放均須收到回應並驗證為原訂單。觸及個人配額後，確認已有 4 張的 VU 切到查訂單。請求 timeout 5 秒，指定的可重試 409 最多重送兩次。見 `loadtest/prepare_a.py:56`、`loadtest/prepare_a.py:72`、`loadtest/prepare_a.py:110`、`backend/src/ticketing/core/settings.py:46`、`loadtest/scenario_a.js`。
+**參數與流量（第 2 輪腳本）**　單一開賣活動 10,000 席、3,000 個 `constant-vus`，持續 60 秒。準備腳本以 `POST /api/v1/auth/login` 登入主辦人，透過 API 建立活動、匯入座位並發布，並直接在 PostgreSQL 建立每位買家的獨立 session。初始 idle 與 absolute deadline 均為 12 小時（`loadtest/prepare_a.py:135`）。正常登入的預設分別為 30 分鐘與 12 小時。每次購買抽 1–4 張，約 70% 指定席、30% 區域配位。成功後約 80% 模擬付款並輪詢訂單、10% 取消、10% 保留至期限，另抽約 2% 用原請求內容及 Idempotency-Key 驗證重放。重放遇 502／504 或 `503 server-busy` 時依 `Retry-After`（預設 1 秒）重送，合計最多 10 次嘗試。每筆發起的重放均須收到回應並驗證為原訂單。觸及個人配額後，確認已有 4 張的 VU 切到查訂單。請求 timeout 5 秒，指定的可重試 409 最多重送兩次。見 `loadtest/prepare_a.py:72`、`loadtest/prepare_a.py:110`、`backend/src/ticketing/core/settings.py:46`、`loadtest/scenario_a.js`。
 
 | 正式結果 | 第 1 輪 | 第 2 輪 |
 |---|---|---|
@@ -43,8 +43,8 @@
 | 閘道與客戶端異常 | 104,136 筆立即回 502，access log 的 upstream 欄位只有群組名 `api`（沒有可用副本） | 502、500 各 0。k6 逾時 6 筆，nginx 均記為付款請求 499 |
 | k6 `unexpected_errors` | 106,186 筆（48.70%） | 6 筆（約 0.00445%） |
 | 成功鎖位 | k6 新建 4,228 筆，另有 8 筆成功重放，合計 4,236 筆建單 201 | k6 新建 4,538 筆。nginx 建單 201 共 4,610 筆，含 72 筆重放驗證回應 |
-| 冪等重放 | 68 筆中 60 筆遭拒（53 筆 503、7 筆 502），其餘 8 筆均回原訂單 | 發起 89 筆，72 筆收到回應且驗證正確（72/72）。17 筆用完 10 次嘗試仍遭拒 |
-| 正式判定 | **FAILED**。k6 非預期錯誤率與重放查核未達門檻，SQL 回報付款待辦滯留 | **FAILED**。`replay_unverified` 與 `unexpected_errors` 未達門檻。失敗項為過載拒絕與逾時，已收到的重放均正確 |
+| 冪等重放 | 68 筆中 60 筆遭拒（53 筆 503、7 筆 502），其餘 8 筆均回原訂單 | 抽樣 89 筆：72 筆回傳原訂單（驗證正確，72/72），17 筆用完 10 次嘗試仍收到過載回應（503），列為未驗證 |
+| 正式判定 | **FAILED**。k6 非預期錯誤率與重放查核未達門檻，SQL 回報付款待辦滯留 | **FAILED**。k6 門檻 `replay_unverified`、`unexpected_errors` 未達，runner 另因重放開始 89 筆、驗證 72 筆不相等而判定失敗（[執行紀錄](docs/evidence/loadtest-run2-20261121/run-log.txt)）。失敗項皆為過載拒絕與 6 筆逾時；驗證到的重放全部正確 |
 
 吞吐與 k6 延遲取自 `http_reqs`、`http_req_duration`。nginx 延遲以 access log 的請求時間計算。第 1 輪 502 與重放拒絕的細項見 Git 紀錄 `b117cbb`、`d651c32`。[第 1 輪 k6](docs/evidence/loadtest-run1-20261121/a/k6-summary.json) · [第 2 輪 k6](docs/evidence/loadtest-run2-20261121/a/k6-summary.json) · [第 2 輪 nginx](docs/evidence/loadtest-run2-20261121/a/nginx-summary.txt)
 
@@ -58,11 +58,11 @@
 
 [第 1 輪最終狀態](docs/evidence/loadtest-run1-20261121/a/final-state.txt) · [第 2 輪最終狀態](docs/evidence/loadtest-run2-20261121/a/final-state.txt) · [一致性檢查](#6-一致性檢查)
 
-**筆電壓測**　3,000 VUs 在 2 核心／4 執行緒機器上把 CPU 壓滿，產壓端與服務互相爭用。大多數請求快速收到 `503 server-busy`，或在客戶端 timeout。總吞吐約 **86–95 req/s**，SQL mean 約 **35–170 ms**，同機 CPU 競爭明顯。一致性檢查未發現超賣。筆電試跑僅有摘要。
+**筆電壓測**　3,000 VUs 在 2 核心／4 執行緒機器上把 CPU 壓滿，產壓端與服務互相爭用。大多數請求快速收到 `503 server-busy`，或在客戶端 timeout。總吞吐約 **86–95 req/s**，同機 CPU 競爭明顯（當時以 `pg_stat_statements` 觀察到 SQL 平均約 35–170 ms，未留存原始輸出）。一致性檢查未發現超賣。筆電試跑僅有摘要。
 
 ## 3. Scenario B
 
-**參數與流量（第 2 輪腳本）**　對同一活動預建 2,000 個獨立 session。SSE client 依可見 CPU 數啟動最多 8 個程序，各自先取得一份起始快照，所有連線在前 10 秒均勻啟動，並維持每第十條為慢速讀取。Runner 最多等 80 秒達成 2,000 條同時連線，達標後由 4 個 writer worker 以總目標 100 seat changes/s 寫入 55 秒。至少量測 80 秒，並於 writer 結束後最多再等 20 秒排空。第 1 輪使用 `B_RATE=300`。各 writer worker 在不重疊的範圍切換座位狀態與版本，走正式 transactional outbox。累積量、速度、連線及最終比對都從工具實際輸出擷取。見 `loadtest/run.sh`、`loadtest/scenario_b_writer.py`、`loadtest/sse_client.py`。
+**參數與流量（第 2 輪腳本）**　對同一活動預建 2,000 個獨立 session。SSE client 依可見 CPU 數啟動最多 8 個程序，各自先取得一份起始快照，所有連線在前 10 秒均勻啟動，並維持每第十條為慢速讀取。Runner 最多等 80 秒達成 2,000 條同時連線，達標後由 4 個 writer worker 以總目標 100 seat changes/s 寫入 55 秒。量測窗口 80 秒；窗口與 writer 都結束後，最多再等 20 秒排空。第 1 輪使用 `B_RATE=300`。各 writer worker 在不重疊的範圍切換座位狀態與版本，走正式 transactional outbox。累積量、速度、連線及最終比對都從工具實際輸出擷取。見 `loadtest/run.sh`、`loadtest/scenario_b_writer.py`、`loadtest/sse_client.py`。
 
 | 正式結果 | 第 1 輪 | 第 2 輪 |
 |---|---:|---:|
@@ -152,7 +152,7 @@ docker compose exec -T postgres psql -XAt -U ticketing -d ticketing \
 | 情境 | 觀察與正式量測判讀 |
 |---|---|
 | A 筆電壓測 | 筆電 CPU 飽和，k6 與 nginx、API、PostgreSQL 等服務共享 CPU。SQL mean 上升，503 和 timeout 主導結果。程式在 pool acquire、鎖及查詢逾時時會提早回可重試 503。試跑的總 RPS 反映這台機器上的混合結果。見 `backend/src/ticketing/core/db.py:39`、`backend/src/ticketing/booking/database.py:15`。 |
-| A 桌機 | 第 2 輪 p50 約 1 秒，與連線池取用上限相符。滿載請求等待 DB pool，取用逾時即回可重試的 503。壓測期間 `docker stats` 顯示 3 個單程序 API 副本各約 105% CPU（各用滿 1 核心），PostgreSQL 約 155%、k6 約 125%（主機 12 執行緒），API 程序 CPU 是主要瓶頸，PostgreSQL 仍有餘裕。管理後台截圖可見 HTTP 流量、延遲、錯誤率與連線數。見 `backend/src/ticketing/core/settings.py:34`、`backend/src/ticketing/core/db.py:48`。[第 2 輪秒級監控](docs/evidence/loadtest-run2-20261121/a/metrics_1s.csv) · [壓測中監控畫面](docs/screenshots/11-monitoring-under-load.png) |
+| A 桌機 | 第 2 輪 p50 約 1 秒，與連線池取用上限相符。滿載請求等待 DB pool，取用逾時即回可重試的 503。壓測期間 `docker stats`（[擷圖](docs/evidence/loadtest-run2-20261121/docker-stats-during-a.png)）顯示 3 個單程序 API 副本各約 105% CPU（各用滿 1 核心），PostgreSQL 約 155%、k6 約 125%（主機 12 執行緒），據此研判 API 程序 CPU 是主要瓶頸、PostgreSQL 仍有餘裕（單一時點擷圖，非持續量測；以增加 API 副本重跑可直接驗證）。管理後台截圖可見 HTTP 流量、延遲、錯誤率與連線數。見 `backend/src/ticketing/core/settings.py:34`、`backend/src/ticketing/core/db.py:48`。[第 2 輪秒級監控](docs/evidence/loadtest-run2-20261121/a/metrics_1s.csv) · [壓測中監控畫面](docs/screenshots/11-monitoring-under-load.png) |
 | B 桌機 | 第 1 輪單程序 client 飽和，服務端 session 重驗失敗也造成整批斷線。第 2 輪仍有進度停滯觸發重連，但最終全部對上 DB，outbox 待編序與 archive 差異均為 0。見 `backend/src/ticketing/realtime/reader.py:161`、`backend/src/ticketing/realtime/revocation.py:101`。[第 1 輪 SSE client](docs/evidence/loadtest-run1-20261121/b/sse-client.txt) · [第 2 輪 SSE client](docs/evidence/loadtest-run2-20261121/b/sse-client.txt) |
 | 座位匯入／Excel 匯出 | 匯入計時含背景作業與回報。Excel 在同機實測已完成，`memory.current` 的峰值接近上限，同時可見大量可回收 page cache。更高磁碟 I/O 或與其他流量共用資源時的影響尚待量測。 |
 
