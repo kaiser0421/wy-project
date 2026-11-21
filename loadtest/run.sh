@@ -180,8 +180,7 @@ service_logs() {
   mkdir -p "$OUT/logs" || return 0
   local svc keep
   for svc in api worker relay collector paymock nginx redis; do
-    # Backend services log events, not every request (per-request data is in the nginx access
-    # log with request_id), so their logs are small enough to keep whole.
+    # Allow more lines for backend service logs, including API request.completed records.
     keep=300
     case $svc in api|worker|relay|collector) keep=20000 ;; esac
     with_deadline 60 docker compose logs --no-color --since "$RUN_STARTED" --tail "$keep" "$svc" 2>&1 \

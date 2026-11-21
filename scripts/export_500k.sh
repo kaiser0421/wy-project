@@ -9,8 +9,9 @@ import os
 import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from select import select
 from tempfile import TemporaryDirectory
 from threading import Event
 from time import monotonic
@@ -20,8 +21,11 @@ from openpyxl import load_workbook
 
 COMPOSE = ["docker", "compose"]
 ROWS = 500_000
+SAMPLER_TIMEOUT = 5
 CGROUP_SAMPLE = r"""
 cd /sys/fs/cgroup || exit 1
+read -r limit < memory.max || exit 1
+[ "$limit" = 536870912 ] || exit 1
 while IFS= read -r request; do
     read -r current < memory.current || exit 1
     anon=$(awk '$1 == "anon" {print $2}' memory.stat) || exit 1
@@ -36,25 +40,70 @@ def capture(args, **kwargs):
     return subprocess.check_output(args, text=True, **kwargs).strip()
 
 
+def sampler_command(replica):
+    return ["docker", "exec", "-i", replica, "sh", "-ec", CGROUP_SAMPLE]
+
+
+def parse_reading(output, replica):
+    fields = output.split()
+    if len(fields) != 3 or not all(field.isdigit() for field in fields):
+        raise RuntimeError(f"Cannot read cgroup v2 memory counters for {replica}")
+    return list(map(int, fields))
+
+
+@contextmanager
+def open_sampler(replica):
+    proc = subprocess.Popen(
+        sampler_command(replica), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    )
+    try:
+        yield proc
+    finally:
+        try:
+            proc.stdin.close()
+            proc.wait(timeout=SAMPLER_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            pass
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+            proc.stdout.close()
+
+
+def read_sample(proc, replica):
+    # Only one byte is ever outstanding on stdin. Read stdout without buffering
+    # so a partial line cannot take the read past its deadline.
+    os.write(proc.stdin.fileno(), b"\n")
+    deadline = monotonic() + SAMPLER_TIMEOUT
+    output = b""
+    while not output.endswith(b"\n"):
+        ready, _, _ = select([proc.stdout], [], [], max(0, deadline - monotonic()))
+        if not ready:
+            proc.kill()
+            proc.wait()
+            raise TimeoutError(f"Timed out reading cgroup v2 memory counters for {replica}")
+        chunk = os.read(proc.stdout.fileno(), 128)
+        if not chunk or len(output) + len(chunk) > 128:
+            raise RuntimeError(f"Invalid cgroup v2 sampler output from {replica}")
+        output += chunk
+    return parse_reading(output, replica)
+
+
 def download(client, event_id, target, replicas):
     peaks = {replica: [0, 0, 0] for replica in replicas}
     stop = Event()
     with ExitStack() as stack:
         samplers = {
-            replica: stack.enter_context(subprocess.Popen(
-                ["docker", "exec", "-i", replica, "sh", "-ec", CGROUP_SAMPLE],
-                text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            ))
+            replica: stack.enter_context(open_sampler(replica))
             for replica in replicas
         }
 
         def sample():
             for replica, proc in samplers.items():
-                proc.stdin.write("\n")
-                proc.stdin.flush()
-                reading = list(map(int, proc.stdout.readline().split()))
-                if len(reading) != 3:
-                    raise RuntimeError(f"Cannot read cgroup v2 memory counters for {replica}")
+                if stop.is_set():
+                    break
+                reading = read_sample(proc, replica)
                 peaks[replica] = [max(a, b) for a, b in zip(peaks[replica], reading, strict=True)]
 
         def monitor():
@@ -72,26 +121,38 @@ def download(client, event_id, target, replicas):
                     response.raise_for_status()
                     request_id = response.headers["x-request-id"]
                     for chunk in response.iter_bytes():
+                        if monitoring.done():
+                            monitoring.result()
                         output.write(chunk)
                 elapsed = monotonic() - start
             finally:
                 stop.set()
-                monitoring.result()
+            monitoring.result()
+        stop.clear()
         sample()
     return request_id, elapsed, peaks
 
 
-replicas = capture([*COMPOSE, "ps", "-q", "api"]).splitlines()
+replicas = capture([*COMPOSE, "ps", "-q", "api"], timeout=SAMPLER_TIMEOUT).splitlines()
 if not replicas:
     raise SystemExit("No running API containers found")
+for replica in replicas:
+    try:
+        reading = capture(sampler_command(replica), input="\n", timeout=SAMPLER_TIMEOUT)
+        parse_reading(reading, replica)
+    except (subprocess.SubprocessError, RuntimeError) as error:
+        raise SystemExit(
+            f"API container {replica} must expose readable cgroup v2 memory counters "
+            f"with memory.max=536870912: {error}"
+        ) from error
 origin = os.environ.get("EXPORT_ORIGIN")
 if not origin:
-    binding = capture([*COMPOSE, "port", "nginx", "8080"])
+    binding = capture([*COMPOSE, "port", "nginx", "8080"], timeout=SAMPLER_TIMEOUT)
     origin = f"http://127.0.0.1:{binding.rsplit(':', 1)[1]}"
 email, password = subprocess.check_output([
     "docker", "exec", replicas[0], "sh", "-c",
     'printf "%s\\n%s" "$SEED_ADMIN_EMAIL" "$SEED_ADMIN_PASSWORD"',
-], text=True).split("\n", 1)
+], text=True, timeout=SAMPLER_TIMEOUT).split("\n", 1)
 
 with httpx.Client(base_url=origin, headers={"Origin": origin}, timeout=330, trust_env=False) as client:
     login = client.post("/api/v1/auth/login", json={"email": email, "password": password})

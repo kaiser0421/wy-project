@@ -4,7 +4,7 @@
 
 - 預設帳號：Admin `admin@example.com`／`Admin#Dev2026!`、User `user@example.com`／`User#Dev2026!`、Viewer `viewer@example.com`／`Viewer#Dev2026!`。
 - 介面：`http://localhost:8080`；API 文件：`http://localhost:8080/api/docs`。
-- 測試：`make test`（全部）；單一測試可用 `uv run pytest -k <名稱>`（需測試用 PostgreSQL，見 README）。
+- 測試：`make test`（預設測試套件）；單一測試可用 `uv run pytest -k <名稱>`（需測試用 PostgreSQL，見 README）。
 - 狀態：✅ 已完成並有驗證；🔧 開發中。
 
 ---
@@ -50,8 +50,8 @@
 
 | # | 驗收條件 | 驗證方式 | 狀態 |
 |---|---|---|---|
-| 4.1 | 所有端點有 OpenAPI 文件（摘要、說明、參數、回應、錯誤碼、權限） | `/api/docs`；`test_openapi_covers_each_operation` | ✅ |
-| 4.2 | API 錯誤一律 RFC 9457 problem+json，含 `code`、`retryable`、`request_id`（例外：`/healthz/ready` 的 503 回傳供容器健康檢查判讀的診斷 JSON） | `test_problem_error_is_rfc9457`、`test_not_found_is_problem_json` | ✅ |
+| 4.1 | 票務 API 的 39 個 operations（含健康檢查）皆收錄於 `docs/openapi.json`（摘要、說明、參數、回應、錯誤碼、權限） | `/api/docs`；`test_openapi_covers_each_operation` | ✅ |
+| 4.2 | 票務 API 錯誤回傳 RFC 9457 problem+json，含 `code`、`retryable`、`request_id`（例外：`/healthz/ready` 的 503 回傳供容器健康檢查判讀的診斷 JSON） | `test_problem_error_is_rfc9457`、`test_not_found_is_problem_json` | ✅ |
 | 4.3 | 會產生副作用、客戶端可能重送的寫入（下單、付款、取消訂單）必須帶 Idempotency-Key，重送取得原結果；活動、使用者的更新與發布以 ETag／If-Match 防止互相覆蓋（建立活動不使用冪等鍵，重送會建立另一份草稿） | `test_idempotency_contention_and_canonical_replay`、`test_if_match_is_required_and_checked` | ✅ |
 | 4.4 | 版控的 `docs/openapi.json` 與程式產生的一致 | `test_openapi_export_matches_the_application` | ✅ |
 
@@ -76,8 +76,8 @@
 | 5.2.5 | 草稿／已發布：草稿可匯入座位；發布後在開賣時間內才能購買，時間外下單被拒 | `test_lifecycle_and_concurrent_patch`、訂票測試的開賣時窗案例 | ✅ |
 | 5.2.6 | 匯入支援 CSV 與 JSON，欄位 `zone_code,row_label,seat_number` | samples 匯入成功；`test_parser.py` | ✅ |
 | 5.2.7 | 單檔上限 20 MB、100,000 列；超過即拒絕 | `test_upload_byte_cap_and_worker_row_cap` | ✅ |
-| 5.2.8 | 100,000 列在 60 秒內完成（CSV 與 JSON 各自） | `test_import_100k_under_60s`：CSV 11.38 秒、JSON 13.46 秒（[證據](evidence/import-100k.md)） | ✅ |
-| 5.2.9 | 匯入在背景執行，使用者即時看到進度 | Organizer 匯入時的進度條（前端輪詢 job 狀態並顯示目前階段；另有 `/seat-imports/{id}/stream` 供 SSE 訂閱）；`test_imports.py` | ✅ |
+| 5.2.8 | 100,000 列在 60 秒內完成（CSV 與 JSON 各自） | `test_import_100k_under_60s`：CSV 15.14 秒、JSON 15.35 秒（2026-11-22，閒置開發筆電，目前程式）（[證據](evidence/import-100k.md)） | ✅ |
+| 5.2.9 | 匯入在背景執行，使用者即時看到進度 | Organizer 匯入時的進度條（前端輪詢 job 狀態並顯示目前階段；另有 `GET /api/v1/seat-imports/{job_id}/stream` 供 SSE 訂閱）；`test_imports.py` | ✅ |
 | 5.2.10 | `all_or_nothing`（預設）有任一錯誤即全部不寫；`skip_invalid` 只寫有效列 | `test_imports.py`；README 範例預期結果 | ✅ |
 | 5.2.11 | 錯誤報告含原始列號（CSV 含表頭、JSON 對應實體行）與錯誤原因，可下載 | `test_csv_multiline_record_reports_physical_line`、`test_json_line_numbers_match_physical_source` | ✅ |
 | 5.2.12 | 同活動重複上傳相同內容的檔案，回傳既有 job（200），不重複匯入 | `test_duplicate_upload_and_publish_serialize` | ✅ |
@@ -134,7 +134,7 @@
 |---|---|---|---|
 | 6.1 | 有自動化**單元測試** | `backend/tests/unit/`（pytest）；前端 `frontend/tests/*.test.ts`（Vitest） | ✅ |
 | 6.2 | 有自動化**整合測試**，且使用與正式相同的資料庫 | `backend/tests/integration/`、`booking/`、`payments/`、`events/`、`imports/`、`realtime/`、`reports/`、`telemetry/`、`authz/`：pytest + httpx（直接打 FastAPI 應用）+ **PostgreSQL 16**（與正式相同映像）+ Redis 7；每個測試從 migrate 後的 template 複製獨立資料庫 | ✅ |
-| 6.3 | 一行指令執行全部測試 | `make test`（Docker 內：Ruff、mypy、import 規則、後端單元與整合、前端 lint／型別／Vitest／Playwright） | ✅ |
+| 6.3 | 一行指令執行預設測試套件 | `make test`（Docker 內：Ruff、mypy、import 規則、後端單元與整合、前端 lint／型別／Vitest／預設 Playwright）。[經 nginx 的端到端流程](../README.md#測試與實測)另行執行。大型 Excel 匯出另有 [opt-in 環境設定](../backend/tests/reports/test_export_memory.py#L1)與指令 `uv run pytest -s -m slow backend/tests/reports/test_export_memory.py`。 | ✅ |
 | 6.4 | 併發測試證明大量同時請求下仍正確 | `test_specific_seat_races`（200 人搶同一座位）、`test_quota_race`、`test_zone_converges`、`test_break_it` | ✅ |
 | 6.5 | 壓測 A：10,000 席、3,000 VU、60 秒 | [LOADTEST §2](../LOADTEST.md)、證據 `docs/evidence/loadtest-run2-20261121` | ✅ |
 | 6.6 | 壓測 B：2,000 條即時連線同時訂閱同一活動 | [LOADTEST §3](../LOADTEST.md)：寫入期間 2,000 條、2,000／2,000 與資料庫一致 | ✅ |

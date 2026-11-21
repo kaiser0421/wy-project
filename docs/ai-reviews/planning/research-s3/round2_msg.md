@@ -22,7 +22,7 @@ D. Pagination. Materializing the ordered ID list per query (Redis, TTL) feels he
    - cursor carries snapshot_ts = DB now() at page 1 and is HMAC-signed with filters/sort/subject.
    - Allowed sorts: created_at (immutable), sales_start_at, title. For immutable sort: keyset `(created_at,id) > (...)` AND `created_at <= snapshot_ts` → inserts after page 1 are excluded (no dup/omission). Late-commit insert with created_at < snapshot_ts can appear in a later page: it's a new row not in page-1 view, so appearing = "extra", not duplicate/omission. Acceptable?
    - For mutable sort keys (sales_start_at, title) and mutable filters (status, category): updates between pages can cause a dup or a skip. Options: (i) make them immutable after publish (sales_start can't change after publish? unrealistic), (ii) materialize ID snapshot only for mutable sort (cap 10k ids, 10 min TTL), (iii) temporal table events_history and query "AS OF snapshot_ts" (WHERE valid_from <= ts < valid_to) — heavy.
-   Which do you recommend for a take-home graded on correctness + clarity? I lean: keyset on (created_at,id) default + snapshot_ts; for mutable sorts store a versioned row history? or (ii)?
+   Which do you recommend when correctness and clarity are the priorities? I lean: keyset on (created_at,id) default + snapshot_ts; for mutable sorts store a versioned row history? or (ii)?
 
 E. Argon2id: RFC 64MiB/p=4 × concurrent logins in a 512MB container is dangerous. Plan: m=19MiB t=2 p=1 (OWASP minimum) + asyncio.Semaphore(4) per replica dedicated thread pool → max 76 MiB; login beyond capacity gets 503 + Retry-After quickly rather than queuing. Benchmark target 30–60 ms/hash. OK?
 

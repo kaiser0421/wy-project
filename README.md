@@ -78,9 +78,9 @@ SELECT ts, source, req_total, p95_ms FROM metrics_1s WHERE scope = 'all' ORDER B
 
 | 層級 | 實作 |
 | --- | --- |
-| 前端 | TypeScript SPA、Vite、Canvas 座位圖、uPlot 監控圖表。見 `frontend/package.json:6`、`frontend/src/seat-canvas.ts:8`。 |
-| 應用 | Python 3.12、FastAPI、Uvicorn、Pydantic、asyncpg、Alembic、Argon2id、XlsxWriter。見 `backend/pyproject.toml:5`。 |
-| 資料 | PostgreSQL 16 保存座位、訂單、session 與監控資料。Redis 7 提供限流、Pub/Sub、遙測 stream 與背景心跳。模擬金流以 SQLite 保存付款與回呼佇列。見 `compose.yaml:55`、`compose.yaml:80`、`paymock/src/paymock/main.py:86`。 |
+| 前端 | TypeScript SPA、Vite、Canvas 座位圖、uPlot 監控圖表。見 `frontend/package.json:15–28`、`frontend/src/seat-canvas.ts:22`。 |
+| 應用 | Python 3.12、FastAPI、Uvicorn、Pydantic、asyncpg、Alembic、Argon2id、XlsxWriter。見 `backend/pyproject.toml:5–20`。 |
+| 資料 | PostgreSQL 16 保存座位、訂單、session 與監控資料。Redis 7 提供限流、Pub/Sub、遙測 stream 與背景心跳。模擬金流以 SQLite 保存付款與回呼佇列。見 `compose.yaml:55`、`compose.yaml:80`、`paymock/src/paymock/store.py:17–31`。 |
 | 部署與驗證 | Docker Compose、nginx 1.30、pytest、Vitest、Playwright、k6 與 Python SSE client。見 `infra/nginx/Dockerfile:12`、`compose.test.yaml:41`、[壓測工具包](loadtest/README.md)。 |
 
 ## 本機開發
@@ -95,7 +95,7 @@ make lint typecheck
 
 `make lint` 另以 Docker 執行 ShellCheck（首次會下載映像檔）。
 
-用 Node.js 22 開發 UI。以下方式將 Compose nginx 移到 host port 8081，讓 Vite 以預設允許的瀏覽器 Origin `http://localhost:8080` 開發，並將 `/api`、`/pay/` 代理回 Compose。見 `frontend/vite.config.ts:3`、`backend/src/ticketing/core/settings.py:45`、`backend/src/ticketing/api/security.py:80`。
+用 Node.js 22 開發 UI。以下方式將 Compose nginx 移到 host port 8081，讓 Vite 以預設允許的瀏覽器 Origin `http://localhost:8080` 開發，並將 `/api`、`/pay/` 代理回 Compose。見 `frontend/vite.config.ts:3`、`backend/src/ticketing/core/settings.py:45`、`backend/src/ticketing/api/security.py:80–86`。
 
 ```bash
 HTTP_PORT=8081 docker compose up -d --build
@@ -113,7 +113,7 @@ uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.csv --zone A
 uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.json --zone A
 ```
 
-每個檔案與模式各用一個尚無座位、只含區域 `A` 的草稿活動驗證。上傳後查看匯入作業狀態與錯誤報告。
+每個檔案與模式各用一個尚無座位、只含區域 `A` 的草稿活動驗證。介面先顯示「上傳座位檔案…」，再輪詢匯入作業，顯示「等待匯入…」、「解析座位檔案…」、「驗證座位…」與「寫入座位…」。完成後可查看作業結果及錯誤報告。
 
 | 檔案 | `all_or_nothing` | `skip_invalid` |
 |---|---|---|
@@ -122,7 +122,7 @@ uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.json --zone A
 | [seats_invalid.csv](samples/seats_invalid.csv) | `validation_failed`，新增 0 席，6 列錯誤 | `partially_succeeded`，新增 `A/R1/1`，6 列錯誤 |
 | [seats_duplicates.json](samples/seats_duplicates.json) | `validation_failed`，新增 0 席，2 列錯誤 | `partially_succeeded`，新增 `A/R1/2`，2 列錯誤 |
 
-重複座位以區域和排號的大寫值及去除前導零的座號比對，同組每列均標記為錯誤。見 `backend/src/ticketing/imports/validation.py:11`、`backend/src/ticketing/imports/runner.py:225`。
+重複座位以區域和排號的大寫值及去除前導零的座號比對，同組每列均標記為錯誤。見 `backend/src/ticketing/imports/validation.py:17–28`、`backend/src/ticketing/imports/runner.py:145`。
 
 ## 測試與實測
 
@@ -137,7 +137,7 @@ uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.json --zone A
 | 瀏覽器測試 | Playwright（Chromium） | `frontend/tests/e2e/` | 介面流程；另有經 nginx 的整合版本 |
 | 端到端流程 | Python 腳本 | `scripts/e2e_flow.py` | 經 nginx 跑完建活動、匯入、發布、鎖位、付款回呼、報表、日誌追查（CI 也會執行） |
 
-`make test` 一行指令在 Docker 內執行單元、整合、併發、前端單元與預設的瀏覽器測試（後端約 230 個、前端約 60 個）；經 nginx 的端到端流程與 nginx 版 Playwright 需先啟動整套服務，另行執行（CI 會在 smoke 後執行端到端流程）。逐條驗收條件與對應測試見 [驗收條件](docs/ACCEPTANCE.md)。
+`make test` 一行指令在 Docker 內執行單元、整合、併發、前端單元與預設的瀏覽器測試。整合驗證紀錄為後端 pytest 242 項（含單元、PostgreSQL／Redis 整合及併發測試）與前端 Vitest 58 項通過。經 nginx 的端到端流程與 nginx 版 Playwright 需先啟動整套服務，另行執行（CI 會在 smoke 後執行端到端流程）。逐條驗收條件與對應測試見 [驗收條件](docs/ACCEPTANCE.md)。
 
 
 成功與失敗的標準、各輪逐條結果與擴容對照見 [壓測結論與結果總表](LOADTEST.md#一結論)。
@@ -164,17 +164,17 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 
 併發測試包含指定座位、區域配位與同一使用者的限購競爭。破壞驗證會抓到同一座位有多筆 active claim。見 `backend/tests/booking/test_booking.py:46`、`backend/tests/booking/test_booking.py:67`、`backend/tests/booking/test_booking.py:91`、`backend/tests/booking/test_booking.py:106`、[破壞驗證輸出](docs/evidence/break-it.txt)。
 
-- 壓測以 `loadtest/run.sh smoke` 試跑，以 `loadtest/run.sh all` 執行情境 A（10,000 席、3,000 VUs、60 秒及一致性檢查）與 B（2,000 條 SSE）。見 `loadtest/run.sh:21`。參數與輸出格式見 [壓測工具包](loadtest/README.md)，報告見 [LOADTEST.md](LOADTEST.md)。
+- 請在可拋棄的 Compose 堆疊壓測。以 `loadtest/run.sh smoke` 試跑，以 `loadtest/run.sh all` 執行情境 A（10,000 席、3,000 VUs、60 秒及一致性檢查）與 B（2,000 條 SSE）。見 `loadtest/run.sh:234–236`。參數與輸出格式見 [壓測工具包](loadtest/README.md)，報告見 [LOADTEST.md](LOADTEST.md)。
 - **正式 Scenario A**。第 2 輪共 134,801 次 HTTP 請求、2,098 req/s，k6 p50／p95 為 1,043／2,036 ms，排空後占席 8,997／10,000。兩輪均未超賣，第 2 輪一致性 SQL 回傳 0 列。[第 1 輪證據](docs/evidence/loadtest-run1-20261121/) · [第 2 輪證據](docs/evidence/loadtest-run2-20261121/) · [一致性檢查](LOADTEST.md#6-一致性檢查)
 - **正式 Scenario B**。第 2 輪目標 100 changes/s，寫入期間同時 SSE 峰值 2,000，最終 2,000／2,000 個 client 與 DB 相符。[SSE 原始輸出](docs/evidence/loadtest-run2-20261121/b/sse-client.txt) · [壓測中管理後台監控](docs/screenshots/11-monitoring-under-load.png)
-- 匯入 10,000 列的 API 實測為 3.3 秒。100,000 列從上傳到完成，CSV 11.38 秒、JSON 13.46 秒（開發筆電，門檻 60 秒，`test_import_100k_under_60s`）。見 [10 萬列匯入實測](docs/evidence/import-100k.md)、`backend/tests/imports/test_import_perf.py:16`。
+- 匯入 10,000 列的 API 實測為 3.3 秒。100,000 列從上傳到完成，CSV 15.14 秒、JSON 15.35 秒（2026-11-22，閒置開發筆電，目前程式，門檻 60 秒，`test_import_100k_under_60s`）。見 [10 萬列匯入實測](docs/evidence/import-100k.md)、`backend/tests/imports/test_import_perf.py:17–36`。
 - 在 512 MiB 上限的 API 容器匯出 500,000 筆訂單，首次下載完成為 217.3 秒，`anon` 取樣峰值約 108 MiB，三個副本均無 OOM。見 [Excel 匯出實測紀錄](docs/evidence/cp4-excel-500k.md)。
 
-在已啟動、可拋棄的 Compose 測試堆疊執行 `./scripts/export_500k.sh`，即可新增一個含 500,000 筆合成訂單的活動，以 Admin 經 nginx 下載報表，並用 openpyxl 唯讀模式驗證筆數。腳本會留下 `sales-500k-<活動 ID>.xlsx`，並列出下載耗時及各 API 容器的記憶體峰值。需安裝 uv，且 Docker 主機須支援 cgroup v2。若 nginx 使用自訂網址，可設定 `EXPORT_ORIGIN`。
+在已啟動、可拋棄的 Compose 測試堆疊執行 `./scripts/export_500k.sh`，即可新增一個含 500,000 筆合成訂單的活動，以 Admin 經 nginx 下載報表，並用 openpyxl 唯讀模式驗證筆數。腳本會留下 `sales-500k-<活動 ID>.xlsx`，並列出下載耗時及各 API 容器的記憶體峰值。需安裝 uv，且各 API 副本須能讀取 cgroup v2 記憶體計數器，並設 512 MiB 上限。若 nginx 使用自訂網址，可在 shell 設定 `EXPORT_ORIGIN`，並透過 Compose override 將同一 Origin 加入 API 服務的 `ALLOWED_ORIGINS` 以允許登入。
 
 ## API 與架構
 
-- API 文件可查 [Swagger UI](http://localhost:8080/api/docs)、[執行中 OpenAPI JSON](http://localhost:8080/api/openapi.json) 或 [repo 內的 OpenAPI JSON](docs/openapi.json)。見 `backend/src/ticketing/api/app.py:328`。
+- API 文件可查 [Swagger UI](http://localhost:8080/api/docs)、[執行中 OpenAPI JSON](http://localhost:8080/api/openapi.json) 或 [repo 內的 OpenAPI JSON](docs/openapi.json)。見 `backend/src/ticketing/api/app.py:341–345`。
 - 系統圖涵蓋服務拓撲、訂票交易、座位 SSE、金流與監控。[架構 Markdown](docs/architecture.md) · [架構 HTML](docs/architecture.html)（透過 jsDelivr 載入 Mermaid，需網路連線）。
 - Q1–Q6 與驗證方式見 [DESIGN.md](DESIGN.md)。
 
@@ -182,12 +182,12 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 
 | Compose 服務 | 副本 | 容器 port | 預設 host 綁定 | 功能與設定位置 |
 | --- | ---: | --- | --- | --- |
-| `nginx` | 1 | 8080 | `127.0.0.1:8080` | 靜態 UI、API／SSE、付款頁入口。 `compose.yaml:215` |
+| `nginx` | 1 | 8080 | `127.0.0.1:8080` | 靜態 UI、API／SSE、付款頁入口。 `compose.yaml:219`、`compose.yaml:231` |
 | `api` | 3 | 8000 | — | REST、SSE、Excel，每副本 512 MiB。 `compose.yaml:120`、`compose.yaml:122` |
 | `worker` | 1 | — | — | 匯入、鎖位逾時、付款對帳、退款、取消。 `compose.yaml:138` |
-| `relay` | 1 | — | — | 指派座位 outbox 序號並寫入 `seat_events`。 `compose.yaml:153` |
-| `collector` | 1 | — | — | 收集日誌、指標及告警。 `compose.yaml:168` |
-| `paymock` | 1 | 8000 | — | 模擬金流、付款頁與簽章回呼。 `compose.yaml:187` |
+| `relay` | 1 | — | — | 指派座位 outbox 序號並寫入 `seat_events`。 `compose.yaml:157` |
+| `collector` | 1 | — | — | 收集日誌、指標及告警。 `compose.yaml:172` |
+| `paymock` | 1 | 8000 | — | 模擬金流、付款頁與簽章回呼。 `compose.yaml:191` |
 | `postgres` | 1 | 5432 | `127.0.0.1:5432` | PostgreSQL 16。 `compose.yaml:52` |
 | `redis` | 1 | 6379 | `127.0.0.1:6379` | Redis 7。 `compose.yaml:77` |
 | `migrate` | 1（一次性） | — | — | 執行 Alembic migration。 `compose.yaml:93` |
@@ -212,7 +212,7 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 
 ## 已知問題與未完成項目
 
-- **壓測資料留在資料庫**。`loadtest/run.sh` 在同一個資料庫建立壓測活動與 session；情境 B 的寫入程式直接切換座位狀態以模擬變化，會留下沒有訂單的「held」座位。正式資料請在可拋棄的環境壓測，或壓測後執行 `docker compose down -v` 重建。
+- **壓測資料留在資料庫**。`loadtest/run.sh` 在同一個資料庫建立壓測活動與 session；情境 B 的寫入程式直接切換座位狀態以模擬變化，會留下沒有訂單的「held」座位。請在可拋棄的 Compose 堆疊執行壓測。只可對該可拋棄專案執行 `docker compose down -v`，此指令會刪除該專案的所有資料 volumes，包含 PostgreSQL、Redis、金流與共用檔案。
 - **`/healthz/ready` 失敗回應**。就緒探針回 503 時附帶診斷用的 JSON（各相依元件狀態），不是 problem+json，供容器健康檢查與維運判讀。
 - **服務日誌檔的保留**。各服務寫入共用目錄的 JSON 日誌檔由 collector 讀取入庫，容器 stdout 有輪替，但這些檔案本身不會自動輪替刪除；長時間或大量壓測後需手動清理（資料庫中的日誌依分區保留）。
 - **Admin 全站訂單翻頁**。以訂單建立時間與 ID 作 keyset 分頁；翻頁期間若有較早取得 ID、較晚才提交的訂單，可能落在已翻過的範圍而未顯示，或出現在後面的頁次；重新從第一頁查詢即可看到正確結果。
@@ -223,6 +223,6 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 - **正式 Scenario B 重連與尾端延遲**。第 2 輪所有 client 最終與 DB 相符，壓測 client 仍頻繁因進度停滯而重連，delta 套用 p99 為 16,600 ms。[正式結果](LOADTEST.md#3-scenario-b)
 - **筆電壓測**。在 2 核心／4 執行緒的 MacBook 上，3,000 VUs 與服務同機造成 CPU 飽和。多數請求收到快速的 `503 server-busy` 或 client timeout，約 86–95 req/s，SQL 平均耗時受競爭影響約 35–170 ms。該次一致性檢查未發現超賣。
 - **大型 Excel 匯出耗時**。兩次下載約 217–237 秒，nginx 報表路徑的讀取逾時為 300 秒。見 `infra/nginx/nginx.conf:151`、[Excel 匯出實測紀錄](docs/evidence/cp4-excel-500k.md)。
-- **固定 Docker 子網**。Compose 網路使用 `172.28.0.0/24`，nginx 固定在 `172.28.0.200`，讓 API 只信任 nginx 轉送的 client IP。若本機已有網路使用同一段位址，`docker compose up` 會回報 `Pool overlaps with other one on this address space`，需先移除該網路（例如舊的堆疊執行 `docker compose down`）。見 `compose.yaml:10`、`compose.yaml:224`、`compose.yaml:244`。
+- **固定 Docker 子網**。Compose 網路使用 `172.28.0.0/24`，nginx 固定在 `172.28.0.200`，讓 API 只信任 nginx 轉送的 client IP。若本機已有網路使用同一段位址，`docker compose up` 會回報 `Pool overlaps with other one on this address space`，需先移除該網路（例如舊的堆疊執行 `docker compose down`）。見 `compose.yaml:10`、`compose.yaml:228`、`compose.yaml:248`。
 - **告警演練**。停掉 relay 後觸發服務中斷告警並顯示在 Admin 監控頁，恢復後自動 resolved。見 [告警演練紀錄](docs/evidence/alert-drill-20261121/README.md)。
-- **監控可見性**。極晚到達的 nginx 日誌仍可依 `request_id` 查到，但可能超出每秒指標的回填窗口。Collector 也從共用目錄收集 paymock 的請求處理與回呼傳送日誌，供管理後台依 `request_id` 查詢。見 `backend/src/ticketing/telemetry/logs.py:76`、`compose.yaml:180`、`compose.yaml:203`、[監控資料契約](backend/src/ticketing/telemetry/README.md)。
+- **監控可見性**。極晚到達的 nginx 日誌仍可依 `request_id` 查到，但可能超出每秒指標的回填窗口。Collector 也從共用目錄收集 paymock 的請求處理與回呼傳送日誌，供管理後台依 `request_id` 查詢。見 `backend/src/ticketing/telemetry/logs.py:253–258`、`backend/src/ticketing/api/routes/monitoring.py:707–736`、`compose.yaml:184`、`compose.yaml:204–207`、[監控資料契約](backend/src/ticketing/telemetry/README.md)。

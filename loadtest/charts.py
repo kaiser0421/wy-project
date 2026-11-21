@@ -45,27 +45,29 @@ def seats(run: Path) -> dict[str, int]:
 
 def chart_outcomes() -> None:
     """Scenario A: what happened to the requests, per run."""
-    labels, ok, conflict, busy, error = [], [], [], [], []
+    labels, answered, conflict, busy, error = [], [], [], [], []
     for name, run in RUNS.items():
         metrics = k6(run)
         total = metrics["http_reqs"]["count"]
         busy_count = metrics.get("server_busy", {}).get("count", 0)
         conflicts = metrics.get("business_conflicts", {}).get("count", 0) - busy_count
-        # k6 counts every response outside the expected business outcomes (502s, 500s,
-        # client timeouts) as unexpected; use it for all runs so the bars add up to k6's total.
+        # Use the same counter for all runs. The residual is not an HTTP status tally.
         errors = metrics.get("unexpected_errors", {}).get("passes", 0)
+        residual = total - busy_count - conflicts - errors
+        if min(busy_count, conflicts, errors, residual) < 0:
+            raise ValueError(f"{name}: inconsistent k6 request totals")
         labels.append(name)
         busy.append(busy_count)
-        conflict.append(max(conflicts, 0))
+        conflict.append(conflicts)
         error.append(errors)
-        ok.append(max(total - busy_count - max(conflicts, 0) - errors, 0))
+        answered.append(residual)
     fig, ax = plt.subplots(figsize=(8, 3.6))
     left = [0] * len(labels)
     for values, key, text in (
-        (ok, "ok", "Answered (2xx)"),
+        (answered, "ok", "Answered (k6 residual)"),
         (conflict, "conflict", "Business 409"),
         (busy, "busy", "Shed: 503 server-busy"),
-        (error, "error", "Unexpected: 502/500/timeouts (k6)"),
+        (error, "error", "k6 unexpected_errors"),
     ):
         ax.barh(labels, values, left=left, color=COLORS[key], label=text)
         left = [a + b for a, b in zip(left, values, strict=True)]
@@ -128,7 +130,7 @@ def chart_timeline() -> None:
         start = datetime.fromisoformat(rows[0]["ts"])
         xs = [(datetime.fromisoformat(r["ts"]) - start).total_seconds() for r in rows]
         req = [int(r["req_total"]) for r in rows]
-        err = [100 * int(r["err_5xx"]) / max(int(r["req_total"]), 1) for r in rows]
+        err = [100 * int(r["err_5xx"]) / count for r, count in zip(rows, req, strict=True)]
         p95 = [float(r["p95_ms"]) / 1000 if r["p95_ms"] else None for r in rows]
         axes[0].plot(xs, req, color=color, label=name)
         axes[1].plot(xs, err, color=color, label=name)
@@ -136,7 +138,7 @@ def chart_timeline() -> None:
     axes[0].set_ylabel("Requests/s")
     axes[1].set_ylabel("5xx share (%)\n(nearly all 503 shed)")
     axes[2].set_ylabel("p95 latency (s)")
-    axes[2].set_xlabel("Seconds since the first request (nginx, stored per second in PostgreSQL)")
+    axes[2].set_xlabel("Seconds since the first nginx second with >100 requests")
     axes[0].set_title("Scenario A per second: 3 vs 6 API replicas")
     axes[0].legend(frameon=False)
     fig.tight_layout()

@@ -3,9 +3,11 @@
 | 指標 | 量測與時間窗口 | 保存 |
 | --- | --- | --- |
 | RPS | nginx 以 access log 的完成時間 `$msec` 計算 UTC 秒。API 以路由模板統計處理完成的請求。兩個來源都排除 SSE。 | `metrics_1s` 的 `req_total`，依來源與範圍查詢 |
-| 錯誤率 | 每秒的 4xx、5xx 與總請求數。監控 API 的錯誤率只計 5xx：`err_5xx / req_total`（4xx 是業務結果，例如限購或座位已被搶）。 | `metrics_1s` 計數與各 HTTP 狀態類別 |
-| p50、p95、p99 | nginx 的 `$request_time` 包含代理層延遲。應用層從 ASGI 進入到回應送出完成計時。 | `metrics_1s` 保存固定桶直方圖與 nearest-rank 估計值。跨來源或時間窗合併時逐桶加總，再重算百分位數。 |
+| 錯誤率 | 每秒的 4xx、5xx 與總請求數。監控 API 的錯誤率只計 5xx：`err_5xx / req_total`（4xx 另行計數，含客戶端錯誤及限購、座位已被搶等業務衝突）。 | `metrics_1s` 計數與各 HTTP 狀態類別 |
+| p50、p95、p99 | nginx 的 `$request_time` 包含代理層延遲。應用層從 ASGI 進入到回應送出完成計時。 | `metrics_1s` 保存固定桶直方圖與 nearest-rank 估計值。同一來源的副本或時間窗可逐桶加總並重算百分位數。Edge、App 各自計算。 |
 | 連線數 | collector 每秒探測 nginx `stub_status`。API SSE 連線數為近三秒內各副本最後一次 gauge 的加總。 | `metrics_1s` 的 `conns_active` 與 `conns_sse` |
+
+API 的背景日誌寫入器使用有界佇列。佇列滿時會直接丟棄並計數，請求永遠不等佇列空位。寫入器以 `service_logs.dropped` 記錄丟棄數。見 `backend/src/ticketing/core/logging.py:101`。
 
 nginx 晚到兩秒內的日誌會補入原秒。更晚的日誌仍可用 request ID 查詢。串流推送最近完成的秒，短時間的修正可從歷史查詢取得。每日分區依 UTC 切換，日誌、監控指標與座位事件分別保留 7、14、90 天。
 

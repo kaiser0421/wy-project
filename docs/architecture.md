@@ -21,6 +21,9 @@ flowchart TB
   Imports[("匯入檔 volume")]
   Exports[("Excel 暫存 volume")]
   Init["migrate → seed"]
+  Organizer["Organizer · 匯入進度"]
+  Staging["PostgreSQL · 每批 5,000 列 COPY staging<br/>同一交易提交 processed_rows 檢查點"]
+  Finalize["活動鎖內重驗 fence 與權限 · finalize"]
 
   Browser -->|"UI、REST、SSE、付款頁"| Edge
   Edge -->|"least_conn · X-Request-ID"| API
@@ -37,8 +40,12 @@ flowchart TB
   Worker -->|"匯入進度、心跳"| Redis
   Relay -->|"心跳"| Redis
   Collector <-->|"遙測、心跳、告警通知"| Redis
-  API --> Imports
-  Imports --> Worker
+  Organizer -->|"上傳座位檔"| Edge
+  Organizer -->|"定期 GET job 狀態"| Edge
+  Edge -->|"選用 job 進度 SSE"| Organizer
+  API -->|"保存上傳檔"| Imports
+  Imports --> Worker --> Staging --> Finalize
+  Finalize -->|"同時提交座位、outbox、job 結果"| DB
   API --> Exports
   Edge --> Logs
   API --> Logs
@@ -48,9 +55,10 @@ flowchart TB
   Edge -->|"stub_status"| Collector
 ```
 
-- PostgreSQL 保存座位、訂單、配額、session、匯入 job、outbox 與監控資料。nginx、PostgreSQL 與 Redis 的 host port 預設綁在 loopback。三個 API 副本各由一個 Uvicorn 程序處理 REST 與 SSE。見 `compose.yaml:52`、`compose.yaml:67`、`compose.yaml:85`、`compose.yaml:120`、`compose.yaml:227`、`backend/src/ticketing/api/main.py:36`。
+- PostgreSQL 保存座位、訂單、配額、session、匯入 job、outbox 與監控資料。nginx、PostgreSQL 與 Redis 的 host port 預設綁在 loopback。三個 API 副本各由一個 Uvicorn 程序處理 REST 與 SSE。見 `compose.yaml:52`、`compose.yaml:67`、`compose.yaml:85`、`compose.yaml:120`、`compose.yaml:231`、`backend/src/ticketing/api/main.py:36`。
 - `migrate` 以 schema owner 執行，`seed` 與 runtime 使用低權限角色。Worker 分別排程匯入、hold expiry、付款 reconciler 與 maintenance。見 `compose.yaml:7`、`compose.yaml:99`、`backend/src/ticketing/worker/main.py:20`。
-- Redis Pub/Sub 通知 API 有 session 撤銷與匯入進度變化，持久狀態由 PostgreSQL 提供。見 `backend/src/ticketing/auth/sessions.py:89`、`backend/src/ticketing/auth/sessions.py:134`、`backend/src/ticketing/imports/runner.py:269`、`backend/src/ticketing/api/routes/imports.py:191`。
+- Organizer 輪詢 `GET /api/v1/seat-imports/{job_id}`，也可另外訂閱 `GET /api/v1/seat-imports/{job_id}/stream`。租約重領後從已提交的列數檢查點接續，並保留已提交的解析結果與檔案驗證狀態。見 `backend/src/ticketing/api/routes/imports.py:137`、`backend/src/ticketing/api/routes/imports.py:208`、`backend/src/ticketing/imports/runner.py:331–394`。
+- Redis Pub/Sub 通知 API 有 session 撤銷與匯入進度變化，持久狀態由 PostgreSQL 提供。見 `backend/src/ticketing/auth/sessions.py:89`、`backend/src/ticketing/auth/sessions.py:134`、`backend/src/ticketing/imports/runner.py:323`、`backend/src/ticketing/api/routes/imports.py:188–204`。
 
 ## 2. 訂票交易
 
@@ -148,7 +156,8 @@ flowchart LR
   C["collector · tail、聚合、告警"]
   PG[("PostgreSQL · access_logs / service_logs<br/>metrics_1s / business_1s / alert_events")]
   R[("Redis Pub/Sub · admin:alerts")]
-  Admin["Admin · 即時圖表、告警、request_id 查詢"]
+  Admin["Admin · 監控與全站訂單"]
+  Orders[("PostgreSQL · orders")]
   Read["api · Admin 專用 REST / SSE"]
   N --> C
   S --> C
@@ -157,9 +166,12 @@ flowchart LR
   C -->|"分批入庫"| PG
   C -->|"告警狀態變化"| R
   PG -->|"查詢已保存的資料"| Read
-  Read -->|"metrics / alerts SSE · 日誌查詢"| Admin
+  Orders --> Read
+  Read -->|"metrics / alerts SSE"| Admin
+  Read -->|"All orders · Access log · Recent warnings and errors · Request trace"| Admin
 ```
 
 - Collector tail nginx 與共享目錄中的應用 JSON 日誌，COPY 與 checkpoint 在同一交易內完成。Edge RPS 與延遲依 nginx access log 分秒聚合，連線數來自 `stub_status`。應用遙測按 boot UUID 與 interval number 去重，入庫後才 ACK Redis stream。見 `backend/src/ticketing/telemetry/logs.py:266`、`backend/src/ticketing/telemetry/collector.py:153`、`backend/src/ticketing/telemetry/app_metrics.py:132`。
-- Admin 的 `/api/v1/admin/metrics/stream` 與 `/api/v1/admin/alerts/stream` 讀 PostgreSQL 快照。告警狀態變更另送 Redis 的 `admin:alerts`。`GET /api/v1/admin/requests/{request_id}/logs` 查找入口與關聯服務日誌。見 `backend/src/ticketing/telemetry/common.py:10`、`backend/src/ticketing/telemetry/collector.py:170`、`backend/src/ticketing/api/routes/monitoring.py:418`、`backend/src/ticketing/api/routes/monitoring.py:471`、`backend/src/ticketing/api/routes/monitoring.py:559`。
+- Admin 的 `/api/v1/admin/metrics/stream` 與 `/api/v1/admin/alerts/stream` 讀 PostgreSQL 快照。告警狀態變更另送 Redis 的 `admin:alerts`。`GET /api/v1/admin/requests/{request_id}/logs` 查找入口與關聯服務日誌。見 `backend/src/ticketing/telemetry/common.py:10`、`backend/src/ticketing/telemetry/collector.py:170`、`backend/src/ticketing/api/routes/monitoring.py:462`、`backend/src/ticketing/api/routes/monitoring.py:515`、`backend/src/ticketing/api/routes/monitoring.py:696`。
+- Admin 透過 `GET /api/v1/admin/orders` 讀全站訂單，透過 `GET /api/v1/admin/logs/access` 讀存取日誌，透過 `GET /api/v1/admin/logs/recent` 讀近期警告與錯誤。
 - 時鐘校正、保留期與缺測判讀見 [監控資料契約](../backend/src/ticketing/telemetry/README.md)。

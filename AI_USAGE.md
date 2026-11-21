@@ -19,8 +19,10 @@
 | 監控（指標、告警、日誌查詢） | Codex | Claude + Codex |
 | 前端（座位圖、監控頁、深色主題） | Codex | Claude + Codex |
 | Compose、nginx、基礎 schema（migration 0001）、驗證與授權、共用框架 | Claude | Codex |
-| 各功能的 migration（0002–0006） | Codex | Claude + Codex |
+| 各功能的 migration（早期分工，0002–0006） | Codex | Claude + Codex |
 | 測試、壓測工具、文件 | 兩者 | 兩者交叉 |
+
+目前 schema 共九個連續 revisions，從 `0001_baseline` 到 `0009_import_resume`。後續加入 `0007_admin_orders`、`0008_observability` 與 `0009_import_resume`。
 
 ## 2. 使用方式與把關
 

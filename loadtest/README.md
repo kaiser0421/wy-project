@@ -3,7 +3,7 @@
 ## 執行前提
 
 - 從 repository 根目錄使用 Git、Bash、Docker（含 Compose v2）與 `curl`。Python 工具在 API image 內執行，情境 A 的 k6 使用 `grafana/k6:0.57.0`。見 `loadtest/run.sh`。
-- 使用可拋棄的 Compose 堆疊。Runner 假設預設主辦人 `user@example.com`／`User#Dev2026!`、SQL 帳號及資料庫皆名為 `ticketing`、cookie 名為 `sid`，且允許 `http://localhost:8080` 作為 Origin。只改 Compose 的憑證設定無法改寫 runner 的固定值。見 `loadtest/run.sh`、`loadtest/prepare_a.py:42`、`loadtest/prepare_a.py:56`、`loadtest/prepare_a.py:116`、`loadtest/sse_client.py`。
+- 使用可拋棄的 Compose 堆疊。Runner 假設預設主辦人 `user@example.com`／`User#Dev2026!`、SQL 帳號及資料庫皆名為 `ticketing`、cookie 名為 `sid`，且允許 `http://localhost:8080` 作為 Origin。只改 Compose 的憑證設定無法改寫 runner 的固定值。見 `loadtest/run.sh`、`loadtest/prepare_a.py:46–57`、`loadtest/prepare_a.py:69–72`、`loadtest/run.sh:53`、`loadtest/prepare_a.py:145`、`loadtest/sse_client.py`。
 - 寫入 `loadtest/` 的容器（Python 工具與 k6）以執行者的 UID/GID 執行（`loadtest/run.sh`），Linux bind mount 不需額外調整權限。
 
 ## 執行與參數
@@ -33,9 +33,9 @@ loadtest/run.sh all
 
 每個 API 副本的 PostgreSQL pool 最多使用 `DB_POOL_MAX` 條連線，預設為 10。每個副本另有座位串流 session 重驗使用的連線（最多 2 條），API 的連線預算為實際副本數 × (`DB_POOL_MAX` + 2)，例如 3 個副本最多 36 條。PostgreSQL 容量也需容納 worker、relay、collector、產壓工具及其他使用者的連線。調整 `DB_POOL_MAX` 後可用 `REBUILD=1` 套用 Compose 設定。見 `compose.yaml`。
 
-參數實作見 `loadtest/run.sh`、`loadtest/prepare_a.py:72`、`loadtest/scenario_b_writer.py`、`backend/src/ticketing/core/settings.py:90`。
+參數實作見 `loadtest/run.sh`、`loadtest/prepare_a.py:61–65`、`loadtest/scenario_b_writer.py`、`backend/src/ticketing/core/settings.py:90`。
 
-A 以 `POST /api/v1/auth/login` 登入主辦人。買家及其 session 直接寫入 PostgreSQL，避開登入限流。合成 session 的初始 idle 與 absolute deadline 皆為 12 小時，正常登入預設分別為 30 分鐘與 12 小時。直接執行 `prepare_a.py` 時，可透過 `LOADTEST_DATABASE_URL` 或 `--database-url` 指定寫入 fixture 的 DSN，未設定時依序使用 `DATABASE_URL` 或本機預設 DSN。Runner 使用 Compose 注入的 `DATABASE_URL`，不會從 shell 轉傳 `LOADTEST_DATABASE_URL`。見 `loadtest/prepare_a.py:44`、`loadtest/prepare_a.py:54`、`loadtest/prepare_a.py:97`、`backend/src/ticketing/core/settings.py:46`、`loadtest/run.sh`、`compose.yaml:7`。
+A 以 `POST /api/v1/auth/login` 登入主辦人。買家及其 session 直接寫入 PostgreSQL，避開登入限流。合成 session 的初始 idle 與 absolute deadline 皆為 12 小時，正常登入預設分別為 30 分鐘與 12 小時。直接執行 `prepare_a.py` 時，可透過 `LOADTEST_DATABASE_URL` 或 `--database-url` 指定寫入 fixture 的 DSN，未設定時依序使用 `DATABASE_URL` 或本機預設 DSN。Runner 使用 Compose 注入的 `DATABASE_URL`，不會從 shell 轉傳 `LOADTEST_DATABASE_URL`。見 `loadtest/prepare_a.py:51–57`、`loadtest/prepare_a.py:69–72`、`loadtest/prepare_a.py:121–146`、`backend/src/ticketing/core/settings.py:46–47`、`loadtest/run.sh`、`compose.yaml:7`。
 
 ## 座位匯入資料
 
@@ -55,14 +55,14 @@ uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.json --zone A
 | [seats_invalid.csv](../samples/seats_invalid.csv) | `validation_failed`，新增 0 席，6 列錯誤 | `partially_succeeded`，新增 `A/R1/1`，6 列錯誤 |
 | [seats_duplicates.json](../samples/seats_duplicates.json) | `validation_failed`，新增 0 席，2 列錯誤 | `partially_succeeded`，新增 `A/R1/2`，2 列錯誤 |
 
-重複座位以區域和排號的大寫值及去除前導零的座號比對，同組每列均標記為錯誤。見 `backend/src/ticketing/imports/validation.py:11`、`backend/src/ticketing/imports/runner.py:225`。
+重複座位以區域和排號的大寫值及去除前導零的座號比對，同組每列均標記為錯誤。見 `backend/src/ticketing/imports/validation.py:17–28`、`backend/src/ticketing/imports/runner.py:145`。
 
 ## 輸出與結果核對
 
 | 產物（相對於 `OUT`） | 內容 |
 |---|---|
 | `environment.txt`、`run.log` | 主機、Docker、commit、主要參數及執行摘要。包含 shell 的 `API_REPLICAS` 與情境開始前實際運行的 `API_REPLICAS_RUNNING`。 |
-| `logs/<服務>.log`、`logs/<服務>-problems.log` | 本次執行期間各服務（api、worker、relay、collector、paymock、nginx、redis）的容器日誌；PostgreSQL 日誌可能含 bind 參數，不收錄。打包前所有文字檔中的付款頁 token（`/pay/<token>`）一律遮蔽。後端服務只記事件與錯誤（每個請求的紀錄在 nginx 存取日誌，以 `request_id` 關聯），因此保留完整內容；其他服務保留最後 300 行。`-problems.log` 只含 warning／error。`environment.txt` 另記錄每個容器實際使用的映像檔 digest。 |
+| `logs/<服務>.log`、`logs/<服務>-problems.log` | 本次執行期間各服務（api、worker、relay、collector、paymock、nginx、redis）的容器日誌；PostgreSQL 日誌可能含 bind 參數，不收錄。打包前所有文字檔中的付款頁 token（`/pay/<token>`）一律遮蔽。API 日誌包含 `request.completed`（健康檢查、SSE 除外），可透過 `request_id` 與 nginx 存取日誌關聯。API 日誌佇列滿時直接丟棄並計數，請求不等待空位。歸檔最多擷取 api、worker、relay、collector 各 20,000 行，其他服務各 300 行，每個服務上限 20 MB，`-problems.log` 最多取其中 5,000 行問題紀錄。見 `loadtest/run.sh:184–189`、`backend/src/ticketing/core/logging.py:101–104`。`environment.txt` 另記錄每個容器實際使用的映像檔 digest。 |
 | `a/k6.log`、`a/k6-summary.json` | `metrics.http_reqs.rate` 為總 RPS。`metrics.http_req_duration` 直接匯出 `med`、`p(95)`、`p(99)`（毫秒）。`successful_holds` 計新建鎖位，`business_conflicts` 計已知業務 409 和 `503 server-busy`，其中後者也由 `server_busy` 單獨計數。`replay_started` 計開始的重放，`replay_verified` 計驗證成功的重放，`replay_unverified` 計重試後仍收到 502／503／504 的重放。`replay_unverified` 必須為 0，且 runner 會比對 `replay_started` 與 `replay_verified`，不相等（例如重放在測試結束時被中斷）即判定失敗。 |
 | `a/nginx-access.json` | 以同輪 run ID 篩選的 nginx 存取日誌。用 `req_ms` 欄位換算成毫秒後計算入口 p99（原值單位為秒）。 |
 | `a/consistency.txt`、`a/final-state.txt` | A 結束 90 秒後的 SQL 查核及訂單、座位狀態統計。 |
@@ -76,4 +76,4 @@ B 每個 worker 先取得一份共用起始快照，再透過各自的 session �
 - **A**　k6 的 `checks` 必須全數成功且 `unexpected_errors` 為零。有發起重放時，至少一筆須驗證成功。重放沿用原請求內容及 Idempotency-Key，遇 502／504 或 `503 server-busy` 時依 `Retry-After`（預設 1 秒）重送，合計最多 10 次嘗試。SQL 須執行成功且回傳零違規列。k6 將 HTTP 409 標記為預期回應，未識別的 409 仍計入 `unexpected_errors`。`503 server-busy` 仍計入 `http_req_failed`，可用 `server_busy` 判讀服務過載。90 秒後仍可能有有效鎖位，可待鎖位到期、金流待辦與 relay 排空後重驗。見 [排空後重驗指令](../LOADTEST.md#6-一致性檢查)。
 - **B**　寫入程式須成功結束且提交至少一次座位變更，客戶端須至少取得一筆 `delta_apply_samples`。每條連線的游標、版面版本與座位狀態及版本都須符合 PostgreSQL 最終快照。`peak_active` 與 `matching_clients` 都須等於 `target_connections`，且 `outbox_pending` 與 `archive_mismatches` 都為零。SQL 與 SSE 稽核皆在 outbox 保留的序號範圍內比對封存資料，並檢查該範圍是否連續且抵達最新已編序位置。維護程序可清除已編序超過一小時的前段資料。
 
-產壓端與受測服務同機，會共享 CPU。每輪會新增活動與測試資料。`docker compose down -v` 會刪除整個 Compose 專案的 volumes，包含 PostgreSQL、Redis、金流及共享檔案。見 `compose.yaml:247`。結果與瓶頸分析見 [LOADTEST.md](../LOADTEST.md)。
+產壓端與受測服務同機，會共享 CPU。每輪會新增活動與測試資料。只可對可拋棄的專案執行 `docker compose down -v`，此指令會刪除該專案的所有資料 volumes，包含 PostgreSQL、Redis、金流及共享檔案。見 `compose.yaml:251–258`。結果與瓶頸分析見 [LOADTEST.md](../LOADTEST.md)。

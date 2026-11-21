@@ -60,6 +60,9 @@ flowchart TB
   Imports[(&quot;匯入檔 volume&quot;)]
   Exports[(&quot;Excel 暫存 volume&quot;)]
   Init[&quot;migrate → seed&quot;]
+  Organizer[&quot;Organizer · 匯入進度&quot;]
+  Staging[&quot;PostgreSQL · 每批 5,000 列 COPY staging&lt;br/&gt;同一交易提交 processed_rows 檢查點&quot;]
+  Finalize[&quot;活動鎖內重驗 fence 與權限 · finalize&quot;]
 
   Browser --&gt;|&quot;UI、REST、SSE、付款頁&quot;| Edge
   Edge --&gt;|&quot;least_conn · X-Request-ID&quot;| API
@@ -76,8 +79,12 @@ flowchart TB
   Worker --&gt;|&quot;匯入進度、心跳&quot;| Redis
   Relay --&gt;|&quot;心跳&quot;| Redis
   Collector &lt;--&gt;|&quot;遙測、心跳、告警通知&quot;| Redis
-  API --&gt; Imports
-  Imports --&gt; Worker
+  Organizer --&gt;|&quot;上傳座位檔&quot;| Edge
+  Organizer --&gt;|&quot;定期 GET job 狀態&quot;| Edge
+  Edge --&gt;|&quot;選用 job 進度 SSE&quot;| Organizer
+  API --&gt;|&quot;保存上傳檔&quot;| Imports
+  Imports --&gt; Worker --&gt; Staging --&gt; Finalize
+  Finalize --&gt;|&quot;同時提交座位、outbox、job 結果&quot;| DB
   API --&gt; Exports
   Edge --&gt; Logs
   API --&gt; Logs
@@ -87,9 +94,10 @@ flowchart TB
   Edge --&gt;|&quot;stub_status&quot;| Collector
 </pre></div>
       <ul>
-        <li>PostgreSQL 保存座位、訂單、配額、session、匯入 job、outbox 與監控資料。nginx、PostgreSQL 與 Redis 的 host port 預設綁在 loopback。三個 API 副本各由一個 Uvicorn 程序處理 REST 與 SSE。見 <code>compose.yaml:52</code>、<code>compose.yaml:67</code>、<code>compose.yaml:85</code>、<code>compose.yaml:120</code>、<code>compose.yaml:227</code>、<code>backend/src/ticketing/api/main.py:36</code>。</li>
+        <li>PostgreSQL 保存座位、訂單、配額、session、匯入 job、outbox 與監控資料。nginx、PostgreSQL 與 Redis 的 host port 預設綁在 loopback。三個 API 副本各由一個 Uvicorn 程序處理 REST 與 SSE。見 <code>compose.yaml:52</code>、<code>compose.yaml:67</code>、<code>compose.yaml:85</code>、<code>compose.yaml:120</code>、<code>compose.yaml:231</code>、<code>backend/src/ticketing/api/main.py:36</code>。</li>
         <li><code>migrate</code> 以 schema owner 執行，<code>seed</code> 與 runtime 使用低權限角色。Worker 分別排程匯入、hold expiry、付款 reconciler 與 maintenance。見 <code>compose.yaml:7</code>、<code>compose.yaml:99</code>、<code>backend/src/ticketing/worker/main.py:20</code>。</li>
-        <li>Redis Pub/Sub 通知 API 有 session 撤銷與匯入進度變化，持久狀態由 PostgreSQL 提供。見 <code>backend/src/ticketing/auth/sessions.py:89</code>、<code>backend/src/ticketing/auth/sessions.py:134</code>、<code>backend/src/ticketing/imports/runner.py:269</code>、<code>backend/src/ticketing/api/routes/imports.py:191</code>。</li>
+        <li>Organizer 輪詢 <code>GET /api/v1/seat-imports/{job_id}</code>，也可另外訂閱 <code>GET /api/v1/seat-imports/{job_id}/stream</code>。租約重領後從已提交的列數檢查點接續，並保留已提交的解析結果與檔案驗證狀態。見 <code>backend/src/ticketing/api/routes/imports.py:137</code>、<code>backend/src/ticketing/api/routes/imports.py:208</code>、<code>backend/src/ticketing/imports/runner.py:331–394</code>。</li>
+        <li>Redis Pub/Sub 通知 API 有 session 撤銷與匯入進度變化，持久狀態由 PostgreSQL 提供。見 <code>backend/src/ticketing/auth/sessions.py:89</code>、<code>backend/src/ticketing/auth/sessions.py:134</code>、<code>backend/src/ticketing/imports/runner.py:323</code>、<code>backend/src/ticketing/api/routes/imports.py:188–204</code>。</li>
       </ul>
     </section>
     <section id="booking" aria-labelledby="booking-title">
@@ -189,7 +197,8 @@ flowchart LR
   C[&quot;collector · tail、聚合、告警&quot;]
   PG[(&quot;PostgreSQL · access_logs / service_logs&lt;br/&gt;metrics_1s / business_1s / alert_events&quot;)]
   R[(&quot;Redis Pub/Sub · admin:alerts&quot;)]
-  Admin[&quot;Admin · 即時圖表、告警、request_id 查詢&quot;]
+  Admin[&quot;Admin · 監控與全站訂單&quot;]
+  Orders[(&quot;PostgreSQL · orders&quot;)]
   Read[&quot;api · Admin 專用 REST / SSE&quot;]
   N --&gt; C
   S --&gt; C
@@ -198,11 +207,14 @@ flowchart LR
   C --&gt;|&quot;分批入庫&quot;| PG
   C --&gt;|&quot;告警狀態變化&quot;| R
   PG --&gt;|&quot;查詢已保存的資料&quot;| Read
-  Read --&gt;|&quot;metrics / alerts SSE · 日誌查詢&quot;| Admin
+  Orders --&gt; Read
+  Read --&gt;|&quot;metrics / alerts SSE&quot;| Admin
+  Read --&gt;|&quot;All orders · Access log · Recent warnings and errors · Request trace&quot;| Admin
 </pre></div>
       <ul>
         <li>Collector tail nginx 與共享目錄中的應用 JSON 日誌，COPY 與 checkpoint 在同一交易內完成。Edge RPS 與延遲依 nginx access log 分秒聚合，連線數來自 <code>stub_status</code>。應用遙測按 boot UUID 與 interval number 去重，入庫後才 ACK Redis stream。見 <code>backend/src/ticketing/telemetry/logs.py:266</code>、<code>backend/src/ticketing/telemetry/collector.py:153</code>、<code>backend/src/ticketing/telemetry/app_metrics.py:132</code>。</li>
-        <li>Admin 的 <code>/api/v1/admin/metrics/stream</code> 與 <code>/api/v1/admin/alerts/stream</code> 讀 PostgreSQL 快照。告警狀態變更另送 Redis 的 <code>admin:alerts</code>。<code>GET /api/v1/admin/requests/{request_id}/logs</code> 查找入口與關聯服務日誌。見 <code>backend/src/ticketing/telemetry/common.py:10</code>、<code>backend/src/ticketing/telemetry/collector.py:170</code>、<code>backend/src/ticketing/api/routes/monitoring.py:418</code>、<code>backend/src/ticketing/api/routes/monitoring.py:471</code>、<code>backend/src/ticketing/api/routes/monitoring.py:559</code>。</li>
+        <li>Admin 的 <code>/api/v1/admin/metrics/stream</code> 與 <code>/api/v1/admin/alerts/stream</code> 讀 PostgreSQL 快照。告警狀態變更另送 Redis 的 <code>admin:alerts</code>。<code>GET /api/v1/admin/requests/{request_id}/logs</code> 查找入口與關聯服務日誌。見 <code>backend/src/ticketing/telemetry/common.py:10</code>、<code>backend/src/ticketing/telemetry/collector.py:170</code>、<code>backend/src/ticketing/api/routes/monitoring.py:462</code>、<code>backend/src/ticketing/api/routes/monitoring.py:515</code>、<code>backend/src/ticketing/api/routes/monitoring.py:696</code>。</li>
+        <li>Admin 透過 <code>GET /api/v1/admin/orders</code> 讀全站訂單，透過 <code>GET /api/v1/admin/logs/access</code> 讀存取日誌，透過 <code>GET /api/v1/admin/logs/recent</code> 讀近期警告與錯誤。</li>
         <li>時鐘校正、保留期與缺測判讀見 <a href="../backend/src/ticketing/telemetry/README.md">監控資料契約</a>。</li>
       </ul>
     </section>
