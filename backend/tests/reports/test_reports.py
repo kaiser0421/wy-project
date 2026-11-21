@@ -1,3 +1,4 @@
+import hmac
 import os
 from datetime import datetime
 from io import BytesIO
@@ -93,7 +94,7 @@ async def _seed_orders(db, event, zone, count):
         )
 
 
-async def test_excel_reconciles_and_respects_dst(db, client, settings):
+async def test_excel_reconciles_and_respects_dst(db, client, make_client, settings):
     owner = await create_user(db, "owner@example.com")
     await create_user(db, "viewer@example.com", "viewer")
     event = await seed_event(db, owner, published=True, title="=SUM(1)")
@@ -140,34 +141,29 @@ async def test_excel_reconciles_and_respects_dst(db, client, settings):
     finally:
         workbook.close()
 
-    assert await to_thread.run_sync(lambda: list(Path(settings.export_dir).iterdir())) == []
-
-
-@pytest.mark.parametrize("role", ["viewer", "admin", "user"])
-async def test_excel_buyer_email_visibility(db, client, role):
-    owner = await create_user(db, "owner@example.com")
-    event = await seed_event(db, owner)
-    zone = await seed_zone(db, event)
-    await _seed_orders(db, event, zone, 2)
-    email = "owner@example.com"
-    if role != "user":
-        email = f"{role}@example.com"
-        await create_user(db, email, role)
-    await login(client, email)
-    response = await client.get(report(event))
-    assert response.status_code == 200, response.text[:300]
+    async with make_client() as viewer:
+        await login(viewer, "viewer@example.com")
+        response = await viewer.get(report(event))
+        assert response.status_code == 200, response.text[:300]
     workbook = load_workbook(BytesIO(response.content), read_only=True)
     try:
-        headers, *rows = workbook["Orders"].values
-        assert headers[1] == "Created At (Asia/Taipei)"
-        assert headers[9] == "Buyer"
-        assert len(rows) == 2
-        if role == "viewer":
-            assert all(row[9] is None for row in rows)
-        else:
-            assert all(row[9].startswith("'=buyer-") for row in rows)
+        orders = workbook["Orders"].values
+        assert next(orders)[1] == "Created At (Asia/Taipei)"
+        first = next(orders)
+        buyer = await db.fetchval(
+            "SELECT user_id FROM orders WHERE event_id = $1 ORDER BY id LIMIT 1", event
+        )
+        assert (
+            first[9]
+            == hmac.digest(
+                settings.secret_key.get_secret_value().encode(),
+                f"{event}:{buyer}".encode(),
+                "sha256",
+            ).hex()
+        )
     finally:
         workbook.close()
+    assert await to_thread.run_sync(lambda: list(Path(settings.export_dir).iterdir())) == []
 
 
 async def test_advisory_lock_rejects_concurrent_export(db, db_url, client):

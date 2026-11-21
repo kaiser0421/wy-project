@@ -33,8 +33,9 @@ ZONES = """
 
 ORDERS = """
     SELECT o.public_id, o.created_at, o.paid_at, o.status::text, coalesce(items.labels, ''),
-           o.quantity, o.subtotal_twd, o.fee_twd, o.total_twd, u.email::text
-    FROM orders o LEFT JOIN users u ON %s AND u.id = o.user_id
+           o.quantity, o.subtotal_twd, o.fee_twd, o.total_twd, o.user_id,
+           CASE WHEN %s THEN NULL ELSE u.email::text END
+    FROM orders o JOIN users u ON u.id = o.user_id
     LEFT JOIN LATERAL (
         SELECT string_agg(z.code || ':' || s.row_label || '-' || s.seat_number,
                           ', ' ORDER BY s.seat_idx) AS labels

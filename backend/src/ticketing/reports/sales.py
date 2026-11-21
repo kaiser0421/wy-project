@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import hmac
 import shutil
 import tempfile
 from collections.abc import Iterable
@@ -222,7 +223,8 @@ def _orders(
     conn: psycopg.Connection[tuple[Any, ...]],
     sheets: _Sheets,
     event_id: int,
-    include_buyer_email: bool,
+    pseudonymous: bool,
+    secret: str,
 ) -> None:
     tz = sheets.tz.key
     sheet = sheets.sheet(
@@ -242,9 +244,15 @@ def _orders(
     )
     with conn.cursor(name="report_orders") as cursor:
         cursor.itersize = _FETCH_SIZE
-        cursor.execute(ORDERS, (include_buyer_email, event_id))
+        cursor.execute(ORDERS, (pseudonymous, event_id))
         for index, data in enumerate(cursor, start=1):
-            sheets.row(sheet, index, data)
+            values, (user_id, email) = data[:-2], data[-2:]
+            buyer = (
+                hmac.digest(secret.encode(), f"{event_id}:{user_id}".encode(), "sha256").hex()
+                if pseudonymous
+                else email
+            )
+            sheets.row(sheet, index, (*values, buyer))
 
 
 def _event(
@@ -291,7 +299,13 @@ def _generate(
                 assert generated is not None
                 _summary(conn, sheets, event, generated[0])
                 _zones(conn, sheets, event_id)
-                _orders(conn, sheets, event_id, actor.role != "viewer")
+                _orders(
+                    conn,
+                    sheets,
+                    event_id,
+                    actor.role == "viewer",
+                    settings.secret_key.get_secret_value(),
+                )
             sheets.checkpoint()
             sheets.check_packaging_space(path.parent)
             book.close()
