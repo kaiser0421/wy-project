@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM python:${PYTHON_VERSION}-slim AS runtime
 ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid app --no-create-home app \
- && mkdir -p /data/paymock && chown app:app /data/paymock
+ && mkdir -p /data/paymock /data/logs && chown app:app /data/paymock /data/logs
 COPY --from=builder /opt/venv /opt/venv
 USER app
 EXPOSE 8000

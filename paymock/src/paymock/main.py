@@ -17,12 +17,15 @@ import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, Security
 from fastapi import Path as PathParam
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.routing import APIRoute
 from fastapi.security import APIKeyHeader
 from pydantic import HttpUrl, ValidationError
+from starlette.middleware.base import RequestResponseEndpoint
 from starlette.requests import Request
 
 from paymock.delivery import run
+from paymock.logging import open_service_log
 from paymock.models import ID, Health, Intent, IntentInput, Outcome, Refund, RefundInput
 from paymock.store import Problem, Store
 
@@ -101,18 +104,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     store = Store(path, max(0, float(os.getenv("PAYMOCK_DELAY_CALLBACK_S", "0"))), _callback_url())
     await asyncio.to_thread(store.initialize)
     app.state.store = store
-    if os.getenv("PAYMOCK_DROP_CALLBACKS") == "1":
-        yield
-        return
-    worker = asyncio.create_task(
-        run(store, secret, os.getenv("PAYMOCK_DUPLICATE_CALLBACKS") == "1")
-    )
-    try:
-        yield
-    finally:
-        worker.cancel()
-        with suppress(asyncio.CancelledError):
-            await worker
+    with open_service_log(os.getenv("LOG_DIR")) as service_log:
+        app.state.service_log = service_log
+        if os.getenv("PAYMOCK_DROP_CALLBACKS") == "1":
+            yield
+            return
+        worker = asyncio.create_task(
+            run(store, secret, os.getenv("PAYMOCK_DUPLICATE_CALLBACKS") == "1", service_log)
+        )
+        try:
+            yield
+        finally:
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
 
 
 def create_app() -> FastAPI:
@@ -121,6 +126,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Problem, problem_handler)
     app.add_exception_handler(RequestValidationError, validation_handler)
     app.add_exception_handler(sqlite3.Error, storage_handler)
+    app.middleware("http")(log_request)
     return app
 
 
@@ -145,6 +151,27 @@ def _store(request: Request) -> Store:
 def _request_id(request: Request) -> str | None:
     value = request.headers.get("X-Request-ID", "")
     return value if _REQUEST_ID.fullmatch(value) else None
+
+
+async def log_request(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+    finally:
+        # The route template omits the checkout token and any query string.
+        route = request.scope.get("route")
+        path = route.path if isinstance(route, APIRoute) else None
+        if path != "/healthz/live":
+            request.app.state.service_log.write(
+                "request.completed",
+                level="error" if status >= 500 else "info",
+                request_id=_request_id(request),
+                method=request.method,
+                path=path,
+                status=status,
+            )
+    return response
 
 
 def require_merchant(
