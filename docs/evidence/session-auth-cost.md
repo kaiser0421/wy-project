@@ -26,39 +26,38 @@
 
 上面的端點差值包含路由與序列化的差異，無法單獨代表 session 驗證。此節直接量測驗證函式本身。
 
-- 方法：在 API 容器內用同一條資料庫連線，交錯 3 輪、每輪各呼叫 2,000 次 `authenticate()`（實際的驗證 SQL，帶有效 session）與 `SELECT 1`（純往返基準），共各 6,000 次。腳本：`scripts/measure_auth_cost.py`。
+- 方法：在 API 容器內用同一條資料庫連線，各呼叫 6,000 次 `authenticate()`（實際的驗證 SQL，帶有效 session）與 `SELECT 1`（純往返基準），兩者逐次交替先後順序；任何一次驗證失敗就中止、不輸出結果。腳本：`scripts/measure_auth_cost.py`。
 - 環境：開發筆電，`docker compose` 完整堆疊，同時有其他背景工作（load average 約 4）。
 
 | 呼叫 | n | p50 | p95 | p99 | 平均 |
 |---|---:|---:|---:|---:|---:|
-| `SELECT 1`（往返基準） | 6,000 | 0.683 ms | 3.632 ms | 9.368 ms | 1.128 ms |
-| `authenticate()`（有效 session） | 6,000 | 0.849 ms | 2.895 ms | 8.605 ms | 1.221 ms |
+| `SELECT 1`（往返基準） | 6,000 | 0.703 ms | 1.911 ms | 6.788 ms | 0.936 ms |
+| `authenticate()`（有效 session） | 6,000 | 0.891 ms | 2.455 ms | 7.965 ms | 1.187 ms |
 
-- **驗證本身比一次空查詢多約 0.17 ms（p50；連跑三次為 0.13–0.19 ms）**；p95、p99 由往返與排程雜訊主導，兩者相近。
-- `EXPLAIN (ANALYZE, BUFFERS)`（有效 token，回傳 1 列）：Nested Loop，`sessions_token_hash_key` 索引掃描 0.075 ms 後，以 `users_pkey` 取使用者 0.046 ms，共 4 個 shared buffer hit，皆在記憶體內。
+- **驗證本身比一次空查詢多約 0.19 ms（p50）**；同日以舊版腳本（未交替順序）另跑三次為 0.13–0.19 ms。p95、p99 由往返與排程雜訊主導。
+- `EXPLAIN (ANALYZE, BUFFERS)`（有效 token，回傳 1 列，Execution Time 0.265 ms）：這次 `sessions` 只有 41 列，planner 直接循序掃描；上方 2026-11-21 量測時 3,831 列則走 `sessions_token_hash_key` 唯一索引。使用者都以 `users_pkey` 取得，所有 buffer 皆命中記憶體。
 - 不包含取得連線池連線的等待；高負載時那才是主要成本（見下方限制）。
-- 以同一腳本再跑一次：`authenticate()` p50 0.832 ms、`SELECT 1` p50 0.702 ms，差 0.13 ms；`EXPLAIN ANALYZE` Execution Time 0.427 ms。第一次輸出的 Execution Time 11.555 ms 與其節點時間（0.231 ms）不符，屬單次樣本的排程雜訊，以 6,000 次的分布為準。
 
-第一次執行的原始輸出：
+原始輸出（token hash 已遮蔽）：
 
 ```text
 valid session: user_id=2 role=user
-SELECT 1 (round trip)  n=6000 p50=0.683 p95=3.632 p99=9.368 mean=1.128 ms
-authenticate()         n=6000 p50=0.849 p95=2.895 p99=8.605 mean=1.221 ms
-isolated cost, p50 difference = 0.166 ms
-sessions rows = 38 users rows = 9
-Nested Loop (actual time=0.131..0.231 rows=1 loops=1)
-  Buffers: shared hit=4
-  ->  Index Scan using sessions_token_hash_key on sessions s (actual time=0.050..0.075 rows=1 loops=1)
-        Index Cond: (token_hash = '\x352adb754e8cec7b131a2755f3ec9ba534cfbe309372dc46729023ba1a4e2934'::bytea)
-        Filter: ((revoked_at IS NULL) AND (abs_expires_at > now()) AND (idle_expires_at > now()))
-        Buffers: shared hit=2
-  ->  Index Scan using users_pkey on users u (actual time=0.035..0.046 rows=1 loops=1)
+SELECT 1 (round trip)  n=6000 p50=0.703 p95=1.911 p99=6.788 mean=0.936 ms
+authenticate()         n=6000 p50=0.891 p95=2.455 p99=7.965 mean=1.187 ms
+isolated cost, p50 difference = 0.188 ms
+sessions rows = 41 users rows = 9
+Nested Loop (actual time=0.098..0.170 rows=1 loops=1)
+  Buffers: shared hit=3
+  ->  Seq Scan on sessions s (actual time=0.026..0.045 rows=1 loops=1)
+        Filter: ((revoked_at IS NULL) AND (token_hash = '<token hash>'::bytea) AND (abs_expires_at > now()) AND (idle_expires_at > now()))
+        Rows Removed by Filter: 40
+        Buffers: shared hit=1
+  ->  Index Scan using users_pkey on users u (actual time=0.037..0.046 rows=1 loops=1)
         Index Cond: (id = s.user_id)
         Filter: is_active
         Buffers: shared hit=2
-Planning Time: 0.351 ms
-Execution Time: 11.555 ms
+Planning Time: 0.310 ms
+Execution Time: 0.265 ms
 ```
 
 ## 限制

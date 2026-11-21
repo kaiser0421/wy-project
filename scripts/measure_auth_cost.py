@@ -1,8 +1,8 @@
 """Measure the per-request session check in isolation, inside a running API container.
 
 Usage:
-  TOKEN=<value of the session cookie after logging in>
-  docker compose exec -T -e TOKEN="$TOKEN" api python - < scripts/measure_auth_cost.py
+  read -rs TOKEN && export TOKEN   # paste the session cookie value; it is not echoed
+  docker compose exec -T -e TOKEN api python - < scripts/measure_auth_cost.py
 
 On one database connection it times N calls of the real authenticate() against N calls of
 SELECT 1 (the round-trip baseline), then prints EXPLAIN ANALYZE for the same valid token.
@@ -10,6 +10,7 @@ SELECT 1 (the round-trip baseline), then prints EXPLAIN ANALYZE for the same val
 
 import asyncio
 import os
+import re
 import statistics
 import time
 from collections.abc import Awaitable, Callable
@@ -28,13 +29,11 @@ def pct(xs: list[float], p: float) -> float:
     return ordered[min(len(ordered) - 1, int(len(ordered) * p))]
 
 
-async def timed(call: Callable[[], Awaitable[object]]) -> list[float]:
-    out = []
-    for _ in range(N):
-        start = time.perf_counter_ns()
-        await call()
-        out.append((time.perf_counter_ns() - start) / 1e6)
-    return out
+async def timed(call: Callable[[], Awaitable[object]], out: list[float]) -> object:
+    start = time.perf_counter_ns()
+    result = await call()
+    out.append((time.perf_counter_ns() - start) / 1e6)
+    return result
 
 
 def summary(name: str, xs: list[float]) -> str:
@@ -63,9 +62,11 @@ async def main() -> None:
         await check()
     base: list[float] = []
     auth: list[float] = []
-    for _ in range(ROUNDS):  # interleave so both share the same drift
-        base += await timed(baseline)
-        auth += await timed(check)
+    for i in range(ROUNDS * N):  # alternate the order every call so both share the same drift
+        first, second = (baseline, base), (check, auth)
+        for call, sink in (first, second) if i % 2 == 0 else (second, first):
+            if await timed(call, sink) is None:
+                raise SystemExit("the session stopped authenticating during the run; no result")
     print(summary("SELECT 1 (round trip)", base))
     print(summary("authenticate()", auth))
     diff = statistics.median(auth) - statistics.median(base)
@@ -74,8 +75,8 @@ async def main() -> None:
     users = await conn.fetchval("SELECT count(*) FROM users")
     print(f"sessions rows = {sessions} users rows = {users}")
     plan = await conn.fetch("EXPLAIN (ANALYZE, BUFFERS, COSTS OFF) " + _AUTH_SQL, hash_token(token))
-    for row in plan:
-        print(row[0])
+    for row in plan:  # the token hash is not a usable cookie, but keep it out of shared output
+        print(re.sub(r"'\\x[0-9a-f]+'", "'<token hash>'", row[0]))
     await conn.close()
 
 
