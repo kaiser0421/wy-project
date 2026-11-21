@@ -29,14 +29,16 @@ test:  ## Run backend checks, PostgreSQL integration tests, and frontend tests i
 test-fast:  ## Unit tests only, on the host (no Docker)
 	uv run pytest backend/tests/unit -q
 
-lint:  ## Lint and import contracts
-	uv run ruff check backend paymock
-	uv run ruff format --check backend paymock
+lint:  ## Lint Python (all of it), import contracts and shell scripts
+	uv run ruff check backend paymock scripts loadtest
+	uv run ruff format --check backend paymock scripts loadtest
 	uv run lint-imports
+	docker run --rm -v "$(CURDIR):/mnt" -w /mnt koalaman/shellcheck:v0.10.0 -S warning \
+		loadtest/run.sh scripts/*.sh
 
 fmt:  ## Auto-format
-	uv run ruff format backend paymock
-	uv run ruff check --fix backend paymock
+	uv run ruff format backend paymock scripts loadtest
+	uv run ruff check --fix backend paymock scripts loadtest
 
 typecheck:  ## mypy --strict
 	uv run mypy backend/src paymock/src
