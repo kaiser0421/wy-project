@@ -257,4 +257,20 @@ describe("API payloads", () => {
     respond([{ ts, service: "worker" }]);
     await expect(api.trace("request", signal)).resolves.toMatchObject([{ service: "worker" }]);
   });
+
+  it("reads recent log entries and sends only supplied filters", async () => {
+    const entries = [{ ts, service: "worker", level: "error", event: "worker.failed", request_id: null, attrs: {} }];
+    const controller = new AbortController();
+    respond({ items: entries });
+    await expect(api.recentLogs({}, controller.signal)).resolves.toEqual(entries);
+    await expect(api.recentLogs({ service: "worker", level: "error", since_minutes: 5, limit: 2 }, controller.signal))
+      .resolves.toEqual(entries);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/v1/admin/logs/recent", "/api/v1/admin/logs/recent?service=worker&level=error&since_minutes=5&limit=2",
+    ]);
+    const init = fetchMock.mock.calls[1]![1];
+    expect(init).toMatchObject({ method: "GET", cache: "no-store" });
+    controller.abort();
+    expect(init?.signal?.aborted).toBe(true);
+  });
 });
