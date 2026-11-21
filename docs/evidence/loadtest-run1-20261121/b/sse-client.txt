@@ -1,0 +1,4 @@
+ Container wy-project-api-run-c6fd78805330 Creating 
+ Container wy-project-api-run-c6fd78805330 Created 
+{"archive_mismatches": 0, "connect_ms": {"p50": 7474, "p95": 26176, "p99": 54324}, "connections_established": 2000, "delta_apply_ms": {"p50": 3614, "p95": 38833, "p99": 79780}, "delta_apply_samples": 248001, "deltas_applied": 248001, "final_head": 4128, "gaps": 6064, "matching_clients": 1326, "outbox_pending": 0, "peak_active": 2000, "pg_state_sha256": "524875bbfc34af3f018d8d607fdcf773b94e458db2f55ee35d84f028866b7ec7", "request_errors": 1296, "resyncs": 1111, "snapshot_ms": {"p50": 63995, "p95": 73733, "p99": 75981}, "snapshot_request_errors": 359, "sse_body_bytes": 491922541, "sse_body_bytes_per_second": 3011787, "stalled_progress": 6064, "stream_attempts": 9673, "stream_error_rate": 0.096868, "stream_request_errors": 937, "target_connections": 2000}
+
