@@ -31,6 +31,33 @@
 
 ## Q1 座位不超賣
 
+```mermaid
+sequenceDiagram
+  participant C as 瀏覽器
+  participant A as api
+  participant P as PostgreSQL
+  C->>A: POST /api/v1/events/{event_id}/orders + Idempotency-Key
+  A->>P: BEGIN READ COMMITTED · fence 重驗 user 與 session
+  A->>P: 冪等檢查 · pg_try_advisory_xact_lock 與 idempotency_keys
+  A->>P: 檢查活動已發布且在開賣時窗
+  A->>P: user_event_quota guarded UPDATE
+  A->>P: INSERT orders 表頭
+  rect rgba(120, 160, 255, 0.15)
+    Note over A,P: 交易內保護開始
+    A->>P: 第一層 · 座位 FOR NO KEY UPDATE NOWAIT
+    P-->>A: 鎖不可得時 LockNotAvailable · api 回 409 seat-contended
+    A->>P: 取樣 app_now 重檢開賣 · 計算期限
+    A->>P: 第二層 · UPDATE seats 僅 available → held
+    A->>P: 第三層 · INSERT order_items 受 partial unique index 約束
+    A->>P: 更新金額與期限 · 寫 outbox 與 idempotency_keys
+    A->>P: COMMIT 釋放列鎖
+    Note over A,P: 交易內保護結束 · 之後由 partial unique index 持續約束
+  end
+  A-->>C: 201 Created + Location
+```
+
+*圖：指定席購買交易的步驟順序，三層防線都位於同一個交易內，任一層失敗即整筆回滾。*
+
 **答案**　指定席的交易內保護在 PostgreSQL 執行 `FOR NO KEY UPDATE NOWAIT` 時取得（`backend/src/ticketing/booking/create.py:51`），在交易 context 結束時由 COMMIT 或 ROLLBACK 釋放（`backend/src/ticketing/booking/database.py:31`，呼叫端離開交易前最後一行為 `backend/src/ticketing/booking/create.py:245`）。已提交的 active claim 由 partial unique index 持續約束，直到該 item 寫入 `released_at`。
 
 **機制**
@@ -82,6 +109,34 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 
 ## Q2 部分失敗後的狀態收斂
 
+```mermaid
+flowchart TB
+  Cap["paymock 已扣款 · 回呼遺失或延遲"]
+  Sw["期限已到 · sweeper 鎖後釋放 A · 座位轉售給 B"]
+  Rs["provider 24 小時內重送簽章回呼"]
+  Rc["reconciler 每約 15–20 秒 poll"]
+  Cn["取消流程發現已有 capture"]
+  H["同一 handler · 鎖訂單與 attempt"]
+  Dd["依 callback event ID 與 capture ID 去重"]
+  T{"app_now 早於 expires_at 且仍為 pending_payment"}
+  Ok["接受扣款 · 訂單 paid · 座位 held → sold · 寫 outbox"]
+  Rf["refund_required · 仍 pending 時先 release_order 釋放"]
+  Q["refunds 待辦 · lease 30 秒 · 以原 refund ID 重送"]
+  Done["退款成功 · B 的售票結果保留"]
+  Cap --> Rs
+  Cap --> Rc
+  Cap --> Cn
+  Rs --> H
+  Rc --> H
+  Cn --> H
+  H --> Dd --> T
+  Sw -.->|"訂單已是 expired"| T
+  T -->|"是"| Ok
+  T -->|"否"| Rf --> Q --> Done
+```
+
+*圖：已扣款但本地未記錄時，三條重試路徑匯入同一個 handler，在鎖內以 DB 時鐘決定接受或退款。*
+
 **答案**　最大風險是模擬金流已扣款，PostgreSQL 尚未記錄 capture，且 hold 可能在此期間到期。這同時影響使用者的金額與座位。金流回呼與 reconciler 共用付款分類，依 DB 當下狀態接受或安排退款。
 
 **機制與時間線**　下表的 tick、lease 與 backoff 是設定或程式行為。程序重啟、外部服務延遲與排隊時間另計。
@@ -107,6 +162,34 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 
 ## Q3 重試、冪等與限購
 
+```mermaid
+flowchart TB
+  K["POST 訂單 + Idempotency-Key"]
+  L{"pg_try_advisory_xact_lock 取得 user_id + key 鎖"}
+  Busy["409 idempotency-in-progress · Retry-After: 1"]
+  R{"idempotency_keys 已有記錄"}
+  Hs{"request_hash 相同"}
+  E422["422 idempotency-key-reused"]
+  Replay["重放原 201 · body · Location · Idempotent-Replayed: true"]
+  subgraph Quota["配額原子更新"]
+    U["UPDATE user_event_quota SET reserved = reserved + n WHERE reserved ≤ limit − n"]
+  end
+  Lim["409 purchase-limit-exceeded"]
+  Book["配位與鎖位 · 寫入冪等結果 · COMMIT · 201"]
+  K --> L
+  L -->|"否 · 原交易仍在處理"| Busy
+  L -->|"是"| R
+  R -->|"有"| Hs
+  Hs -->|"不同"| E422
+  Hs -->|"相同且已完成"| Replay
+  Hs -->|"相同但仍為 in_progress"| Busy
+  R -->|"無 · 新請求"| U
+  U -->|"未更新任何列"| Lim
+  U -->|"RETURNING 成功"| Book
+```
+
+*圖：帶冪等鍵的建立訂單決策，以及以單一 SQL 守住每人每活動上限的配額更新。*
+
 **答案**　建立訂單以 `(user_id, key)` 序列化，結果與座位、配額同時提交。兩把 key 仍會競爭同一個 user/event 配額列，配位由 PostgreSQL 選取並鎖定。
 
 **機制與流程**
@@ -128,6 +211,34 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 **證據**　可從測試中的狀態碼、配額與座位不變式斷言核對，對外回應契約見 [OpenAPI](docs/openapi.json)（`docs/openapi.json:3143`）。
 
 ## Q4 即時推送
+
+```mermaid
+flowchart TB
+  W["業務交易 · 更新座位 version"]
+  O[("outbox · seq 尚未指派")]
+  R["relay · pg_try_advisory_lock 確保單一批次"]
+  A[("outbox 已指派 seq · 同交易歸檔 seat_events")]
+  Rd["每個 API process 每活動一個 reader · 每 100 ms 依 seq 讀取"]
+  Ring["共用 ring · 5 秒或 2 MiB"]
+  S["SSE frame · id: seq · delta 或 layout"]
+  C["瀏覽器 · 只套用更高的座位 version"]
+  G{"delta.from 大於 last_applied + 1"}
+  Rp["以 Last-Event-ID 重連 · ring 補送 · 缺段查 PostgreSQL"]
+  Snap["重新抓快照"]
+  Slow["寫入超過 5 秒 · 送 resync 後關閉"]
+  W -->|"同一交易 COMMIT"| O
+  O --> R
+  R -->|"依活動指派連續 seq"| A
+  A --> Rd --> Ring --> S --> C
+  C --> G
+  G -->|"是"| Rp --> S
+  Rp -->|"缺史或超出補送預算"| Snap
+  S -->|"layout 或 resync"| Snap
+  S -.->|"慢客戶端"| Slow --> Snap
+  Snap --> C
+```
+
+*圖：座位變更從交易提交到瀏覽器的路徑，以及缺段、版面變更與慢客戶端的補救方式。*
 
 **答案**　座位通知走 PostgreSQL transactional outbox、單一 active relay、每副本每活動一個 reader，最後以 SSE 發送。所有副本讀同一組 per-event seq。同席版本有序，跨席的 seq 反映 relay 的編序。
 
@@ -153,6 +264,31 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 
 ## Q5 權限與憑證失效
 
+```mermaid
+flowchart TB
+  Lo["登出 · revoke_session"]
+  Ad["Admin 停用或改角色 · 同一交易 UPDATE users 與 revoke_user_sessions"]
+  DB[("sessions.revoked_at 已提交")]
+  Req["每個受保護 HTTP 請求 · resolve_principal"]
+  Auth["authenticate · 依 token_hash 查 sessions JOIN users · 無快取"]
+  Deny["401 unauthenticated"]
+  Fence["訂票交易內 lock_live_session · users → sessions FOR SHARE"]
+  Pub["提交後 publish_revocations · Redis Pub/Sub"]
+  Rc["每個副本約每秒 recheck 已連線的 session IDs"]
+  Close["取消 writer · 關閉座位 SSE"]
+  Fail["recheck 連續失敗 5 次 · 關閉該副本全部座位串流"]
+  Lo --> DB
+  Ad --> DB
+  DB --> Req --> Auth
+  Auth -->|"已撤銷、停用或過期"| Deny
+  Auth -->|"有效且為訂票寫入"| Fence
+  DB --> Pub -->|"立即"| Close
+  DB -.->|"通知遺失時的備援"| Rc -->|"約 1 秒"| Close
+  Rc -.-> Fail
+```
+
+*圖：撤銷提交後，HTTP 在下次驗證即失效，座位 SSE 由 Pub/Sub 立即關閉並以每秒查核兜底。*
+
 **答案**　每個受保護的新 HTTP 請求讀 PostgreSQL。登出及停用或改角色的撤銷一旦提交，舊 cookie 在下一個驗證讀取點回 `401`。沒有 session cache 的不一致窗口。已進入 handler 的請求可能已通過驗證，訂票等敏感交易在寫入前另有 session fence。
 
 **機制與流程**
@@ -168,6 +304,34 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 
 ## Q6 監控數據
 
+```mermaid
+flowchart LR
+  N["nginx access log"]
+  Sv["服務 JSON log"]
+  Stub["nginx stub_status"]
+  H["API 每秒 histogram 與業務計數 · boot_uuid 與 interval_no"]
+  T[("Redis Stream telemetry:app")]
+  Ck["COPY 分批寫入 · log_checkpoint 同一交易"]
+  Dd["telemetry_ingest 去重 · 提交後 XACK"]
+  Cn["collector 每秒取樣連線數"]
+  PG[("metrics_1s · business_1s · access_logs · service_logs")]
+  Al["告警規則評估 · alert_events"]
+  Pub[("Redis Pub/Sub admin:alerts")]
+  Adm["Admin · metrics 與 alerts SSE · request_id 追查"]
+  N --> Ck
+  Sv --> Ck
+  H --> T --> Dd
+  Stub --> Cn
+  Ck --> PG
+  Dd --> PG
+  Cn --> PG
+  PG --> Al
+  Al -->|"狀態變化"| Pub --> Adm
+  PG -->|"每秒讀已保存資料"| Adm
+```
+
+*圖：Edge 日誌、App 樣本與連線取樣經 collector 入庫，再供 Admin 即時圖表、告警與 request_id 查詢使用。*
+
 **答案**　Edge 量測使用者經 nginx 所見的 HTTP 結果，App 量測 API 路由與業務結果。兩者各自以每秒資料保存。Edge 計算 nginx 目前的 TCP 連線數，App 計算座位 SSE 連線數。
 
 **機制與流程**
@@ -175,7 +339,7 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 | 指標 | 來源與時間窗口 | 儲存 |
 |---|---|---|
 | RPS | Edge 用 nginx 請求完成時的 `$msec` 分 UTC 秒，距 watermark 超過 2 秒的舊 bucket 只存 log。App 在 ASGI 完成時計入 route template，以 process 單調時鐘約每秒 flush。兩個 HTTP 聚合都排除 SSE。見 `infra/nginx/nginx.conf:39`、`backend/src/ticketing/telemetry/logs.py:242`、`backend/src/ticketing/telemetry/api_setup.py:35`、`backend/src/ticketing/telemetry/api_setup.py:76`。 | `metrics_1s.req_total`，key 為 `(source, scope, ts)`。 |
-| 錯誤率 | 每來源／scope／秒按 HTTP status class 計數。監控 API 的 `error_rate` 為 `err_5xx / req_total`，分母 0 回 null。4xx 另查，包含 nginx 在 client disconnect 時記錄的 Edge 499，以及預期業務 409。見 `backend/src/ticketing/telemetry/metrics.py:15`、`backend/src/ticketing/api/routes/monitoring.py:236`、`infra/nginx/nginx.conf:43`。 | `metrics_1s.err_4xx`、`err_5xx`、`status_classes` 及分母。 |
+| 錯誤率 | 每來源／scope／秒按 HTTP status class 計數。監控 API 的 `error_rate` 為 `err_5xx / req_total`，分母 0 回 null。4xx 另查，包含 nginx 在 client disconnect 時記錄的 Edge 499，以及預期業務 409。見 `backend/src/ticketing/telemetry/metrics.py:15`、`backend/src/ticketing/api/routes/monitoring.py:260`、`infra/nginx/nginx.conf:43`。 | `metrics_1s.err_4xx`、`err_5xx`、`status_classes` 及分母。 |
 | p50/p95/p99 | 同一秒的 nginx `$request_time` 含 proxy 時間。App 從進入 middleware 到 ASGI 處理返回，以 monotonic 計時。合併同來源各副本的 histogram 桶後再算 percentile。見 `infra/nginx/nginx.conf:44`、`backend/src/ticketing/telemetry/api_setup.py:39`、`backend/src/ticketing/telemetry/metrics.py:17`。 | `metrics_1s.hist` 與固定桶估計的 `p50_ms`、`p95_ms`、`p99_ms`。 |
 | 即時連線數 | Collector 每秒透過內部 nginx `/nginx_status` 取得 `Active connections` 的 TCP 連線數，並對近 3 秒有回報的 API 副本加總各自最後一筆座位 SSE 連線數。寫到最近完成的秒。見 `infra/nginx/nginx.conf:108`、`backend/src/ticketing/telemetry/collector.py:34`、`backend/src/ticketing/telemetry/collector.py:46`。 | `metrics_1s.conns_active`、`conns_sse`。 |
 

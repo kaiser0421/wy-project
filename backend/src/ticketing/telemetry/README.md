@@ -3,7 +3,7 @@
 | 指標 | 量測與時間窗口 | 保存 |
 | --- | --- | --- |
 | RPS | nginx 以 access log 的完成時間 `$msec` 計算 UTC 秒。API 以路由模板統計處理完成的請求。兩個來源都排除 SSE。 | `metrics_1s` 的 `req_total`，依來源與範圍查詢 |
-| 錯誤率 | 每秒的 4xx、5xx 與總請求數。查詢時以兩類錯誤計數的總和除以請求數。 | `metrics_1s` 計數與各 HTTP 狀態類別 |
+| 錯誤率 | 每秒的 4xx、5xx 與總請求數。監控 API 的錯誤率只計 5xx：`err_5xx / req_total`（4xx 是業務結果，例如限購或座位已被搶）。 | `metrics_1s` 計數與各 HTTP 狀態類別 |
 | p50、p95、p99 | nginx 的 `$request_time` 包含代理層延遲。應用層從 ASGI 進入到回應送出完成計時。 | `metrics_1s` 保存固定桶直方圖與 nearest-rank 估計值。跨來源或時間窗合併時逐桶加總，再重算百分位數。 |
 | 連線數 | collector 每秒探測 nginx `stub_status`。API SSE 連線數為近三秒內各副本最後一次 gauge 的加總。 | `metrics_1s` 的 `conns_active` 與 `conns_sse` |
 
