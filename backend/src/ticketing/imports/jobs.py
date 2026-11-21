@@ -16,7 +16,10 @@ def job_out(row: asyncpg.Record, max_rows: int) -> JobOut:
     if row["status"] == "queued":
         progress = 0
     elif row["status"] == "running":
-        progress = min(99, row["processed_rows"] * 100 // (row["total_rows"] or max_rows))
+        if row["total_rows"] is not None:
+            progress = 99 if row["file_validated"] else 98
+        else:
+            progress = min(97, row["processed_rows"] * 100 // max_rows)
     else:
         progress = 100
     return JobOut.model_validate({**dict(row), "progress_percent": progress})

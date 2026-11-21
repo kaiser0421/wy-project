@@ -138,6 +138,10 @@ services:
   worker:
     mem_limit: 1536m
     <<: *backend
+    environment:
+      <<: *backend-env
+      IMPORT_VALIDATE_TIMEOUT_MS: ${IMPORT_VALIDATE_TIMEOUT_MS:-35000}
+      IMPORT_FINALIZE_TIMEOUT_MS: ${IMPORT_FINALIZE_TIMEOUT_MS:-45000}
     command: ["ticketing-worker"]
     healthcheck:
       test: ["CMD", "ticketing-healthcheck", "worker"]

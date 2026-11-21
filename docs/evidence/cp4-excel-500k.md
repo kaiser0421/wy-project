@@ -11,6 +11,12 @@
 4. 以 Admin 經 nginx 呼叫 `GET /api/v1/events/3/reports/sales.xlsx?tz=Asia/Taipei`。
 5. 以 openpyxl（read-only）解析下載的檔案驗證內容。
 
+## 重現方式
+
+先啟動可拋棄的 Compose 測試堆疊，在專案根目錄執行 `./scripts/export_500k.sh`。腳本使用堆疊的 Admin 種子帳號及 PostgreSQL 資料庫，依種子 SQL 實際回傳的活動 ID 經 nginx 下載報表。每次執行都會新增活動及訂單，並將通過 openpyxl 唯讀筆數驗證的檔案存為 `sales-500k-<活動 ID>.xlsx`。
+
+腳本需使用 uv 及 cgroup v2。輸出包含請求至下載完成的秒數，以及各 API 容器在下載期間的 `memory.current` 與 `anon` 取樣峰值。若核心提供 `memory.peak`，也會列出容器生命週期峰值。可依 nginx 存取日誌中的請求 ID 辨識處理匯出的副本。
+
 ## 結果
 
 | 項目 | 數值 |

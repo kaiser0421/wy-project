@@ -1,4 +1,4 @@
-"""Set-based normalization, duplicate checks and layout application."""
+"""Set-based duplicate checks and layout application."""
 
 from uuid import UUID
 
@@ -8,45 +8,46 @@ from ticketing.core.context import request_id_var
 from ticketing.realtime.outbox import emit_layout_changed
 
 
-async def validate_file(conn: asyncpg.Connection, fence: UUID, event_id: int) -> None:
+async def validate_file(
+    conn: asyncpg.Connection, job_id: UUID, event_id: int, *, command_timeout: float
+) -> None:
+    # Rank once even before PostgreSQL has statistics for the freshly copied staging rows.
     await conn.execute(
-        """WITH normalized AS (
-               SELECT ctid AS row_tid, upper(zone_code COLLATE "C") AS zone,
-                      CASE WHEN zone_code COLLATE "C" ~ '^[A-Za-z0-9_-]{1,16}$'
-                             AND row_label COLLATE "C" ~ '^[A-Za-z0-9_-]{1,32}$'
-                             AND seat_number COLLATE "C" ~ '^[0-9]{1,16}$'
-                             AND ltrim(seat_number, '0') <> ''
-                           THEN upper(zone_code COLLATE "C") || '|'
-                                || upper(row_label COLLATE "C") || '|'
-                                || ltrim(seat_number, '0') END AS key
-               FROM import_staging WHERE fence = $1 AND error IS NULL
-           ), ranked AS (
-               SELECT *, count(*) OVER (PARTITION BY key) AS copies FROM normalized
+        """WITH ranked AS (
+               SELECT ctid AS row_tid, norm_key, count(*) OVER (PARTITION BY norm_key) AS copies
+               FROM import_staging WHERE job_id = $1 AND error IS NULL
+           ), invalid AS MATERIALIZED (
+               SELECT r.row_tid,
+                      CASE WHEN r.copies > 1 THEN 'duplicate_in_file'
+                           ELSE 'unknown_zone' END AS error
+               FROM ranked r
+               LEFT JOIN zones z ON z.event_id = $2 AND z.code = split_part(r.norm_key, '|', 1)
+               WHERE r.copies > 1 OR z.id IS NULL
            )
-           UPDATE import_staging s SET norm_key = r.key,
-               error = CASE WHEN r.key IS NULL THEN 'invalid_format'
-                            WHEN r.copies > 1 THEN 'duplicate_in_file'
-                            WHEN z.id IS NULL THEN 'unknown_zone' END
-           FROM ranked r LEFT JOIN zones z ON z.event_id = $2 AND z.code = r.zone
-           WHERE s.ctid = r.row_tid AND s.fence = $1""",
-        fence,
+           UPDATE import_staging s SET error = i.error
+           FROM invalid i WHERE s.ctid = i.row_tid AND s.job_id = $1""",
+        job_id,
         event_id,
-        timeout=22,
+        timeout=command_timeout,
     )
 
 
-async def validate_existing(conn: asyncpg.Connection, fence: UUID, event_id: int) -> None:
+async def validate_existing(
+    conn: asyncpg.Connection, job_id: UUID, event_id: int, *, command_timeout: float
+) -> None:
     await conn.execute(
         """UPDATE import_staging s SET error = 'duplicate_existing'
-           FROM seats x WHERE s.fence = $1 AND s.error IS NULL
+           FROM seats x WHERE s.job_id = $1 AND s.error IS NULL
              AND x.event_id = $2 AND x.norm_key = s.norm_key""",
-        fence,
+        job_id,
         event_id,
-        timeout=22,
+        timeout=command_timeout,
     )
 
 
-async def apply_layout(conn: asyncpg.Connection, job: asyncpg.Record) -> None:
+async def apply_layout(
+    conn: asyncpg.Connection, job: asyncpg.Record, *, command_timeout: float
+) -> None:
     event_id = job["event_id"]
     # Number new seats only after existing indices, preserving the realtime bitmap mapping.
     await conn.execute(
@@ -59,7 +60,7 @@ async def apply_layout(conn: asyncpg.Connection, job: asyncpg.Record) -> None:
                       ) - 1 AS offset
                FROM import_staging s JOIN zones z
                  ON z.event_id = $2 AND z.code = upper(s.zone_code COLLATE "C")
-               WHERE s.fence = $1 AND s.error IS NULL
+               WHERE s.job_id = $1 AND s.error IS NULL
            ), base AS (
                SELECT coalesce(max(seat_idx), -1) + 1 AS idx FROM seats WHERE event_id = $2
            )
@@ -68,9 +69,9 @@ async def apply_layout(conn: asyncpg.Connection, job: asyncpg.Record) -> None:
            SELECT $2, n.zone_id, n.row_label, n.seat_number, n.norm_key,
                   b.idx + n.offset, b.idx + n.offset
            FROM numbered n CROSS JOIN base b ORDER BY n.offset""",
-        job["fence"],
+        job["id"],
         event_id,
-        timeout=22,
+        timeout=command_timeout,
     )
     version = await conn.fetchval(
         """UPDATE events SET layout_ver = layout_ver + 1

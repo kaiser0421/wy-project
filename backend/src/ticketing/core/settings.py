@@ -88,6 +88,8 @@ class Settings(BaseSettings):
     export_dir: str = "/data/exports"
     import_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1)
     import_max_rows: int = Field(default=100_000, ge=1)
+    import_validate_timeout_ms: int = Field(default=35_000, gt=0, le=55_000)
+    import_finalize_timeout_ms: int = Field(default=45_000, gt=0, le=55_000)
     export_disk_quota_bytes: int = Field(default=2 * 1024**3, ge=1)
     nginx_log_dir: str = "/data/nginx-logs"
 

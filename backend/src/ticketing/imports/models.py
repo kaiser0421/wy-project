@@ -28,12 +28,13 @@ class JobOut(BaseModel):
     )
     format: Format = Field(description="Input file format", examples=["csv"])
     status: Status = Field(description="Current job state", examples=["running"])
-    processed_rows: int = Field(description="Rows staged in the current attempt", examples=[10000])
+    processed_rows: int = Field(description="Rows staged across attempts", examples=[10000])
     total_rows: int | None = Field(description="Input row count once known", examples=[12000])
     valid_rows: int | None = Field(description="Validated rows without errors", examples=[11999])
     error_rows: int | None = Field(description="Validated rows with errors", examples=[1])
     progress_percent: int = Field(
-        description="Estimated completion before parsing ends. Terminal jobs report 100.",
+        description="Parsing is estimated up to 97, validation reports 98, writing reports 99, "
+        "and terminal jobs report 100.",
         examples=[95],
     )
     failure_reason: str | None = Field(

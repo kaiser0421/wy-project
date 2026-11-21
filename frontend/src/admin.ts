@@ -450,7 +450,9 @@ function tracePanel(signal: AbortSignal) {
   const input = el("input", { name: "request_id", required: true, maxLength: 160, placeholder: "Paste a request ID" });
   const form = el("form", { class: "filters" }, field("Request ID", input), lookup);
   const status = notice();
-  const { body, container } = table(["Time", "Service", "Level", "Event / request", "Status", "Details"]);
+  const { body, container } = table(["Time", "Service", "Level", "Event", "Request", "Status", "Details"]);
+  container.setAttribute("aria-label", "Request trace");
+  container.classList.add("request-trace-scroll");
   container.hidden = true;
   let pending: AbortController | undefined;
   form.onsubmit = async event => {
@@ -470,7 +472,8 @@ function tracePanel(signal: AbortSignal) {
         const details = el("details", {}, el("summary", {}, "View"), el("pre", {}, JSON.stringify(entry.attrs, null, 2)));
         return el("tr", {}, el("td", { class: "nowrap" }, entry.ts ? el("time", { datetime: entry.ts, title: date(entry.ts) }, clock(entry.ts)) : "—"),
           el("td", {}, entry.service ?? "—"), el("td", {}, entry.level ?? "—"),
-          el("td", {}, [entry.event, entry.method, entry.route ?? entry.path].filter(Boolean).join(" ") || "—"),
+          el("td", { class: "trace-event" }, entry.event ?? "—"),
+          el("td", { class: "trace-request" }, [entry.method, entry.path ?? entry.route].filter(Boolean).join(" ") || "—"),
           el("td", {}, entry.status ?? "—"), el("td", {}, entry.req_ms == null ? undefined : `${entry.req_ms} ms`,
             entry.attrs ? details : undefined));
       }));

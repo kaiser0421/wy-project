@@ -8665,7 +8665,7 @@
           "processed_rows": {
             "type": "integer",
             "title": "Processed Rows",
-            "description": "Rows staged in the current attempt",
+            "description": "Rows staged across attempts",
             "examples": [
               10000
             ]
@@ -8718,7 +8718,7 @@
           "progress_percent": {
             "type": "integer",
             "title": "Progress Percent",
-            "description": "Estimated completion before parsing ends. Terminal jobs report 100.",
+            "description": "Parsing is estimated up to 97, validation reports 98, writing reports 99, and terminal jobs report 100.",
             "examples": [
               95
             ]
@@ -9447,7 +9447,7 @@
               {
                 "postgres": "ok",
                 "redis": "ok",
-                "schema": "0008_observability"
+                "schema": "0009_import_resume"
               }
             ]
           }

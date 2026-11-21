@@ -44,7 +44,11 @@ describe("access log", () => {
     const logs = vi.mocked(api.accessLogs).mockResolvedValueOnce([]).mockResolvedValueOnce([row, {
       ...row, request_id: null, req_ms: null,
     }]);
-    const trace = vi.spyOn(api, "trace").mockResolvedValue([{ event: "request.completed", service: "api" }]);
+    const path = "/api/v1/events/123/seat-imports/ddfb26f6-fe06-4aae-b557-6c268323f99a";
+    const trace = vi.spyOn(api, "trace").mockResolvedValue([{
+      event: "request.completed", service: "api", method: "GET",
+      route: "/api/v1/events/{event_id}/seat-imports/{job_id}", path,
+    }]);
     adminPage(root, navigation.signal);
     await vi.advanceTimersByTimeAsync(0);
     const region = root.querySelector<HTMLElement>('[aria-label="Access log"]')!;
@@ -72,6 +76,12 @@ describe("access log", () => {
     rows[0]!.querySelector("button")!.click();
     expect(trace).toHaveBeenCalledWith("request-access", expect.any(AbortSignal));
     expect(document.activeElement).toBe(root.querySelector('input[name="request_id"]'));
+    await vi.advanceTimersByTimeAsync(0);
+    const traceRegion = root.querySelector<HTMLElement>('[aria-label="Request trace"]')!;
+    expect(traceRegion.classList.contains("request-trace-scroll")).toBe(true);
+    expect(traceRegion.tabIndex).toBe(0);
+    expect(traceRegion.querySelector(".trace-event")?.textContent).toBe("request.completed");
+    expect(traceRegion.querySelector(".trace-request")?.textContent).toBe(`GET ${path}`);
   });
 
   it("cancels stale loads on repeated submits and when leaving monitoring", () => {
