@@ -35,12 +35,12 @@
 | 正式結果 | 第 1 輪 | 第 2 輪 |
 |---|---|---|
 | k6 HTTP 請求數／吞吐（含重試、付款、查詢） | 218,032／3,362 req/s | 134,801／2,098 req/s，全輪約 64 秒 |
-| k6 HTTP p50／p95／p99 | 157 ms／1.94 s／2.28 s | 1,043／2,036／2,263.464 ms |
+| k6 HTTP p50／p95／p99 | 157 ms／1.94 s／2.28 s | 1,043／2,036／2,263 ms |
 | k6 HTTP p90／max | — | 1,964／5,001 ms |
 | nginx HTTP p50／p95／p99 | — | 1.042／2.035／2.256 s |
 | k6 `server_busy`（全路徑） | 93,772 | 113,642（約 84%） |
 | nginx 建單路徑 503／409／201 | — | 99,864／12,494／4,610 |
-| 閘道與客戶端異常 | 104,136 筆立即回 502，nginx 記錄 `no live upstreams` | 502、500 各 0。k6 逾時 6 筆，nginx 均記為付款請求 499 |
+| 閘道與客戶端異常 | 104,136 筆立即回 502，access log 的 upstream 欄位只有群組名 `api`（沒有可用副本） | 502、500 各 0。k6 逾時 6 筆，nginx 均記為付款請求 499 |
 | k6 `unexpected_errors` | 106,186 筆（48.70%） | 6 筆（約 0.00445%） |
 | 成功鎖位 | k6 新建 4,228 筆，另有 8 筆成功重放，合計 4,236 筆建單 201 | k6 新建 4,538 筆。nginx 建單 201 共 4,610 筆，含 72 筆重放驗證回應 |
 | 冪等重放 | 68 筆中 60 筆遭拒（53 筆 503、7 筆 502），其餘 8 筆均回原訂單 | 發起 89 筆，72 筆收到回應且驗證正確（72/72）。17 筆用完 10 次嘗試仍遭拒 |
@@ -88,7 +88,7 @@ Delta 套用延遲從 frame 內最早的 outbox `created_at` 計至 client 套�
 | 2,000 條同時發起、目標 300 changes/s | 86 | 13.5 | 無 delta 樣本 | 0/2,000 probes 相符。outbox 待編序 0、archive 差異 0。 |
 | 24 條、3 秒 ramp、目標 50 changes/s | 24 | 48.7 | 180／2,909／3,817 | 24/24 probes 相符。outbox 待編序 0、archive 差異 0。 |
 
-Burst 的 8,337 次串流嘗試包含 6,110 次 HTTP request errors，並出現 DB session 重驗 timeout。Paced run 的 115 次嘗試包含 10 次 request errors、81 次 EOF，無 gap／resync，全部 probe 最後收斂。兩輪都尚未驗證 2,000 條目標達成。見 [Scenario B 本機量測](loadtest/scenario_b.md#local-measurements)。
+Burst 的 8,337 次串流嘗試包含 6,110 次 HTTP request errors，並出現 DB session 重驗 timeout。Paced run 的 115 次嘗試包含 10 次 request errors、81 次 EOF，無 gap／resync，全部 probe 最後收斂。這兩次開發試跑都未達 2,000 條；正式桌機結果見上表。見 [Scenario B 本機量測](loadtest/scenario_b.md#local-measurements)。
 
 ## 4. 座位匯入
 
@@ -152,7 +152,7 @@ docker compose exec -T postgres psql -XAt -U ticketing -d ticketing \
 | 情境 | 觀察與正式量測判讀 |
 |---|---|
 | A 筆電壓測 | 筆電 CPU 飽和，k6 與 nginx、API、PostgreSQL 等服務共享 CPU。SQL mean 上升，503 和 timeout 主導結果。程式在 pool acquire、鎖及查詢逾時時會提早回可重試 503。試跑的總 RPS 反映這台機器上的混合結果。見 `backend/src/ticketing/core/db.py:39`、`backend/src/ticketing/booking/database.py:15`。 |
-| A 桌機 | 第 2 輪 p50 約 1 秒，與連線池取用上限相符。滿載請求等待 DB pool，取用逾時即回可重試的 503。3 個單程序 API 副本的 CPU 是主要瓶頸研判，PostgreSQL 仍可能有餘裕。管理後台截圖可見 HTTP 流量、延遲、錯誤率與連線數。見 `backend/src/ticketing/core/settings.py:34`、`backend/src/ticketing/core/db.py:48`。[第 2 輪秒級監控](docs/evidence/loadtest-run2-20261121/a/metrics_1s.csv) · [壓測中監控畫面](docs/screenshots/11-monitoring-under-load.png) |
+| A 桌機 | 第 2 輪 p50 約 1 秒，與連線池取用上限相符。滿載請求等待 DB pool，取用逾時即回可重試的 503。壓測期間 `docker stats` 顯示 3 個單程序 API 副本各約 105% CPU（各用滿 1 核心），PostgreSQL 約 155%、k6 約 125%（主機 12 執行緒），API 程序 CPU 是主要瓶頸，PostgreSQL 仍有餘裕。管理後台截圖可見 HTTP 流量、延遲、錯誤率與連線數。見 `backend/src/ticketing/core/settings.py:34`、`backend/src/ticketing/core/db.py:48`。[第 2 輪秒級監控](docs/evidence/loadtest-run2-20261121/a/metrics_1s.csv) · [壓測中監控畫面](docs/screenshots/11-monitoring-under-load.png) |
 | B 桌機 | 第 1 輪單程序 client 飽和，服務端 session 重驗失敗也造成整批斷線。第 2 輪仍有進度停滯觸發重連，但最終全部對上 DB，outbox 待編序與 archive 差異均為 0。見 `backend/src/ticketing/realtime/reader.py:161`、`backend/src/ticketing/realtime/revocation.py:101`。[第 1 輪 SSE client](docs/evidence/loadtest-run1-20261121/b/sse-client.txt) · [第 2 輪 SSE client](docs/evidence/loadtest-run2-20261121/b/sse-client.txt) |
 | 座位匯入／Excel 匯出 | 匯入計時含背景作業與回報。Excel 在同機實測已完成，`memory.current` 的峰值接近上限，同時可見大量可回收 page cache。更高磁碟 I/O 或與其他流量共用資源時的影響尚待量測。 |
 
