@@ -93,6 +93,7 @@ class Metrics:
             **dict(self.total),
             "peak_active": self.peak,
             "sse_body_bytes_per_second": round(self.total["sse_body_bytes"] / seconds),
+            "delta_apply_samples": self.latency.total(),
             "delta_apply_ms": percentiles(self.latency),
             "connect_ms": percentiles(self.connect),
             "snapshot_ms": percentiles(self.snapshot),
@@ -275,9 +276,13 @@ async def pg_state(conn: asyncpg.Connection, event_id: int) -> tuple[int, int, s
             "SELECT seat_idx, status, version FROM seats WHERE event_id=$1 ORDER BY seat_idx",
             event_id,
         )
+        # A retained suffix must still be contiguous and end at the stream head.
         archive_mismatches = await conn.fetchval(
             """
-            WITH expected AS (
+            WITH retained AS (
+                SELECT min(seq) AS lo, max(seq) AS hi, count(*) AS n
+                FROM outbox WHERE event_id=$1 AND seq IS NOT NULL
+            ), expected AS (
                 SELECT o.seq, (c->>0)::int AS idx, c->>1 AS status, (c->>2)::int AS version,
                        o.created_at AS recorded_at
                 FROM outbox o
@@ -286,13 +291,19 @@ async def pg_state(conn: asyncpg.Connection, event_id: int) -> tuple[int, int, s
                 ) c WHERE event_id=$1 AND seq IS NOT NULL
             ), actual AS (
                 SELECT seq, seat_idx AS idx, status, seat_version AS version, recorded_at
-                FROM seat_events WHERE event_id=$1
+                FROM seat_events CROSS JOIN retained
+                WHERE event_id=$1 AND seq BETWEEN lo AND hi
+            ), differences AS (
+                SELECT count(*) AS n FROM expected FULL JOIN actual
+                USING (seq, idx, status, version, recorded_at)
+                WHERE expected.seq IS NULL OR actual.seq IS NULL
             )
-            SELECT count(*) FROM expected FULL JOIN actual
-            USING (seq, idx, status, version, recorded_at)
-            WHERE expected.seq IS NULL OR actual.seq IS NULL
+            SELECT differences.n + CASE
+                WHEN hi - lo + 1 <> retained.n OR hi <> $2 THEN 1 ELSE 0 END
+            FROM differences CROSS JOIN retained
             """,
             event_id,
+            info["head"],
         )
     seats = Seats(
         Layout.create(info["layout_ver"], [row["seat_idx"] for row in rows]),
@@ -364,6 +375,7 @@ async def run_scenario(args: argparse.Namespace, tokens: list[str]) -> bool:
                 matched == len(tokens)
                 and scenario.metrics.peak == len(tokens)
                 and pending == archive_errors == 0
+                and report["delta_apply_samples"] > 0
             )
         finally:
             for task in tasks:

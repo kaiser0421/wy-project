@@ -120,6 +120,8 @@ async def write(conn: asyncpg.Connection, args: argparse.Namespace) -> None:
     print(
         json.dumps({"changes": written, "seconds": elapsed, "changes_per_sec": written / elapsed})
     )
+    if not written:
+        raise SystemExit("Writer committed no seat changes")
 
 
 async def generate(
