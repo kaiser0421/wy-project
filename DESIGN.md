@@ -149,7 +149,7 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 
 ## Q6 監控數據
 
-**答案**　Edge 量測使用者經 nginx 所見的 HTTP 結果，App 量測 API 路由與業務結果。兩者各自以每秒資料保存。Edge 的連線數是 TCP gauge，App 的連線數是座位 SSE gauge。
+**答案**　Edge 量測使用者經 nginx 所見的 HTTP 結果，App 量測 API 路由與業務結果。兩者各自以每秒資料保存。Edge 計算 nginx 目前的 TCP 連線數，App 計算座位 SSE 連線數。
 
 **機制與流程**
 
@@ -158,9 +158,11 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 | RPS | Edge 用 nginx 請求完成時的 `$msec` 分 UTC 秒，距 watermark 超過 2 秒的舊 bucket 只存 log。App 在 ASGI 完成時計入 route template，以 process 單調時鐘約每秒 flush。兩個 HTTP 聚合都排除 SSE。見 `infra/nginx/nginx.conf:35`、`backend/src/ticketing/telemetry/logs.py:242`、`backend/src/ticketing/telemetry/api_setup.py:35`、`backend/src/ticketing/telemetry/api_setup.py:76`。 | `metrics_1s.req_total`，key 為 `(source, scope, ts)`。 |
 | 錯誤率 | 每來源／scope／秒按 HTTP status class 計數。監控 API 的 `error_rate` 為 `err_5xx / req_total`，分母 0 回 null。4xx 另查，包含 nginx 在 client disconnect 時記錄的 Edge 499，以及預期業務 409。見 `backend/src/ticketing/telemetry/metrics.py:15`、`backend/src/ticketing/api/routes/monitoring.py:236`、`infra/nginx/nginx.conf:41`。 | `metrics_1s.err_4xx`、`err_5xx`、`status_classes` 及分母。 |
 | p50/p95/p99 | 同一秒的 nginx `$request_time` 含 proxy 時間。App 從進入 middleware 到 ASGI 處理返回，以 monotonic 計時。合併同來源各副本的 histogram 桶後再算 percentile。見 `infra/nginx/nginx.conf:42`、`backend/src/ticketing/telemetry/api_setup.py:39`、`backend/src/ticketing/telemetry/metrics.py:17`。 | `metrics_1s.hist` 與固定桶估計的 `p50_ms`、`p95_ms`、`p99_ms`。 |
-| 即時連線數 | Collector 每秒探測內部 nginx `/nginx_status` 的 active connections，app 對近 3 秒回報的各副本加總最後一筆 SSE gauge。寫到最近完成的秒。見 `infra/nginx/nginx.conf:97`、`backend/src/ticketing/telemetry/collector.py:34`、`backend/src/ticketing/telemetry/collector.py:46`。 | `metrics_1s.conns_active`、`conns_sse`。 |
+| 即時連線數 | Collector 每秒透過內部 nginx `/nginx_status` 取得 `Active connections` 的 TCP 連線數，並對近 3 秒有回報的 API 副本加總各自最後一筆座位 SSE 連線數。寫到最近完成的秒。見 `infra/nginx/nginx.conf:97`、`backend/src/ticketing/telemetry/collector.py:34`、`backend/src/ticketing/telemetry/collector.py:46`。 | `metrics_1s.conns_active`、`conns_sse`。 |
 
 日誌以 COPY 分批寫 `access_logs` / `service_logs`。監控與業務計數分別批次寫 `metrics_1s`、`business_1s`。每日 UTC 分區保留門檻為日誌 7 天、監控與業務 14 天、`seat_events` 90 天。監控 SSE 每秒讀最近完成的秒，Edge 缺該秒時可帶上最近的 Edge 資料，判讀時看各列 `ts`。見 `backend/src/ticketing/telemetry/logs.py:316`、`backend/src/ticketing/telemetry/app_metrics.py:241`、`backend/migrations/versions/0005_monitoring.py:95`、`backend/src/ticketing/api/routes/monitoring.py:389`。
+
+管理後台可用 `request_id` 查詢 nginx 存取日誌及共用目錄中的服務日誌。API 呼叫 paymock 時透過 `X-Request-ID` 傳遞識別碼，paymock 以該識別碼記錄請求處理。回呼傳送沿用觸發付款狀態變更的請求識別碼，並記錄傳送結果。付款頁日誌使用路由樣板遮蔽 checkout token。見 `backend/src/ticketing/core/http.py`、`paymock/src/paymock/main.py`、`paymock/src/paymock/delivery.py`。
 
 - **HTTP 全 200 仍受害**　例如模擬金流 confirm 回 200，買家輪詢訂單也一直回 200，但畫面長時間停在待付款。當 capture 經回呼或 poll 寫入，`PAYMENT_CALLBACK_LAG` 可在最近 60 秒記錄中指出超過 30 秒的落差。完全沒有觀測到 capture 時，這條規則沒有資料，需查看金流與訂單、`HOLD_EXPIRY_BACKLOG` 等旁證。另一種情境是瀏覽與監控正常，大量買家在有空位的活動反覆遇到 `hold_soldout`。 `PURCHASE_FUNNEL_COLLAPSE` 依活動看過去 30 秒，成功率低於 20%、conflict 與 limit 合計少於失敗的一半且仍有可用席，條件持續 30 秒才發出告警。單一小區的問題可能被同活動其他區的流量掩蓋。見 `backend/src/ticketing/telemetry/alerts.py:32`、`backend/src/ticketing/telemetry/alerts.py:45`、`backend/src/ticketing/telemetry/alerts.py:58`、`backend/src/ticketing/telemetry/alerts.py:205`、`backend/src/ticketing/booking/create.py:248`。
 - **副本去重與遺失**　API 附上 boot UUID 與 interval number，經 Redis Stream 送監控樣本。Collector 在 PG 同一交易插入 `telemetry_ingest`，只對新 `(boot_uuid, interval_no)` 累加 histogram 和業務計數，提交後 `XACK`。重啟以 `XAUTOCLAIM` 領回 pending。API flush 前 crash、XADD 失敗或 stream 修剪仍可丟資料，`completeness` 和 `late_or_missing` 依 producer heartbeat 和回報數揭露缺口。Edge 以 device/inode 的 checkpoint 與日誌同交易提交。見 `backend/src/ticketing/telemetry/api_setup.py:57`、`backend/src/ticketing/telemetry/api_setup.py:76`、`backend/src/ticketing/telemetry/app_metrics.py:109`、`backend/src/ticketing/telemetry/app_metrics.py:194`、`backend/src/ticketing/telemetry/app_metrics.py:241`、`backend/src/ticketing/telemetry/app_metrics.py:284`、`backend/src/ticketing/telemetry/collector.py:153`、`backend/src/ticketing/telemetry/logs.py:266`。

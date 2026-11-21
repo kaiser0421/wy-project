@@ -113,6 +113,8 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 
 可複製 [`.env.example`](.env.example) 為 `.env` 覆蓋 Compose 的插值預設值。範例也標明需直接傳給程序或以 Compose override 注入的設定。
 
+`DB_POOL_MAX` 預設為 10，套用於每個 API 副本及各個 `worker`、`relay`、`collector` 程序的 PostgreSQL 連線池。背景維護會清除編序超過 1 小時的座位 outbox 列，已歸檔的 `seat_events` 仍會保留。若回放需要已清除的序號區間，SSE 會通知客戶端重新取得快照。見 `backend/src/ticketing/core/service.py`、`backend/src/ticketing/maintenance.py`。
+
 ## 需求對照
 
 | 交付項目 | 位置 |
@@ -132,4 +134,4 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 - **筆電壓測**。在 2 核心／4 執行緒的 MacBook 上，3,000 VUs 與服務同機造成 CPU 飽和。多數請求收到快速的 `503 server-busy` 或 client timeout，約 86–95 req/s，SQL 平均耗時受競爭影響約 35–170 ms。該次一致性檢查未發現超賣。
 - **大型 Excel 匯出耗時**。兩次下載約 217–237 秒，nginx 報表路徑的讀取逾時為 300 秒。見 `infra/nginx/nginx.conf:138`、[Excel 匯出實測紀錄](docs/evidence/cp4-excel-500k.md)。
 - **固定 Docker 子網**。Compose 網路使用 `172.28.0.0/24`，nginx 固定在 `172.28.0.200`，讓 API 只信任 nginx 轉送的 client IP。若本機已有網路使用同一段位址，`docker compose up` 會回報 `Pool overlaps with other one on this address space`，需先移除該網路（例如舊的堆疊執行 `docker compose down`）。見 `compose.yaml:10`、`compose.yaml:220`。
-- **監控可見性**。極晚到達的 nginx 日誌仍可依 request ID 查到，但可能超出每秒指標的回填窗口。付款服務的內部／回呼配送日誌輸出至自身容器，collector 讀取的是 nginx 與共享目錄的服務日誌。見 `backend/src/ticketing/telemetry/logs.py:76`、`compose.yaml:169`、[監控資料契約](backend/src/ticketing/telemetry/README.md)。
+- **監控可見性**。極晚到達的 nginx 日誌仍可依 `request_id` 查到，但可能超出每秒指標的回填窗口。Collector 也從共用目錄收集 paymock 的請求處理與回呼傳送日誌，供管理後台依 `request_id` 查詢。見 `backend/src/ticketing/telemetry/logs.py:76`、`compose.yaml:169`、[監控資料契約](backend/src/ticketing/telemetry/README.md)。
