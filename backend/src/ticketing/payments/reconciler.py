@@ -234,11 +234,17 @@ async def _clean_completed_keys(ctx: ServiceContext) -> None:
 
 
 async def _unclaim_attempts(ctx: ServiceContext, rows: list[asyncpg.Record]) -> None:
-    """Make claimed-but-unpolled attempts due again (NULL falls back to updated_at)."""
+    """Make claimed-but-unpolled attempts due again (NULL falls back to updated_at).
+
+    Only rows still carrying this claim's stamp are reset, so a later poll is never undone.
+    """
     async with transaction(ctx.db, ctx.settings) as conn:
         await conn.execute(
-            "UPDATE payment_attempts SET last_polled_at=NULL WHERE id = ANY($1::uuid[])",
+            """UPDATE payment_attempts p SET last_polled_at=NULL
+               FROM unnest($1::uuid[], $2::timestamptz[]) AS c(id, stamp)
+               WHERE p.id=c.id AND p.last_polled_at=c.stamp""",
             [row["id"] for row in rows],
+            [row["last_polled_at"] for row in rows],
         )
 
 
@@ -284,6 +290,8 @@ async def _run_phase(
     unfinished: list[asyncpg.Record] = []
 
     async def run_row(row: asyncpg.Record) -> None:
+        if ctx.stop.is_set():
+            return  # never started: stays in `unfinished` and is handed back below
         try:
             await process(row)
         except Exception as exc:

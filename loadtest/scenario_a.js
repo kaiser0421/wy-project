@@ -21,7 +21,8 @@ if (!Number.isSafeInteger(eventId) || eventId < 1 || sessions.length < vus || zo
 
 export const options = {
   scenarios: {
-    rush: { executor: 'constant-vus', vus, duration: __ENV.DURATION || '60s' },
+    // Replays may retry for up to ~60 s; give iterations time to finish so none is cut mid-check.
+    rush: { executor: 'constant-vus', vus, duration: __ENV.DURATION || '60s', gracefulStop: '90s' },
   },
   systemTags: ['status', 'method', 'name', 'scenario', 'expected_response'],
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],

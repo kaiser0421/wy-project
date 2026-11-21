@@ -76,9 +76,11 @@ services:
 
   redis:
     logging: *default-logging
-    mem_limit: 256m
+    mem_limit: 512m
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
+    # maxmemory stays well under the container limit to leave room for AOF rewrites; noeviction
+    # keeps rate-limit keys (a full Redis rejects writes instead of silently dropping limits).
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
     volumes: [redis_data:/data]
     ports: ["127.0.0.1:6379:6379"]
     healthcheck:
