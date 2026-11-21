@@ -1,0 +1,11 @@
+$ BREAK_IT_RAW=1 pytest -v "backend/tests/booking/test_booking.py::test_break_it"
+# PostgreSQL 16 (postgres:16 image), 2026-11-21 15:50 CST; normal and indexed are controls, naive removes all three protections
+
+backend/tests/booking/test_booking.py::test_break_it[normal] PASSED      [ 33%]
+backend/tests/booking/test_booking.py::test_break_it[indexed] PASSED     [ 66%]
+backend/tests/booking/test_booking.py::test_break_it[naive] FAILED       [100%]
+E       AssertionError: Booking invariant violations: [{'invariant': 'seat active claims', 'id': 2}, {'invariant': 'seat active claims', 'id': 1}, {'invariant': 'seat active claims', 'id': 3}]
+backend/tests/booking/support.py:117: AssertionError
+=========================== short test summary info ============================
+FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
+========================= 1 failed, 2 passed in 12.60s =========================

@@ -14,7 +14,9 @@ cd "$(git rev-parse --show-toplevel)"
 MODE=${1:-all}
 STAMP=$(date +%Y%m%d-%H%M%S)
 OUT=${OUT:-loadtest/out/$STAMP}
-mkdir -p "$OUT"
+mkdir -p "$OUT/a" "$OUT/b"
+# Containers that write into loadtest/ run as the invoking user, so Linux bind mounts work too.
+LT_USER="$(id -u):$(id -g)"
 OUT_IN=/lt/${OUT#loadtest/}            # same directory as seen inside containers
 
 if [[ $MODE == smoke ]]; then
@@ -34,7 +36,7 @@ network() {
 
 # Python tools run inside the backend image (it already has the ticketing package and deps).
 py() {
-  docker compose run --rm --no-deps -T -v "$PWD/loadtest:/lt" -w /lt --entrypoint python api "$@"
+  docker compose run --rm --no-deps -T --user "$LT_USER" -e HOME=/tmp -v "$PWD/loadtest:/lt" -w /lt --entrypoint python api "$@"
 }
 
 psql_q() { docker compose exec -T postgres psql -U ticketing -d ticketing "$@"; }
@@ -78,7 +80,7 @@ scenario_a() {
   local started; started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   log "Scenario A: k6 $VUS VUs for $DURATION against event $event_id"
   # shellcheck disable=SC2086
-  docker run --rm ${K6_CPUS:+--cpus $K6_CPUS} --network "$(network)" \
+  docker run --rm --user "$LT_USER" ${K6_CPUS:+--cpus $K6_CPUS} --network "$(network)" \
     -v "$PWD/loadtest:/lt" -w /lt \
     -e BASE_URL=http://nginx:8080 -e ORIGIN=http://localhost:8080 -e EVENT_ID="$event_id" \
     -e RUN_ID="a-$STAMP" -e VUS="$VUS" -e DURATION="$DURATION" \
