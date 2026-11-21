@@ -64,7 +64,7 @@
 | 前端 | TypeScript SPA、Vite、Canvas 座位圖、uPlot 監控圖表。見 `frontend/package.json:6`、`frontend/src/seat-canvas.ts:8`。 |
 | 應用 | Python 3.12、FastAPI、Uvicorn、Pydantic、asyncpg、Alembic、Argon2id、XlsxWriter。見 `backend/pyproject.toml:5`。 |
 | 資料 | PostgreSQL 16 保存座位、訂單、session 與監控資料。Redis 7 提供限流、Pub/Sub、遙測 stream 與背景心跳。模擬金流以 SQLite 保存付款與回呼佇列。見 `compose.yaml:45`、`compose.yaml:68`、`paymock/src/paymock/main.py:86`。 |
-| 部署與驗證 | Docker Compose、nginx 1.27、pytest、Vitest、Playwright、k6 與 Python SSE client。見 `infra/nginx/Dockerfile:10`、`compose.test.yaml:41`、[壓測工具包](loadtest/README.md)。 |
+| 部署與驗證 | Docker Compose、nginx 1.28、pytest、Vitest、Playwright、k6 與 Python SSE client。見 `infra/nginx/Dockerfile:12`、`compose.test.yaml:41`、[壓測工具包](loadtest/README.md)。 |
 
 ## 本機開發
 

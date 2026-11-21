@@ -20,6 +20,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --package ticketing --no-editable
 
 FROM python:${PYTHON_VERSION}-slim AS runtime
+# Apply Debian security updates published after the base image was built.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid app --no-create-home app \
  && mkdir -p /data/logs /data/imports /data/exports && chown -R app:app /data
