@@ -3,17 +3,31 @@ import "uplot/dist/uPlot.min.css";
 import { api, ApiError, type AdminUser, type Alert, type HttpMetrics, type Metric, type Role, type User } from "./api";
 import { date, label } from "./format";
 import { incomplete, metricSecond, MetricWindow, WINDOW_SECONDS, type Sample } from "./metrics";
+import { onThemeChange } from "./theme";
 import { button, el, errorText, field, formValue, heading, interval, link, notice, panel, select, show, sleep, table } from "./view";
 
 const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
-const colors = ["#205cb5", "#147668", "#986414"];
+const seriesColors = ["--chart-blue", "--chart-teal", "--chart-amber"] as const;
 type Reading = (sample: Metric) => number | null | undefined;
-interface Series { label: string; read: Reading; color: string; dash?: number[] }
+interface Series { label: string; read: Reading; color: typeof seriesColors[number]; dash?: number[] }
+
+function chartColors() {
+  const styles = getComputedStyle(document.documentElement);
+  const color = (token: string) => styles.getPropertyValue(token).trim();
+  return {
+    axis: color("--muted"),
+    grid: color("--chart-grid"),
+    incomplete: color("--chart-incomplete"),
+    "--chart-blue": color("--chart-blue"),
+    "--chart-teal": color("--chart-teal"),
+    "--chart-amber": color("--chart-amber"),
+  };
+}
 
 function httpSeries(entries: (keyof Omit<HttpMetrics, "ts">)[], labels: string[], multiplier = 1): Series[] {
   return entries.flatMap((key, index) => (["edge", "app"] as const).map(source => ({
     label: `${source === "edge" ? "Edge" : "App"}${labels[index] ? ` ${labels[index]}` : ""}`,
-    color: colors[index]!, dash: source === "app" ? [5, 4] : undefined,
+    color: seriesColors[index]!, dash: source === "app" ? [5, 4] : undefined,
     read: (sample: Metric) => {
       const value = sample[source]?.[key];
       return value == null ? null : value * multiplier;
@@ -28,6 +42,11 @@ function chart(title: string, unit: string, definitions: Series[], signal: Abort
   box.classList.add("chart-panel");
   let graph: uPlot | undefined;
   let shaded: boolean[] = [];
+  let colors = chartColors();
+  onThemeChange(() => {
+    colors = chartColors();
+    graph?.redraw(false);
+  }, signal);
 
   const resize = new ResizeObserver(() => {
     const width = Math.floor(host.clientWidth);
@@ -55,18 +74,25 @@ function chart(title: string, unit: string, definitions: Series[], signal: Abort
       graph.setData(data);
       return;
     }
+    const axis = {
+      stroke: () => colors.axis,
+      grid: { stroke: () => colors.grid },
+      ticks: { stroke: () => colors.grid },
+      font: "12px system-ui",
+    };
+    // uPlot sets these DOM colours as inline styles. CSS variables keep them live.
+    const markerColor = (_plot: uPlot, index: number) => `var(${definitions[index - 1]!.color})`;
     graph = new uPlot({
       width: Math.max(250, host.clientWidth), height: 182,
-      cursor: { drag: { setScale: false }, points: { size: 5 } },
-      legend: { live: false },
-      axes: [{ stroke: "#50647b", grid: { stroke: "#e4ebf3" }, font: "12px system-ui" },
-        { stroke: "#50647b", grid: { stroke: "#e4ebf3" }, font: "12px system-ui", size: 48 }],
+      cursor: { drag: { setScale: false }, points: { size: 5, fill: markerColor, stroke: markerColor } },
+      legend: { live: false, markers: { stroke: markerColor } },
+      axes: [axis, { ...axis, size: 48 }],
       scales: {
         x: { time: true, range: plot => [plot.data[0][0]! - 0.5, plot.data[0].at(-1)! + 0.5] },
         y: { auto: true, range: (_plot, _min, max) => [0, max > 0 && Number.isFinite(max) ? max * 1.1 : 1] },
       },
       series: [{}, ...definitions.map(series => ({
-        label: series.label, stroke: series.color, dash: series.dash, width: 2,
+        label: series.label, stroke: () => colors[series.color], dash: series.dash, width: 2,
         points: { show: false }, spanGaps: false,
       }))],
       hooks: { drawClear: [plot => {
@@ -74,7 +100,7 @@ function chart(title: string, unit: string, definitions: Series[], signal: Abort
         const x = plot.scales.x!;
         const step = bbox.width / ((x.max ?? 1) - (x.min ?? 0));
         ctx.save();
-        ctx.fillStyle = "#e8eef7";
+        ctx.fillStyle = colors.incomplete;
         shaded.forEach((missing, index) => {
           if (!missing) return;
           const second = plot.data[0][index]!;
@@ -96,8 +122,8 @@ function metricsPanel(signal: AbortSignal): HTMLElement {
     chart("Request latency", "ms", httpSeries(["p50_ms", "p95_ms", "p99_ms"], ["p50", "p95", "p99"]), signal),
     chart("Error rate", "%", httpSeries(["error_rate"], [""], 100), signal),
     chart("Active connections", "", [
-      { label: "nginx active TCP connections", color: colors[0]!, read: metric => metric.connections?.active },
-      { label: "Seat SSE", color: colors[1]!, read: metric => metric.connections?.sse },
+      { label: "nginx active TCP connections", color: "--chart-blue", read: metric => metric.connections?.active },
+      { label: "Seat SSE", color: "--chart-teal", read: metric => metric.connections?.sse },
     ], signal),
   ];
   const funnel = el("dl", { class: "metric-strip" });

@@ -5,8 +5,8 @@ import { label } from "./format";
 import { pendingIntents, retryDelay, retryLabel, retrySeconds } from "./intent";
 import { orderPage, ordersPage } from "./orders";
 import { managePage, organizerPage } from "./organizer";
-import { button, el, errorText, field, heading, interval, link, notice, panel, show } from "./view";
-import "./style.css";
+import { setTheme } from "./theme";
+import { button, el, errorText, field, heading, interval, link, notice, panel, select, show } from "./view";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const main = el("main", { id: "main", class: "main", tabindex: -1 });
@@ -47,6 +47,12 @@ function headerFor(path: string): void {
   start.prepend(el("span", { class: "brand-mark", "aria-hidden": true }));
   const content = el("div", { class: "header-inner" }, start);
   if (mockMode) content.append(el("span", { class: "demo-label" }, "Demo"));
+  const theme = select([["system", "System"], ["light", "Light"], ["dark", "Dark"]]);
+  theme.setAttribute("aria-label", "Theme");
+  theme.classList.add("theme-select");
+  theme.value = document.documentElement.dataset.theme ?? "system";
+  theme.onchange = () => setTheme(theme.value);
+  const account = el("div", { class: "account" }, theme);
   if (user) {
     const nav = el("nav", { "aria-label": "Main navigation" });
     for (const item of navigation) {
@@ -73,9 +79,10 @@ function headerFor(path: string): void {
         signout.disabled = false;
       }
     };
-    content.append(nav, el("div", { class: "account" },
-      el("span", { class: "account-role", title: user.email }, label(user.role)), signout));
+    content.append(nav);
+    account.append(el("span", { class: "account-role", title: user.email }, label(user.role)), signout);
   }
+  content.append(account);
   header.replaceChildren(content);
 }
 

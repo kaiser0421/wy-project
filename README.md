@@ -41,6 +41,8 @@
 
 以預設帳號在 Compose 堆疊上操作的實際畫面（瀏覽器視窗 1440×900，長頁面為整頁截圖）。
 
+導覽列可切換深色或淺色主題，也可跟隨系統設定。
+
 | 即時座位圖（User） | Admin 即時監控 |
 | --- | --- |
 | [![即時座位圖](docs/screenshots/03-seat-map-live.png)](docs/screenshots/03-seat-map-live.png) | [![即時監控](docs/screenshots/06-admin-monitoring.png)](docs/screenshots/06-admin-monitoring.png) |
