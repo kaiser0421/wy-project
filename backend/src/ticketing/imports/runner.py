@@ -19,15 +19,28 @@ from ticketing.core.context import request_operation
 from ticketing.core.db import acquire
 from ticketing.core.logging import get_logger
 from ticketing.core.service import ServiceContext
+from ticketing.core.settings import Settings
 from ticketing.imports.parser import InvalidLayout, Row, iter_rows
 from ticketing.imports.validation import apply_layout, validate_existing, validate_file
 
-_BATCH_SIZE = 10_000
+_BATCH_SIZE = 5_000
 _LEASE_SECONDS = 30
 _MAX_ATTEMPTS = 3
 _WORKER = uuid4().hex
 _UPLOAD_NAME = re.compile(r"(?:[0-9a-f]{32}\.upload|\.[0-9a-f]{32}\.part)")
-_STAGING_COLUMNS = ("fence", "line", "item_index", "zone_code", "row_label", "seat_number", "error")
+_STAGING_COLUMNS = (
+    "job_id",
+    "line",
+    "item_index",
+    "zone_code",
+    "row_label",
+    "seat_number",
+    "error",
+    "norm_key",
+)
+_ZONE_CODE = re.compile(r"[A-Za-z0-9_-]{1,16}")
+_ROW_LABEL = re.compile(r"[A-Za-z0-9_-]{1,32}")
+_SEAT_NUMBER = re.compile(r"[0-9]{1,16}")
 log = get_logger(__name__)
 
 
@@ -35,7 +48,7 @@ class LeaseLost(Exception):
     """Another worker owns the job or its event was removed."""
 
 
-async def claim(conn: asyncpg.Connection) -> asyncpg.Record | None:
+async def claim(conn: asyncpg.Connection, settings: Settings) -> asyncpg.Record | None:
     async with conn.transaction():
         job = await conn.fetchrow(
             """SELECT * FROM import_jobs
@@ -49,10 +62,9 @@ async def claim(conn: asyncpg.Connection) -> asyncpg.Record | None:
             job["lease_expires_at"],
         ):
             return None
-        if job["fence"] is not None:
-            await conn.execute("SET LOCAL statement_timeout = '20s'")
-            await _clear(conn, job["fence"])
         if job["attempt_no"] >= _MAX_ATTEMPTS:
+            command_timeout = await _stage_timeout(conn, settings.import_finalize_timeout_ms)
+            await _clear(conn, job["id"], command_timeout=command_timeout)
             return await conn.fetchrow(
                 """UPDATE import_jobs SET status = 'system_failed',
                                           failure_reason = 'attempts_exhausted',
@@ -65,9 +77,7 @@ async def claim(conn: asyncpg.Connection) -> asyncpg.Record | None:
         return await conn.fetchrow(
             """UPDATE import_jobs SET status = 'running', fence = $2, worker_id = $3,
                                       lease_expires_at = app_now() + make_interval(secs => $4),
-                                      attempt_no = attempt_no + 1, started_at = app_now(),
-                                      processed_rows = 0, total_rows = NULL,
-                                      valid_rows = NULL, error_rows = NULL
+                                      attempt_no = attempt_no + 1, started_at = app_now()
                WHERE id = $1 AND (status = 'queued' OR
                     (status = 'running' AND fence = $5 AND lease_expires_at <= app_now()))
                RETURNING *""",
@@ -79,8 +89,16 @@ async def claim(conn: asyncpg.Connection) -> asyncpg.Record | None:
         )
 
 
-async def _clear(conn: asyncpg.Connection, fence: UUID) -> None:
-    await conn.execute("DELETE FROM import_staging WHERE fence = $1", fence, timeout=22)
+async def _stage_timeout(conn: asyncpg.Connection, timeout_ms: int) -> float:
+    await conn.execute("SELECT set_config('statement_timeout', $1, true)", str(timeout_ms))
+    # Let PostgreSQL cancel first so it can roll back the statement and report the cause.
+    return timeout_ms / 1000 + 1
+
+
+async def _clear(conn: asyncpg.Connection, job_id: UUID, *, command_timeout: float) -> None:
+    await conn.execute(
+        "DELETE FROM import_staging WHERE job_id = $1", job_id, timeout=command_timeout
+    )
 
 
 async def _lock_fence(conn: asyncpg.Connection, job: asyncpg.Record) -> None:
@@ -111,16 +129,36 @@ async def _renew(conn: asyncpg.Connection, job: asyncpg.Record, processed: int) 
 async def stage(
     conn: asyncpg.Connection, job: asyncpg.Record, batch: list[Row], processed: int
 ) -> None:
+    records = [_staging_record(job["id"], row) for row in batch]
     async with conn.transaction():
         await _lock_fence(conn, job)
         await conn.execute("SET LOCAL statement_timeout = '8s'")
         await conn.copy_records_to_table(
             "import_staging",
             columns=_STAGING_COLUMNS,
-            records=[(job["fence"], *row) for row in batch],
+            records=records,
             timeout=10,
         )
         await _renew(conn, job, processed)
+
+
+def _staging_record(job_id: UUID, row: Row) -> tuple[UUID, *Row, str | None]:
+    line, index, zone, label, number, error = row
+    key = None
+    if error is None:
+        if (
+            zone
+            and _ZONE_CODE.fullmatch(zone)
+            and label
+            and _ROW_LABEL.fullmatch(label)
+            and number
+            and _SEAT_NUMBER.fullmatch(number)
+            and (seat := number.lstrip("0"))
+        ):
+            key = f"{zone.upper()}|{label.upper()}|{seat}"
+        else:
+            error = "invalid_format"
+    return job_id, line, index, zone, label, number, error, key
 
 
 async def _finish(
@@ -128,6 +166,7 @@ async def _finish(
     job: asyncpg.Record,
     status: str,
     *,
+    command_timeout: float,
     reason: str | None = None,
     total: int | None = None,
     valid: int | None = None,
@@ -149,7 +188,7 @@ async def _finish(
     )
     if updated is None:
         raise LeaseLost
-    await _clear(conn, job["fence"])
+    await _clear(conn, job["id"], command_timeout=command_timeout)
 
 
 async def _record_error(
@@ -172,6 +211,7 @@ async def finalize(
     conn: asyncpg.Connection,
     job: asyncpg.Record,
     stat: int | InvalidLayout | None,
+    settings: Settings,
 ) -> None:
     """Check the fence under the event gate before applying any permanent change."""
     async with conn.transaction():
@@ -186,31 +226,45 @@ async def finalize(
         if event is None:
             raise LeaseLost
         await _lock_fence(conn, job)
-        await conn.execute("SET LOCAL statement_timeout = '20s'")
+        command_timeout = await _stage_timeout(conn, settings.import_finalize_timeout_ms)
         if creator is None or not creator["is_active"]:
-            await _finish(conn, job, "cancelled", reason="creator_disabled")
+            await _finish(
+                conn, job, "cancelled", reason="creator_disabled", command_timeout=command_timeout
+            )
             return
         if creator["role"] != "admin" and (
             creator["role"] != "user" or event["owner_id"] != job["created_by"]
         ):
-            await _finish(conn, job, "cancelled", reason="creator_forbidden")
+            await _finish(
+                conn, job, "cancelled", reason="creator_forbidden", command_timeout=command_timeout
+            )
             return
         if event["status"] != "draft":
-            await _finish(conn, job, "cancelled", reason="event_not_draft")
+            await _finish(
+                conn, job, "cancelled", reason="event_not_draft", command_timeout=command_timeout
+            )
             return
         if isinstance(stat, InvalidLayout):
             await _record_error(conn, job, stat)
-            await _finish(conn, job, "validation_failed", reason=stat.reason, errors=1)
+            await _finish(
+                conn,
+                job,
+                "validation_failed",
+                reason=stat.reason,
+                errors=1,
+                command_timeout=command_timeout,
+            )
             return
         if stat is None:
             # The early liveness observation raced with re-enabling the creator.
-            # Relinquish the fence so the next attempt can parse the complete file.
+            # Relinquish the fence so the next attempt can resume normal processing.
             await _relinquish(conn, job)
             return
-        await validate_existing(conn, job["fence"], job["event_id"])
+        await validate_existing(conn, job["id"], job["event_id"], command_timeout=command_timeout)
         bad: int = await conn.fetchval(
-            "SELECT count(*) FROM import_staging WHERE fence = $1 AND error IS NOT NULL",
-            job["fence"],
+            "SELECT count(*) FROM import_staging WHERE job_id = $1 AND error IS NOT NULL",
+            job["id"],
+            timeout=command_timeout,
         )
         valid = stat - bad
         if bad:
@@ -218,16 +272,17 @@ async def finalize(
                 """INSERT INTO import_errors (job_id, attempt_no, line, item_index,
                                               zone_code, row_label, seat_number, reason)
                    SELECT $1, $2, line, item_index, zone_code, row_label, seat_number, error
-                   FROM import_staging WHERE fence = $3 AND error IS NOT NULL""",
+                   FROM import_staging WHERE job_id = $1 AND error IS NOT NULL""",
                 job["id"],
                 job["attempt_no"],
-                job["fence"],
+                timeout=command_timeout,
             )
         if bad and job["mode"] == "all_or_nothing":
             await _finish(
                 conn,
                 job,
                 "validation_failed",
+                command_timeout=command_timeout,
                 reason="invalid_rows",
                 total=stat,
                 valid=valid,
@@ -235,11 +290,12 @@ async def finalize(
             )
             return
         if valid:
-            await apply_layout(conn, job)
+            await apply_layout(conn, job, command_timeout=command_timeout)
         await _finish(
             conn,
             job,
             "partially_succeeded" if bad else "succeeded",
+            command_timeout=command_timeout,
             total=stat,
             valid=valid,
             errors=bad,
@@ -272,18 +328,24 @@ async def _signal(ctx: ServiceContext, job_id: UUID) -> None:
         log.warning("import.progress_publish_failed", error=type(exc).__name__)
 
 
-async def _process(ctx: ServiceContext, conn: asyncpg.Connection, job: asyncpg.Record) -> None:
+async def _stage_file(
+    ctx: ServiceContext, conn: asyncpg.Connection, job: asyncpg.Record
+) -> int | InvalidLayout | None:
     source = iter_rows(Path(job["file_path"]), job["format"])
-    processed = 0
+    processed: int = job["processed_rows"]
     limit = min(ctx.settings.import_max_rows, 100_000)
     try:
+        if processed:
+            # Revisit the immutable file up to the last committed batch without copying it again.
+            skipped = await to_thread.run_sync(lambda: sum(1 for _ in islice(source, processed)))
+            if skipped != processed:
+                raise InvalidLayout("file_changed")
         while not ctx.stop.is_set():
             active = await conn.fetchval(
                 "SELECT is_active FROM users WHERE id = $1", job["created_by"]
             )
             if not active:
-                await finalize(conn, job, None)
-                return
+                return None
             batch, invalid = await to_thread.run_sync(
                 _next_batch, source, min(_BATCH_SIZE, limit - processed + 1)
             )
@@ -291,24 +353,45 @@ async def _process(ctx: ServiceContext, conn: asyncpg.Connection, job: asyncpg.R
                 line, index, *_ = batch[limit - processed]
                 invalid = InvalidLayout("too_many_rows", line, index)
             if invalid:
-                await finalize(conn, job, invalid)
-                return
+                return invalid
             if not batch:
-                break
+                return processed
             processed += len(batch)
             await stage(conn, job, batch, processed)
             await _signal(ctx, job["id"])
-        if ctx.stop.is_set():
-            await _relinquish(conn, job)
-            return
-        async with conn.transaction():
-            await _lock_fence(conn, job)
-            await conn.execute("SET LOCAL statement_timeout = '20s'")
-            await validate_file(conn, job["fence"], job["event_id"])
-            await _renew(conn, job, processed)
-        await finalize(conn, job, processed)
+        return None
+    except InvalidLayout as exc:
+        return exc
     finally:
         source.close()
+
+
+async def _process(ctx: ServiceContext, conn: asyncpg.Connection, job: asyncpg.Record) -> None:
+    stat: int | InvalidLayout | None = job["total_rows"]
+    if stat is None:
+        stat = await _stage_file(ctx, conn, job)
+        if isinstance(stat, int):
+            async with conn.transaction():
+                await _lock_fence(conn, job)
+                await conn.execute(
+                    "UPDATE import_jobs SET total_rows = $2 WHERE id = $1", job["id"], stat
+                )
+                await _renew(conn, job, stat)
+            await _signal(ctx, job["id"])
+    if ctx.stop.is_set():
+        await _relinquish(conn, job)
+        return
+    if isinstance(stat, int) and not job["file_validated"]:
+        async with conn.transaction():
+            await _lock_fence(conn, job)
+            command_timeout = await _stage_timeout(conn, ctx.settings.import_validate_timeout_ms)
+            await validate_file(conn, job["id"], job["event_id"], command_timeout=command_timeout)
+            await conn.execute(
+                "UPDATE import_jobs SET file_validated = true WHERE id = $1", job["id"]
+            )
+            await _renew(conn, job, stat)
+        await _signal(ctx, job["id"])
+    await finalize(conn, job, stat, ctx.settings)
 
 
 def _old_files(folder: str) -> list[str]:
@@ -371,7 +454,7 @@ async def tick(ctx: ServiceContext) -> None:
         return
     async with acquire(ctx.db, ctx.settings.db_pool_acquire_timeout_s) as conn:
         await _sweep(ctx, conn)
-        job = await claim(conn)
+        job = await claim(conn, ctx.settings)
         if job is None:
             return
         if job["status"] == "running":

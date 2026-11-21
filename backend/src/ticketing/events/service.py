@@ -177,12 +177,5 @@ async def publish_event(
 async def delete_event(conn: asyncpg.Connection, event_id: int) -> None:
     if await conn.fetchval("SELECT EXISTS (SELECT FROM orders WHERE event_id = $1)", event_id):
         raise ProblemError(409, "event-has-orders", "Events with orders cannot be deleted")
-    # A cascading delete can otherwise strand staging records for a running job.
-    await conn.fetch("SELECT id FROM import_jobs WHERE event_id = $1 FOR UPDATE", event_id)
-    await conn.execute(
-        """DELETE FROM import_staging USING import_jobs
-           WHERE event_id = $1 AND import_staging.fence = import_jobs.fence""",
-        event_id,
-    )
     deleted = await conn.fetchval("DELETE FROM events WHERE id = $1 RETURNING id", event_id)
     assert deleted is not None

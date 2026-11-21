@@ -169,15 +169,23 @@ function importPanel(event: EventInfo, user: User, signal: AbortSignal): HTMLEle
           if (signal.aborted) return;
           const processed = job.processed_rows ?? 0;
           const total = job.total_rows ?? null;
-          const percent = total && total > 0 ? processed / total * 100
-            : typeof job.progress === "number" ? job.progress * (job.progress <= 1 ? 100 : 1) : undefined;
+          const percent = typeof job.progress === "number"
+            ? Math.round(job.progress * (job.progress <= 1 ? 100 : 1))
+            : total && total > 0 ? processed / total * 100 : undefined;
           if (percent !== undefined) progress.value = Math.max(0, Math.min(100, percent));
           else progress.removeAttribute("value");
           const invalid = job.error_rows ?? 0;
           details.textContent = `${processed.toLocaleString()}${total === null ? "" : ` of ${total.toLocaleString()}`} processed · ${job.valid_rows ?? "—"} valid · ${invalid} errors`;
           const working = job.status === "queued" || job.status === "running";
           const failed = /failed|cancelled/.test(job.status);
-          show(feedback, `${label(job.status)}${job.failure_reason ? ` · ${label(job.failure_reason)}` : ""}`, failed);
+          let status = label(job.status);
+          if (job.status === "queued") status = "等待匯入…";
+          if (job.status === "running") {
+            status = total !== null && percent === 99 ? "寫入座位…"
+              : total !== null && percent === 98 ? "驗證座位…"
+              : percent !== undefined && percent >= 98 ? "驗證及寫入座位…" : "解析座位檔案…";
+          }
+          show(feedback, `${status}${job.failure_reason ? ` · ${label(job.failure_reason)}` : ""}`, failed);
           if (!working) {
             if (!failed) progress.value = 100;
             if (invalid || job.status === "validation_failed") {
@@ -214,7 +222,10 @@ function importPanel(event: EventInfo, user: User, signal: AbortSignal): HTMLEle
       return;
     }
     upload.disabled = true;
-    show(feedback, "Uploading seats…");
+    progress.hidden = false;
+    progress.removeAttribute("value");
+    details.textContent = "";
+    show(feedback, "上傳座位檔案…");
     try {
       const job = await api.upload(event.id, chosen, mode.value as ImportMode, signal);
       if (!signal.aborted) {
@@ -222,6 +233,7 @@ function importPanel(event: EventInfo, user: User, signal: AbortSignal): HTMLEle
         void watch(job.id, job);
       }
     } catch (error) {
+      progress.hidden = true;
       show(feedback, errorText(error), true);
     } finally {
       upload.disabled = active;

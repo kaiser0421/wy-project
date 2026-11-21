@@ -8,6 +8,7 @@ import asyncpg
 import pytest
 from anyio import to_thread
 
+from tests.conftest import run_alembic
 from tests.events.helpers import EVENTS, seed_seat
 from tests.imports.helpers import draft, upload
 from tests.support import create_user, login
@@ -156,59 +157,142 @@ async def test_upload_and_publish_race_with_existing_seats(db, make_client):
         assert await db.fetchval("SELECT status FROM events WHERE id = $1", event) == "draft"
 
 
-async def test_stale_worker_cannot_stage_or_finalize(db, db_url, client, worker, test_clock):
+async def test_stale_worker_cannot_stage_or_finalize(
+    db, db_url, client, worker, test_clock, settings
+):
     owner = await create_user(db, "owner@example.com")
     event = await draft(db, owner)
     session = await login(client, "owner@example.com")
-    pending = await upload(session, event, HEADER + "A,R,1\n")
+    pending = await upload(session, event, HEADER + "A,R,1\nA,R,2\n")
     assert pending.status_code == 202, pending.text
-    old = await claim(db)
+    old = await claim(db, settings)
     await stage(db, old, [(2, None, "A", "R", "1", None)], 1)
     await test_clock.advance(timedelta(seconds=31))
     contender = await asyncpg.connect(db_url)
     try:
-        new = await claim(contender)
+        new = await claim(contender, settings)
         assert new["attempt_no"] == 2
         assert new["fence"] != old["fence"]
-        assert await db.fetchval("SELECT count(*) FROM import_staging") == 0
+        assert new["processed_rows"] == 1
+        assert await db.fetchval("SELECT count(*) FROM import_staging") == 1
         with pytest.raises(LeaseLost):
             await stage(db, old, [(2, None, "A", "R", "1", None)], 1)
         with pytest.raises(LeaseLost):
-            await finalize(db, old, 1)
+            await finalize(db, old, 1, settings)
         assert await db.fetchval("SELECT count(*) FROM seats") == 0
         await test_clock.advance(timedelta(seconds=31))
         await tick(worker)
     finally:
         await contender.close()
-    assert await db.fetchval("SELECT count(*) FROM seats") == 1
+    assert await db.fetchval("SELECT count(*) FROM seats") == 2
     assert await db.fetchval("SELECT count(*) FROM outbox") == 1
 
 
-async def test_expired_third_attempt_becomes_terminal(db, client, worker, test_clock):
+async def test_migration_keeps_legacy_staging(db, db_url):
+    owner = await create_user(db, "owner@example.com")
+    event = await draft(db, owner)
+    await to_thread.run_sync(run_alembic, db_url, "downgrade", "0008_observability")
+    job = await db.fetchrow(
+        """INSERT INTO import_jobs(event_id, created_by, content_sha256, format, mode,
+                                   file_path, file_bytes, status, fence, processed_rows)
+           VALUES ($1, $2, $3, 'csv', 'skip_invalid', 'test.upload', 20,
+                   'running', gen_random_uuid(), 2) RETURNING id, fence""",
+        event,
+        owner,
+        bytes(32),
+    )
+    await db.execute(
+        """INSERT INTO import_staging(fence, line, zone_code, row_label, seat_number)
+           VALUES ($1, 2, 'a', 'r', '001'), ($1, 3, 'A', 'R', '0')""",
+        job["fence"],
+    )
+    await to_thread.run_sync(run_alembic, db_url, "upgrade", "head")
+    rows = await db.fetch("SELECT job_id, norm_key, error FROM import_staging ORDER BY line")
+    assert [tuple(row) for row in rows] == [
+        (job["id"], "A|R|1", None),
+        (job["id"], None, "invalid_format"),
+    ]
+    await db.execute("DELETE FROM events WHERE id = $1", event)
+    assert await db.fetchval("SELECT count(*) FROM import_staging") == 0
+
+
+async def test_expired_third_attempt_becomes_terminal(db, client, worker, test_clock, settings):
     owner = await create_user(db, "owner@example.com")
     event = await draft(db, owner)
     session = await login(client, "owner@example.com")
     pending = await upload(session, event, HEADER + "A,R,1\n")
     for number in range(1, 4):
-        assert (await claim(db))["attempt_no"] == number
+        assert (await claim(db, settings))["attempt_no"] == number
         await test_clock.advance(timedelta(seconds=31))
     await tick(worker)
     job = (await client.get(pending.headers["location"])).json()
     assert (job["status"], job["failure_reason"]) == ("system_failed", "attempts_exhausted")
 
 
-async def test_disable_creator_after_staging_cancels_finalize(db, db_url, client):
+@pytest.mark.parametrize(
+    ("settings_overrides", "table", "operation", "progress"),
+    [
+        ({"import_validate_timeout_ms": 50}, "import_staging", "UPDATE", 98),
+        ({"import_finalize_timeout_ms": 50}, "seats", "INSERT", 99),
+    ],
+    indirect=["settings_overrides"],
+)
+async def test_stage_timeout_resumes_committed_rows(db, client, worker, table, operation, progress):
+    owner = await create_user(db, "owner@example.com")
+    event = await draft(db, owner)
+    session = await login(client, "owner@example.com")
+    pending = await upload(session, event, HEADER + "A,R,1\nX,R,2\n", mode="skip_invalid")
+    assert pending.status_code == 202
+    path = pending.headers["location"]
+    await db.execute(
+        """CREATE FUNCTION slow_import_stage() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN PERFORM pg_sleep(1); RETURN NULL; END $$"""
+    )
+    await db.execute(
+        f"""CREATE TRIGGER slow_import_stage BEFORE {operation} ON {table}
+            FOR EACH STATEMENT EXECUTE FUNCTION slow_import_stage()"""
+    )
+    await tick(worker)
+    job = (await client.get(path)).json()
+    assert (job["status"], job["processed_rows"], job["total_rows"]) == ("running", 2, 2)
+    assert job["progress_percent"] == progress
+    assert await db.fetchval("SELECT count(*) FROM import_staging") == 2
+    assert await db.fetchval("SELECT count(*) FROM seats") == 0
+    assert await db.fetchval("SELECT count(*) FROM import_errors") == 0
+    await db.execute(f"DROP TRIGGER slow_import_stage ON {table}")
+    await db.execute(
+        """CREATE FUNCTION reject_restaging() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN RAISE EXCEPTION 'retry attempted to restage committed rows'; END $$;
+           CREATE TRIGGER reject_restaging BEFORE INSERT ON import_staging
+           FOR EACH STATEMENT EXECUTE FUNCTION reject_restaging()"""
+    )
+    await tick(worker)
+    job = (await client.get(path)).json()
+    assert (job["status"], job["processed_rows"], job["valid_rows"], job["error_rows"]) == (
+        "partially_succeeded",
+        2,
+        1,
+        1,
+    )
+    assert await db.fetchval("SELECT attempt_no FROM import_jobs") == 2
+    assert await db.fetchval("SELECT count(*) FROM import_staging") == 0
+    assert await db.fetchval("SELECT seat_number FROM seats") == "1"
+    assert tuple(await db.fetchrow("SELECT line, reason FROM import_errors")) == (3, "unknown_zone")
+    assert await db.fetchval("SELECT count(*) FROM outbox") == 1
+
+
+async def test_disable_creator_after_staging_cancels_finalize(db, db_url, client, settings):
     owner = await create_user(db, "owner@example.com")
     event = await draft(db, owner)
     session = await login(client, "owner@example.com")
     pending = await upload(session, event, HEADER + "A,R,1\n")
     assert pending.status_code == 202
-    job = await claim(db)
+    job = await claim(db, settings)
     await stage(db, job, [(2, None, "A", "R", "1", None)], 1)
     other = await asyncpg.connect(db_url)
     try:
         await other.execute("UPDATE users SET is_active = false WHERE id = $1", owner)
-        await finalize(db, job, 1)
+        await finalize(db, job, 1, settings)
     finally:
         await other.close()
     result = await db.fetchrow("SELECT status, failure_reason FROM import_jobs")
