@@ -15,6 +15,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 MODE=${1:-all}
 STAMP=$(date +%Y%m%d-%H%M%S)
+RUN_STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 OUT=${OUT:-loadtest/out/$STAMP}
 mkdir -p "$OUT/a" "$OUT/b"
 # Containers that write into loadtest/ run as the invoking user, so Linux bind mounts work too.
@@ -166,7 +167,28 @@ scenario_b() {
   tail -10 "$OUT/b/writer.txt" | tee -a "$OUT/run.log"
 }
 
+service_logs() {
+  # Container logs since the run started, so failures can be diagnosed from the archive:
+  # <svc>-problems.log holds warnings/errors (capped), <svc>.log the log itself. Logs are
+  # structured and mask secrets.
+  mkdir -p "$OUT/logs"
+  local svc
+  for svc in api worker relay collector paymock nginx postgres redis; do
+    docker compose logs --no-color --no-log-prefix --since "$RUN_STARTED" "$svc" 2>&1 \
+      | grep -E '"level":"(warning|error|critical)"|Traceback|ERROR|FATAL|PANIC|\[(error|crit|alert|emerg)\]' \
+      | tail -n 5000 > "$OUT/logs/$svc-problems.log" || true
+    # The backend services log events, not every request (per-request data is in the nginx
+    # access log with request_id), so their full logs are small; the others keep the tail.
+    local keep=300
+    case $svc in api|worker|relay|collector) keep=20000 ;; esac
+    docker compose logs --no-color --since "$RUN_STARTED" --tail "$keep" "$svc" \
+      > "$OUT/logs/$svc.log" 2>&1 || true
+  done
+  log "Service logs: $(cat "$OUT"/logs/*-problems.log | wc -l | tr -d ' ') warning/error lines"
+}
+
 bundle() {
+  service_logs
   find "$OUT" -name 'sessions.json' -delete          # live credentials never leave the machine
   tar -czf "$OUT.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
   log "Results archive: $OUT.tar.gz"
