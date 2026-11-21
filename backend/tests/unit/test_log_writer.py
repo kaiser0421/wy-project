@@ -51,3 +51,13 @@ def test_dropped_record_is_collector_compatible(monkeypatch) -> None:
     assert record["count"] == 3
     assert {"ts", "service", "boot_uuid", "level"} <= set(record)
     assert record["service"] == "api"
+
+
+def test_records_accepted_before_close_are_written(monkeypatch) -> None:
+    written: list[str] = []
+    monkeypatch.setattr(_TeeWriter, "_write", lambda self, lines: written.append(lines))
+    for _ in range(20):
+        writer = _TeeWriter(None, background=True, capacity=64)
+        writer.msg('{"event": "last"}')
+        writer.close()
+    assert sum(chunk.count('"last"') for chunk in written) == 20

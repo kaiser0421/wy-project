@@ -136,10 +136,13 @@ class _TeeWriter:
         queue = self._queue
         assert queue is not None
         while True:
+            closing = self._closing.is_set()
             try:
                 batch = [queue.get(timeout=0.2)]
             except Empty:
-                if self._closing.is_set():
+                # `closing` was read before this empty wait, so every record accepted before
+                # close() set the flag has been taken by now.
+                if closing:
                     break
                 continue
             for _ in range(255):
@@ -158,10 +161,8 @@ class _TeeWriter:
         if self._thread is not None:
             self._closing.set()
             self._thread.join(timeout=self.CLOSE_TIMEOUT_S)
-            if self._thread.is_alive():
-                return  # stalled sink: leave the daemon thread and the file to process exit
-        if self._file is not None:
-            self._file.close()
+        # Every write is flushed, so the file is left for process exit to close: closing it here
+        # could block on a stalled filesystem, and a stalled daemon thread may still hold it.
 
     log = debug = info = warning = warn = error = critical = exception = msg
 
