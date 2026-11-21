@@ -2,7 +2,7 @@
 
 [服務拓撲](#1-服務拓撲) · [訂票交易](#2-訂票交易) · [座位即時推送](#3-座位即時推送) · [付款與回呼](#4-付款與回呼) · [監控資料流](#5-監控資料流)
 
-[瀏覽器版架構圖](architecture.html) · [啟動與服務 port](../README.md#服務與設定) · [設計問答](../DESIGN.md)
+[瀏覽器版架構圖](architecture.html)（透過 jsDelivr 載入 Mermaid，需網路連線） · [啟動與服務 port](../README.md#服務與設定) · [設計問答](../DESIGN.md)
 
 ## 1. 服務拓撲
 
@@ -10,7 +10,7 @@
 flowchart TB
   Browser["瀏覽器 · TypeScript SPA · Canvas 座位圖"]
   Edge["nginx · 8080"]
-  API["api ×3 · FastAPI · 512 MB / 副本"]
+  API["api ×3 · FastAPI · 512 MiB / 副本"]
   Pay["paymock · FastAPI · SQLite volume"]
   Worker["worker · 匯入 · 鎖位逾時 · 對帳 · 退款 · 取消"]
   Relay["relay · 座位事件序號與歸檔"]
@@ -161,5 +161,5 @@ flowchart LR
 ```
 
 - Collector tail nginx 與共享目錄中的應用 JSON 日誌，COPY 與 checkpoint 在同一交易內完成。Edge RPS 與延遲依 nginx access log 分秒聚合，連線數來自 `stub_status`。應用遙測按 boot UUID 與 interval number 去重，入庫後才 ACK Redis stream。見 `backend/src/ticketing/telemetry/logs.py:266`、`backend/src/ticketing/telemetry/collector.py:153`、`backend/src/ticketing/telemetry/app_metrics.py:132`。
-- Admin 的 `/api/v1/admin/metrics/stream` 與 `/api/v1/admin/alerts/stream` 讀 PostgreSQL 快照。告警狀態變更另送 Redis 的 `admin:alerts`。`GET /api/v1/admin/requests/{request_id}/logs` 查找入口與關聯服務日誌。見 `backend/src/ticketing/telemetry/common.py:8`、`backend/src/ticketing/telemetry/collector.py:170`、`backend/src/ticketing/api/routes/monitoring.py:418`、`backend/src/ticketing/api/routes/monitoring.py:471`、`backend/src/ticketing/api/routes/monitoring.py:559`。
+- Admin 的 `/api/v1/admin/metrics/stream` 與 `/api/v1/admin/alerts/stream` 讀 PostgreSQL 快照。告警狀態變更另送 Redis 的 `admin:alerts`。`GET /api/v1/admin/requests/{request_id}/logs` 查找入口與關聯服務日誌。見 `backend/src/ticketing/telemetry/common.py:10`、`backend/src/ticketing/telemetry/collector.py:170`、`backend/src/ticketing/api/routes/monitoring.py:418`、`backend/src/ticketing/api/routes/monitoring.py:471`、`backend/src/ticketing/api/routes/monitoring.py:559`。
 - 時鐘校正、保留期與缺測判讀見 [監控資料契約](../backend/src/ticketing/telemetry/README.md)。

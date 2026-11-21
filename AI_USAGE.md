@@ -12,7 +12,7 @@
 1. Claude 先訂共用 contracts，包含路由政策、session fence、outbox 寫入、背景 `tick(ctx)`、migration 順序與檔案所有權。[平行開發約定](docs/development/workstreams.md)
 2. Codex 依 workstream 在獨立 worktree 開發，以 Git bundle 交回各分支的 commits。Claude 匯入並審查，處理 app factory、服務入口、Compose 與 volumes 的整合。
 3. Codex 交叉審查實作與整合 diff，回報風險與驗證建議。整合者依實際問題修正，用 pytest、Compose 整合檢查與端到端流程確認後合併。合併紀錄包括 `1a00f7d`、`c41c2b8`、`5f974b0`、`514ffa8`、`9d19e86`。[實作審查](docs/ai-reviews/implementation/) · [端到端流程](scripts/e2e_flow.py)
-4. 後續 expert review 的問題各自進入修正分支，再合併後端／安全與前端／測試改動。見 `d27af81`、`a7ed2aa`。[專項審查](docs/ai-reviews/expert/)
+4. 後續專項審查發現的問題各自進入修正分支，再合併後端／安全與前端／測試改動。見 `d27af81`、`a7ed2aa`。[專項審查](docs/ai-reviews/expert/)
 
 ## 實作中的 AI 程式碼缺陷
 
