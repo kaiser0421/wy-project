@@ -7951,9 +7951,10 @@
               }
             ],
             "title": "Error Rate",
-            "description": "Fraction of requests with 4xx or 5xx.",
+            "description": "err_5xx / req_total. Null when req_total is zero.",
             "examples": [
-              0.016
+              0.004,
+              null
             ]
           },
           "p50_ms": {

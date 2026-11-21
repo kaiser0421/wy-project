@@ -90,7 +90,7 @@ class Metric(BaseModel):
     err_4xx: int = Field(description="Number of 4xx responses.", examples=[3])
     err_5xx: int = Field(description="Number of 5xx responses.", examples=[1])
     error_rate: float | None = Field(
-        description="Fraction of requests with 4xx or 5xx.", examples=[0.016]
+        description="err_5xx / req_total. Null when req_total is zero.", examples=[0.004, None]
     )
     p50_ms: float | None = Field(description="Median latency in milliseconds.", examples=[12.0])
     p95_ms: float | None = Field(
