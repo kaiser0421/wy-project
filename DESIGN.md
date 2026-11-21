@@ -41,7 +41,7 @@
 2. Sweeper 取 A 的訂單鎖，重檢 `pending_payment` 與期限。提交時 A 為 `expired`，S 釋出，item 關閉且配額回補。B 隨後可鎖住 S 並付款。見 `backend/src/ticketing/booking/sweeper.py:22`、`backend/src/ticketing/booking/orders.py:88`。
 3. A 的回呼恢復，取 A 的訂單鎖後讀狀態並取樣 DB 時間。A 已逾時，寫入 `refund_required` 與退款工作，保留 B 的售票結果。若回呼先取鎖但已逾期，它會在同一交易先釋放 A，再安排退款。接受付款的分支還會確認每張座位都由該訂單持有，更新條件是 `order_id=$1 AND status='held'`，筆數不符即回滾。見 `backend/src/ticketing/payments/callbacks.py:87`、`backend/src/ticketing/payments/callbacks.py:105`、`backend/src/ticketing/payments/callbacks.py:113`、`backend/src/ticketing/payments/callbacks.py:159`、`backend/src/ticketing/payments/callbacks.py:190`。
 
-**驗證**　`test_specific_seat_races` 覆蓋 200 位買家搶同一席及 150 位買家搶重疊多席。 `test_break_it[normal|indexed|naive]` 共用 SQL 不變式。 `indexed` 改用無鎖讀取、無 guard 寫入，index 仍拒絕第二個 claim。 `naive` 在測試 DB clone 再移除 index，兩筆都得到 201，測試捕捉預期的 `AssertionError`。 `test_late_capture_preserves_quota` 分別測 sweeper 先釋放與回呼先處理。見 `backend/tests/booking/test_booking.py:44`、`backend/tests/booking/test_booking.py:104`、`backend/tests/payments/test_payments.py:208`。
+**驗證**　`test_specific_seat_races` 覆蓋 200 位買家搶同一席及 150 位買家搶重疊多席。 `test_break_it[normal|indexed|naive]` 共用 SQL 不變式。 `indexed` 改用無鎖讀取、無 guard 寫入，index 仍拒絕第二個 claim。 `naive` 在測試 DB clone 再移除 index，兩筆都得到 201，測試捕捉預期的 `AssertionError`。 `test_late_capture_preserves_quota` 分別測 sweeper 先釋放與回呼先處理。 設 `BREAK_IT_RAW=1` 時 `naive` 不再包住斷言，pytest 直接以 `FAILED … Booking invariant violations` 結束，可親眼看到移除防線後的失敗。見 `backend/tests/booking/test_booking.py:44`、`backend/tests/booking/test_booking.py:104`、`backend/tests/payments/test_payments.py:208`。
 
 **證據**　PostgreSQL 16.16 上的實際輸出如下。三個 pytest case 都通過，`naive` 的 invariant 違規是測試預期捕捉的失敗。見 [破壞驗證紀錄](docs/evidence/break-it.txt)。
 

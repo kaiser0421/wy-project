@@ -1,4 +1,5 @@
 import asyncio
+import os
 from datetime import timedelta
 from uuid import UUID
 
@@ -117,7 +118,9 @@ async def test_break_it(db, buyers, monkeypatch, strategy):
         assert sorted(r.status_code for r in responses) == (
             [201, 201] if strategy == "naive" else [201, 409]
         )
-    if strategy == "naive":
+    if strategy == "naive" and os.environ.get("BREAK_IT_RAW") != "1":
+        # Normal runs prove the invariant check catches the broken build. BREAK_IT_RAW=1 runs the
+        # very same assertion unwrapped, so pytest reports the real failure (DESIGN.md Q1.3).
         with pytest.raises(AssertionError, match="seat active claims") as detected:
             await assert_invariants(db)
         print(detected.value)
