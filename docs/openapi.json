@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ticketing Platform API",
-    "description": "\nHigh-concurrency ticketing platform API.\n\n**Authentication** — `POST /api/v1/auth/login` sets an HttpOnly session cookie (`sid` on plain\nHTTP, `__Host-sid` with `COOKIE_SECURE=true`) and returns a `csrf_token`. Send it as the\n`X-CSRF-Token` header on every POST/PUT/PATCH/DELETE. `GET /api/v1/auth/me` returns it again.\n\n**Errors** — every error is `application/problem+json` (RFC 9457) with a stable `code`, a\n`retryable` flag and the `request_id` to quote when reporting problems.\n",
+    "description": "\nHigh-concurrency ticketing platform API.\n\n**Authentication** — Call `POST /api/v1/auth/login` from an allowed Origin or Referer. Registration\nalso requires this. The browser sends the HttpOnly session cookie automatically on same-origin\nrequests. Call `GET /api/v1/auth/me` to obtain the session's `csrf_token`, then enter that token\nas `X-CSRF-Token` when authorizing Swagger UI. Try a write such as `POST /api/v1/auth/logout`.\nThe payment provider callback authenticates separately using the signed `Mockpay-Signature` header.\n\n**Errors** — API problems use `application/problem+json` (RFC 9457) with a stable `code`, a\n`retryable` flag and the `request_id` to quote when reporting problems. The readiness probe\nreports dependency checks in its own diagnostic response.\n",
     "version": "0.1.0"
   },
   "paths": {
@@ -27,8 +27,19 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "description": "Public probe for process liveness. A read has no side effects."
       }
     },
     "/healthz/ready": {
@@ -40,14 +51,65 @@
         "operationId": "ready_healthz_ready_get",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "All readiness checks passed.",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "checks"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "ready"
+                    },
+                    "checks": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
+          },
+          "503": {
+            "description": "One or more readiness checks failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "checks"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "not-ready"
+                    },
+                    "checks": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "description": "Public probe for database, Redis and schema readiness. Each read checks current state."
       }
     },
     "/api/v1/auth/register": {
@@ -79,16 +141,89 @@
             }
           },
           "422": {
-            "description": "Validation Error",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "validation-failed"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "origin-not-allowed"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "email-taken"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "rate-limited",
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "server-busy",
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "description": "A caller from an allowed origin can create a User account. The email is unique. Repeating a successful registration returns a conflict. Requests are rate-limited."
       }
     },
     "/api/v1/auth/login": {
@@ -120,16 +255,89 @@
             }
           },
           "422": {
-            "description": "Validation Error",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "validation-failed"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "invalid-credentials"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "origin-not-allowed"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "rate-limited",
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "server-busy",
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "description": "A caller from an allowed origin can sign in with an active account. Each successful request creates a session and returns a CSRF token. Requests are rate-limited."
       }
     },
     "/api/v1/auth/logout": {
@@ -142,8 +350,71 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "server-busy",
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "unauthenticated"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "csrf-failed, origin-not-allowed"
           }
-        }
+        },
+        "description": "Revoke the current authenticated session. Revocation takes effect on the next request. Repeating the request with the revoked cookie returns 401.",
+        "x-allowed-roles": [
+          "admin",
+          "user",
+          "viewer"
+        ],
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ]
       }
     },
     "/api/v1/auth/me": {
@@ -163,8 +434,39 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "unauthenticated"
           }
-        }
+        },
+        "description": "Read the authenticated user's current account and CSRF token.",
+        "x-allowed-roles": [
+          "admin",
+          "user",
+          "viewer"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/admin/users": {
@@ -184,8 +486,12 @@
               "maximum": 100,
               "minimum": 1,
               "default": 50,
-              "title": "Limit"
-            }
+              "title": "Limit",
+              "examples": [
+                50
+              ]
+            },
+            "description": "Maximum number of accounts to return."
           },
           {
             "name": "cursor",
@@ -202,7 +508,10 @@
                 }
               ],
               "description": "Last id from the previous page",
-              "title": "Cursor"
+              "title": "Cursor",
+              "examples": [
+                42
+              ]
             },
             "description": "Last id from the previous page"
           }
@@ -219,16 +528,55 @@
             }
           },
           "422": {
-            "description": "Validation Error",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
-            }
+            },
+            "description": "validation-failed"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "unauthenticated"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "forbidden"
           }
-        }
+        },
+        "description": "Admins can list accounts in ascending ID order. Each page uses the last ID as its cursor, so inserts do not shift accounts already returned.",
+        "x-allowed-roles": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/admin/users/{user_id}": {
@@ -245,8 +593,12 @@
             "required": true,
             "schema": {
               "type": "integer",
-              "title": "User Id"
-            }
+              "title": "User Id",
+              "examples": [
+                42
+              ]
+            },
+            "description": "Managed account ID."
           }
         ],
         "responses": {
@@ -261,16 +613,65 @@
             }
           },
           "422": {
-            "description": "Validation Error",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
-            }
+            },
+            "description": "validation-failed"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "not-found"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "unauthenticated"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "forbidden"
           }
-        }
+        },
+        "description": "Admins can read an account and its current ETag.",
+        "x-allowed-roles": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "patch": {
         "tags": [
@@ -285,8 +686,12 @@
             "required": true,
             "schema": {
               "type": "integer",
-              "title": "User Id"
-            }
+              "title": "User Id",
+              "examples": [
+                42
+              ]
+            },
+            "description": "Managed account ID."
           },
           {
             "name": "if-match",
@@ -301,8 +706,12 @@
                   "type": "null"
                 }
               ],
-              "title": "If-Match"
-            }
+              "title": "If-Match",
+              "examples": [
+                "\"v2\""
+              ]
+            },
+            "description": "Strong ETag of the account revision to update."
           }
         ],
         "requestBody": {
@@ -327,16 +736,117 @@
             }
           },
           "422": {
-            "description": "Validation Error",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "validation-failed"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "not-found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "self-modification, last-admin"
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "precondition-failed"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "precondition-required"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "server-busy",
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "unauthenticated"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "forbidden csrf-failed, origin-not-allowed"
           }
-        }
+        },
+        "description": "Admins can update an account's role or active state using its ETag. Concurrent writes serialize and a stale ETag returns 412. Changes revoke the account's sessions.",
+        "x-allowed-roles": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ]
       }
     },
     "/api/v1/events": {
@@ -385,28 +895,64 @@
           "401": {
             "description": "Problem code(s) `unauthenticated`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "422": {
             "description": "Problem code(s) `validation-failed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "503": {
             "description": "Problem code(s) `server-busy`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "403": {
             "description": "Problem code(s) `forbidden, csrf-failed, origin-not-allowed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ]
       },
       "get": {
         "tags": [
@@ -606,40 +1152,95 @@
           "401": {
             "description": "Problem code(s) `unauthenticated`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "422": {
             "description": "Problem code(s) `validation-failed, refine-filters`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "503": {
             "description": "Problem code(s) `server-busy`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "409": {
             "description": "Problem code(s) `cursor-invalidated`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "410": {
             "description": "Problem code(s) `cursor-expired`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "429": {
             "description": "Problem code(s) `snapshot-limit`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user",
+          "viewer"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/events/{event_id}": {
@@ -690,28 +1291,64 @@
           "401": {
             "description": "Problem code(s) `unauthenticated`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "422": {
             "description": "Problem code(s) `validation-failed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "503": {
             "description": "Problem code(s) `server-busy`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "404": {
             "description": "Problem code(s) `not-found`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user",
+          "viewer"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       },
       "patch": {
         "tags": [
@@ -791,52 +1428,104 @@
           "401": {
             "description": "Problem code(s) `unauthenticated`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "422": {
             "description": "Problem code(s) `validation-failed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "503": {
             "description": "Problem code(s) `server-busy`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "403": {
             "description": "Problem code(s) `forbidden, csrf-failed, origin-not-allowed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "404": {
             "description": "Problem code(s) `not-found`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "412": {
             "description": "Problem code(s) `precondition-failed (includes current and ETag)`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "428": {
             "description": "Problem code(s) `precondition-required (includes current and ETag)`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "409": {
             "description": "Problem code(s) `field-frozen-after-publish, import-running, zone-has-seats`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ]
       },
       "delete": {
         "tags": [
@@ -870,40 +1559,84 @@
           "401": {
             "description": "Problem code(s) `unauthenticated`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "422": {
             "description": "Problem code(s) `validation-failed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "503": {
             "description": "Problem code(s) `server-busy`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "403": {
             "description": "Problem code(s) `forbidden, csrf-failed, origin-not-allowed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "404": {
             "description": "Problem code(s) `not-found`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "409": {
             "description": "Problem code(s) `event-has-orders`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ]
       }
     },
     "/api/v1/events/{event_id}/publish": {
@@ -975,52 +1708,104 @@
           "401": {
             "description": "Problem code(s) `unauthenticated`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "422": {
             "description": "Problem code(s) `validation-failed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "503": {
             "description": "Problem code(s) `server-busy`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "403": {
             "description": "Problem code(s) `forbidden, csrf-failed, origin-not-allowed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "404": {
             "description": "Problem code(s) `not-found`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "412": {
             "description": "Problem code(s) `precondition-failed (includes current and ETag)`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "428": {
             "description": "Problem code(s) `precondition-required (includes current and ETag)`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "409": {
             "description": "Problem code(s) `no-seats, import-running`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ]
       }
     },
     "/api/v1/events/{event_id}/zones": {
@@ -1067,28 +1852,64 @@
           "401": {
             "description": "Problem code(s) `unauthenticated`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "422": {
             "description": "Problem code(s) `validation-failed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "503": {
             "description": "Problem code(s) `server-busy`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "404": {
             "description": "Problem code(s) `not-found`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user",
+          "viewer"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/events/{event_id}/seat-imports": {
@@ -1140,55 +1961,91 @@
           "401": {
             "description": "Problem code(s) `unauthenticated`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "422": {
             "description": "Problem code(s) `validation-failed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "503": {
             "description": "Problem code(s) `server-busy`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "403": {
             "description": "Problem code(s) `forbidden, csrf-failed, origin-not-allowed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "400": {
             "description": "Problem code(s) `invalid-multipart`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "404": {
             "description": "Problem code(s) `not-found`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "409": {
             "description": "Problem code(s) `event-not-draft, import-running`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "413": {
             "description": "Problem code(s) `payload-too-large`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "415": {
             "description": "Problem code(s) `unsupported-media-type`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "200": {
@@ -1200,6 +2057,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
         },
         "requestBody": {
@@ -1236,7 +2103,17 @@
               }
             }
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ]
       }
     },
     "/api/v1/seat-imports/{job_id}": {
@@ -1278,34 +2155,73 @@
           "401": {
             "description": "Problem code(s) `unauthenticated`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "422": {
             "description": "Problem code(s) `validation-failed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "503": {
             "description": "Problem code(s) `server-busy`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "403": {
             "description": "Problem code(s) `forbidden`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "404": {
             "description": "Problem code(s) `not-found`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/seat-imports/{job_id}/stream": {
@@ -1347,34 +2263,73 @@
           "401": {
             "description": "Problem code(s) `unauthenticated`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "422": {
             "description": "Problem code(s) `validation-failed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "503": {
             "description": "Problem code(s) `server-busy`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "403": {
             "description": "Problem code(s) `forbidden`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "404": {
             "description": "Problem code(s) `not-found`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/seat-imports/{job_id}/errors.csv": {
@@ -1417,34 +2372,73 @@
           "401": {
             "description": "Problem code(s) `unauthenticated`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "422": {
             "description": "Problem code(s) `validation-failed`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "503": {
             "description": "Problem code(s) `server-busy`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "403": {
             "description": "Problem code(s) `forbidden`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "404": {
             "description": "Problem code(s) `not-found`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/events/{event_id}/reports/sales.xlsx": {
@@ -1504,52 +2498,115 @@
           "401": {
             "description": "Problem code(s) `unauthenticated`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "422": {
             "description": "Problem code(s) `validation-failed, invalid-timezone, report-row-limit`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "503": {
             "description": "Problem code(s) `server-busy`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "403": {
             "description": "Problem code(s) `forbidden`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "404": {
             "description": "Problem code(s) `not-found`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "429": {
             "description": "Problem code(s) `report-busy`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
           },
           "499": {
             "description": "Problem code(s) `client-disconnected`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
           },
           "507": {
             "description": "Problem code(s) `export-space-exhausted`",
             "content": {
-              "application/problem+json": {}
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user",
+          "viewer"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/events/{event_id}/orders": {
@@ -1644,33 +2701,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "unauthenticated"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "unauthenticated": {
@@ -1692,34 +2723,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "validation-failed",
-                        "idempotency-key-reused"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "validation-failed": {
@@ -1758,33 +2762,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "server-busy"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "server-busy": {
@@ -1806,35 +2784,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "forbidden",
-                        "csrf-failed",
-                        "origin-not-allowed"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "forbidden": {
@@ -1874,33 +2824,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "not-found"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "not-found": {
@@ -1930,39 +2854,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "seat-unavailable",
-                        "seat-contended",
-                        "insufficient-seats",
-                        "allocation-contended",
-                        "purchase-limit-exceeded",
-                        "event-not-on-sale",
-                        "idempotency-in-progress"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "seat-unavailable": {
@@ -2031,8 +2923,28 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ]
       }
     },
     "/api/v1/orders": {
@@ -2125,33 +3037,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "unauthenticated"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "unauthenticated": {
@@ -2173,33 +3059,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "validation-failed"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "validation-failed": {
@@ -2229,33 +3089,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "server-busy"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "server-busy": {
@@ -2277,33 +3111,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "forbidden"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "forbidden": {
@@ -2318,8 +3126,27 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/orders/{order_id}": {
@@ -2364,33 +3191,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "unauthenticated"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "unauthenticated": {
@@ -2412,33 +3213,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "validation-failed"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "validation-failed": {
@@ -2468,33 +3243,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "server-busy"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "server-busy": {
@@ -2516,33 +3265,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "forbidden"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "forbidden": {
@@ -2564,33 +3287,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "not-found"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "not-found": {
@@ -2605,8 +3302,27 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/orders/{order_id}/cancel": {
@@ -2676,33 +3392,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "unauthenticated"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "unauthenticated": {
@@ -2724,34 +3414,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "validation-failed",
-                        "idempotency-key-reused"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "validation-failed": {
@@ -2790,33 +3453,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "server-busy"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "server-busy": {
@@ -2838,35 +3475,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "forbidden",
-                        "csrf-failed",
-                        "origin-not-allowed"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "forbidden": {
@@ -2906,33 +3515,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "not-found"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "not-found": {
@@ -2962,34 +3545,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "order-not-cancellable",
-                        "idempotency-in-progress"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "order-not-cancellable": {
@@ -3013,8 +3569,28 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ]
       }
     },
     "/api/v1/orders/{order_id}/payments": {
@@ -3084,33 +3660,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "unauthenticated"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "unauthenticated": {
@@ -3132,35 +3682,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "validation-failed",
-                        "idempotency-key-reused",
-                        "payment-event-mismatch"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "validation-failed": {
@@ -3208,33 +3730,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "server-busy"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "server-busy": {
@@ -3256,35 +3752,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "forbidden",
-                        "csrf-failed",
-                        "origin-not-allowed"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "forbidden": {
@@ -3324,33 +3792,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "not-found"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "not-found": {
@@ -3380,33 +3822,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "payment-declined"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "payment-declined": {
@@ -3436,34 +3852,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "idempotency-in-progress",
-                        "order-not-payable"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "idempotency-in-progress": {
@@ -3506,8 +3895,28 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ]
       },
       "get": {
         "tags": [
@@ -3554,33 +3963,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "unauthenticated"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "unauthenticated": {
@@ -3602,33 +3985,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "validation-failed"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "validation-failed": {
@@ -3658,33 +4015,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "server-busy"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "server-busy": {
@@ -3706,33 +4037,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "forbidden"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "forbidden": {
@@ -3754,33 +4059,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "not-found"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "not-found": {
@@ -3795,8 +4074,27 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin",
+          "user"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/payments/callbacks": {
@@ -3840,33 +4138,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid-payment-signature"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "invalid-payment-signature": {
@@ -3888,33 +4160,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "not-found"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "not-found": {
@@ -3936,33 +4182,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "payment-event-too-large"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "payment-event-too-large": {
@@ -3984,34 +4204,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "validation-failed",
-                        "payment-event-mismatch"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "validation-failed": {
@@ -4050,33 +4243,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "title",
-                    "status",
-                    "code"
-                  ],
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "integer"
-                    },
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "server-busy"
-                      ]
-                    },
-                    "retryable": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 },
                 "examples": {
                   "server-busy": {
@@ -4091,6 +4258,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
           }
         },
         "requestBody": {
@@ -4290,6 +4467,9 @@
                 "example": {
                   "status": 401,
                   "code": "unauthenticated"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4301,6 +4481,9 @@
                 "example": {
                   "status": 404,
                   "code": "not-found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4312,6 +4495,9 @@
                 "example": {
                   "status": 422,
                   "code": "validation-failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4323,6 +4509,9 @@
                 "example": {
                   "status": 500,
                   "code": "internal-error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4334,6 +4523,9 @@
                 "example": {
                   "status": 503,
                   "code": "server-busy"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4343,6 +4535,11 @@
           {
             "sessionCookie": []
           }
+        ],
+        "x-allowed-roles": [
+          "admin",
+          "user",
+          "viewer"
         ]
       }
     },
@@ -4412,6 +4609,9 @@
                 "example": {
                   "status": 401,
                   "code": "unauthenticated"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4423,6 +4623,9 @@
                 "example": {
                   "status": 404,
                   "code": "not-found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4434,6 +4637,9 @@
                 "example": {
                   "status": 422,
                   "code": "validation-failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4445,6 +4651,9 @@
                 "example": {
                   "status": 500,
                   "code": "internal-error"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4456,6 +4665,9 @@
                 "example": {
                   "status": 503,
                   "code": "server-busy"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4465,6 +4677,11 @@
           {
             "sessionCookie": []
           }
+        ],
+        "x-allowed-roles": [
+          "admin",
+          "user",
+          "viewer"
         ]
       }
     },
@@ -4575,6 +4792,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4593,6 +4813,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4611,6 +4834,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4629,6 +4855,9 @@
                       "retryable": true
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4647,11 +4876,22 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/admin/metrics/stream": {
@@ -4690,6 +4930,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4708,6 +4951,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4726,6 +4972,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4744,6 +4993,9 @@
                       "retryable": true
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4762,11 +5014,22 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/admin/alerts": {
@@ -4870,6 +5133,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4888,6 +5154,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4906,6 +5175,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4924,6 +5196,9 @@
                       "retryable": true
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4942,11 +5217,22 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/admin/alerts/stream": {
@@ -4985,6 +5271,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5003,6 +5292,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5021,6 +5313,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5039,6 +5334,9 @@
                       "retryable": true
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5057,11 +5355,22 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     },
     "/api/v1/admin/alerts/{id}/ack": {
@@ -5115,6 +5424,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5151,6 +5463,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5169,6 +5484,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5187,6 +5505,9 @@
                       "retryable": true
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5205,6 +5526,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5223,11 +5547,23 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ]
       }
     },
     "/api/v1/admin/requests/{request_id}/logs": {
@@ -5295,6 +5631,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5313,6 +5652,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5331,6 +5673,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5349,6 +5694,9 @@
                       "retryable": true
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5367,6 +5715,9 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -5385,11 +5736,22 @@
                       "retryable": false
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
           }
-        }
+        },
+        "x-allowed-roles": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
       }
     }
   },
@@ -5586,11 +5948,19 @@
         "properties": {
           "id": {
             "type": "integer",
-            "title": "Id"
+            "title": "Id",
+            "description": "Account ID.",
+            "examples": [
+              42
+            ]
           },
           "email": {
             "type": "string",
-            "title": "Email"
+            "title": "Email",
+            "description": "Account's normalized email address.",
+            "examples": [
+              "buyer@example.com"
+            ]
           },
           "role": {
             "type": "string",
@@ -5599,15 +5969,27 @@
               "user",
               "viewer"
             ],
-            "title": "Role"
+            "title": "Role",
+            "description": "Role governing the account's permissions.",
+            "examples": [
+              "user"
+            ]
           },
           "is_active": {
             "type": "boolean",
-            "title": "Is Active"
+            "title": "Is Active",
+            "description": "Whether the account can sign in.",
+            "examples": [
+              true
+            ]
           },
           "version": {
             "type": "integer",
-            "title": "Version"
+            "title": "Version",
+            "description": "Current revision used to produce the ETag.",
+            "examples": [
+              2
+            ]
           }
         },
         "type": "object",
@@ -5627,7 +6009,19 @@
               "$ref": "#/components/schemas/AdminUserOut"
             },
             "type": "array",
-            "title": "Items"
+            "title": "Items",
+            "description": "Accounts in ascending ID order.",
+            "examples": [
+              [
+                {
+                  "id": 42,
+                  "email": "buyer@example.com",
+                  "role": "user",
+                  "is_active": true,
+                  "version": 2
+                }
+              ]
+            ]
           },
           "next_cursor": {
             "anyOf": [
@@ -5639,7 +6033,10 @@
               }
             ],
             "title": "Next Cursor",
-            "description": "Pass as `cursor` to fetch the next page"
+            "description": "Pass as `cursor` to fetch the next page",
+            "examples": [
+              "42"
+            ]
           }
         },
         "type": "object",
@@ -5665,7 +6062,11 @@
                 "type": "null"
               }
             ],
-            "title": "Role"
+            "title": "Role",
+            "description": "New role, if provided.",
+            "examples": [
+              "viewer"
+            ]
           },
           "is_active": {
             "anyOf": [
@@ -5676,7 +6077,11 @@
                 "type": "null"
               }
             ],
-            "title": "Is Active"
+            "title": "Is Active",
+            "description": "New sign-in status, if provided.",
+            "examples": [
+              false
+            ]
           }
         },
         "additionalProperties": false,
@@ -6103,13 +6508,18 @@
             "title": "Email",
             "examples": [
               "user@example.com"
-            ]
+            ],
+            "description": "Account's normalized email address."
           },
           "password": {
             "type": "string",
             "maxLength": 256,
             "minLength": 1,
-            "title": "Password"
+            "title": "Password",
+            "description": "Account password.",
+            "examples": [
+              "example-passphrase"
+            ]
           }
         },
         "additionalProperties": false,
@@ -6669,19 +7079,6 @@
           "seats"
         ],
         "title": "FullSnapshot"
-      },
-      "HTTPValidationError": {
-        "properties": {
-          "detail": {
-            "items": {
-              "$ref": "#/components/schemas/ValidationError"
-            },
-            "type": "array",
-            "title": "Detail"
-          }
-        },
-        "type": "object",
-        "title": "HTTPValidationError"
       },
       "JobOut": {
         "properties": {
@@ -7485,14 +7882,18 @@
             "title": "Email",
             "examples": [
               "user@example.com"
-            ]
+            ],
+            "description": "Account's normalized email address."
           },
           "password": {
             "type": "string",
             "maxLength": 128,
             "minLength": 10,
             "title": "Password",
-            "description": "10 to 128 characters"
+            "description": "10 to 128 characters",
+            "examples": [
+              "example-passphrase"
+            ]
           }
         },
         "additionalProperties": false,
@@ -7885,12 +8286,23 @@
       "SessionOut": {
         "properties": {
           "user": {
-            "$ref": "#/components/schemas/UserOut"
+            "$ref": "#/components/schemas/UserOut",
+            "description": "Account associated with the session.",
+            "examples": [
+              {
+                "id": 42,
+                "email": "buyer@example.com",
+                "role": "user"
+              }
+            ]
           },
           "csrf_token": {
             "type": "string",
             "title": "Csrf Token",
-            "description": "Send as X-CSRF-Token on POST/PUT/PATCH/DELETE"
+            "description": "Send as X-CSRF-Token on POST/PUT/PATCH/DELETE",
+            "examples": [
+              "example-csrf-token"
+            ]
           }
         },
         "type": "object",
@@ -7959,11 +8371,19 @@
         "properties": {
           "id": {
             "type": "integer",
-            "title": "Id"
+            "title": "Id",
+            "description": "Account ID.",
+            "examples": [
+              42
+            ]
           },
           "email": {
             "type": "string",
-            "title": "Email"
+            "title": "Email",
+            "description": "Account's normalized email address.",
+            "examples": [
+              "buyer@example.com"
+            ]
           },
           "role": {
             "type": "string",
@@ -7972,7 +8392,11 @@
               "user",
               "viewer"
             ],
-            "title": "Role"
+            "title": "Role",
+            "description": "Role governing the account's permissions.",
+            "examples": [
+              "user"
+            ]
           }
         },
         "type": "object",
@@ -7982,46 +8406,6 @@
           "role"
         ],
         "title": "UserOut"
-      },
-      "ValidationError": {
-        "properties": {
-          "loc": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                }
-              ]
-            },
-            "type": "array",
-            "title": "Location"
-          },
-          "msg": {
-            "type": "string",
-            "title": "Message"
-          },
-          "type": {
-            "type": "string",
-            "title": "Error Type"
-          },
-          "input": {
-            "title": "Input"
-          },
-          "ctx": {
-            "type": "object",
-            "title": "Context"
-          }
-        },
-        "type": "object",
-        "required": [
-          "loc",
-          "msg",
-          "type"
-        ],
-        "title": "ValidationError"
       },
       "Zone": {
         "properties": {
@@ -8187,13 +8571,120 @@
           "quantity"
         ],
         "title": "ZoneSeats"
+      },
+      "Problem": {
+        "type": "object",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "retryable"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "URI identifying the problem type.",
+            "examples": [
+              "https://ticketing.example/problems/validation-failed"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "Short summary of this problem type.",
+            "examples": [
+              "Request validation failed"
+            ]
+          },
+          "status": {
+            "type": "integer",
+            "description": "HTTP response status.",
+            "examples": [
+              422
+            ]
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable identifier.",
+            "examples": [
+              "validation-failed"
+            ]
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether repeating the same request may succeed.",
+            "examples": [
+              false
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "description": "Additional information about this occurrence.",
+            "examples": [
+              "Select up to one hour."
+            ]
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference",
+            "description": "Path of the request that failed.",
+            "examples": [
+              "/api/v1/auth/register"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Correlation ID for looking up this request.",
+            "examples": [
+              "657f152f5d414b80b54903dde00693a8"
+            ]
+          },
+          "errors": {
+            "type": "array",
+            "description": "Individual request validation issues, when available.",
+            "examples": [
+              [
+                {
+                  "loc": [
+                    "body",
+                    "email"
+                  ],
+                  "msg": "Invalid email",
+                  "type": "value_error"
+                }
+              ]
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "loc": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  }
+                },
+                "msg": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "securitySchemes": {
       "sessionCookie": {
         "type": "apiKey",
         "in": "cookie",
-        "name": "sid"
+        "name": "sid",
+        "description": "HttpOnly session cookie sent automatically by the browser."
       },
       "csrfHeader": {
         "type": "apiKey",

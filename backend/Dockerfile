@@ -44,4 +44,6 @@ WORKDIR /src
 COPY pyproject.toml uv.lock ./
 COPY backend backend
 COPY paymock paymock
+COPY docs/openapi.json docs/openapi.json
+COPY scripts/gen_seats.py scripts/gen_seats.py
 CMD ["pytest"]
