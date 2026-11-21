@@ -161,6 +161,7 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 
 ## 已知問題與未完成項目
 
+- **水平擴充**。同一台桌機改用 6 個 API 副本重跑 Scenario A，排空後快照中 10,000 席全數被占用、過載 503 由 84% 降至 40%、一致性 0 違規；研判下一個瓶頸可能是 PostgreSQL 與付款路徑（尚待持續量測）。見 [LOADTEST.md](LOADTEST.md#7-瓶頸分析)。
 - **正式 Scenario A 過載**。第 2 輪 k6 正式判定 **FAILED**，17 筆重放重試後仍遭拒，另有 6 筆付款請求逾時。抽樣的 89 筆重放中 72 筆回傳原訂單、驗證正確，約 84% 的 HTTP 請求回 `503 server-busy`。[k6 原始輸出](docs/evidence/loadtest-run2-20261121/a/k6-summary.json) · [nginx 狀態摘要](docs/evidence/loadtest-run2-20261121/a/nginx-summary.txt)
 - **正式 Scenario B 重連與尾端延遲**。第 2 輪所有 client 最終與 DB 相符，壓測 client 仍頻繁因進度停滯而重連，delta 套用 p99 為 16,600 ms。[正式結果](LOADTEST.md#3-scenario-b)
 - **筆電壓測**。在 2 核心／4 執行緒的 MacBook 上，3,000 VUs 與服務同機造成 CPU 飽和。多數請求收到快速的 `503 server-busy` 或 client timeout，約 86–95 req/s，SQL 平均耗時受競爭影響約 35–170 ms。該次一致性檢查未發現超賣。

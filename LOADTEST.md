@@ -152,9 +152,27 @@ docker compose exec -T postgres psql -XAt -U ticketing -d ticketing \
 | 情境 | 觀察與正式量測判讀 |
 |---|---|
 | A 筆電壓測 | 筆電 CPU 飽和，k6 與 nginx、API、PostgreSQL 等服務共享 CPU。SQL mean 上升，503 和 timeout 主導結果。程式在 pool acquire、鎖及查詢逾時時會提早回可重試 503。試跑的總 RPS 反映這台機器上的混合結果。見 `backend/src/ticketing/core/db.py:39`、`backend/src/ticketing/booking/database.py:15`。 |
-| A 桌機 | 第 2 輪 p50 約 1 秒，與連線池取用上限相符。滿載請求等待 DB pool，取用逾時即回可重試的 503。壓測期間 `docker stats`（[擷圖](docs/evidence/loadtest-run2-20261121/docker-stats-during-a.png)）顯示 3 個單程序 API 副本各約 105% CPU（各用滿 1 核心），PostgreSQL 約 155%、k6 約 125%（主機 12 執行緒），據此研判 API 程序 CPU 是主要瓶頸、PostgreSQL 仍有餘裕（單一時點擷圖，非持續量測；以增加 API 副本重跑可直接驗證）。管理後台截圖可見 HTTP 流量、延遲、錯誤率與連線數。見 `backend/src/ticketing/core/settings.py:34`、`backend/src/ticketing/core/db.py:48`。[第 2 輪秒級監控](docs/evidence/loadtest-run2-20261121/a/metrics_1s.csv) · [壓測中監控畫面](docs/screenshots/11-monitoring-under-load.png) |
+| A 桌機 | 第 2 輪 p50 約 1 秒，與連線池取用上限相符。滿載請求等待 DB pool，取用逾時即回可重試的 503。壓測期間 `docker stats`（[擷圖](docs/evidence/loadtest-run2-20261121/docker-stats-during-a.png)）顯示 3 個單程序 API 副本各約 105% CPU（各用滿 1 核心），PostgreSQL 約 155%、k6 約 125%（主機 12 執行緒），據此研判 API 程序 CPU 是主要瓶頸、PostgreSQL 仍有餘裕（單一時點擷圖）；改用 6 個副本重跑後占席與付款完成數明顯上升，支持此判讀，見下方水平擴充驗證。管理後台截圖可見 HTTP 流量、延遲、錯誤率與連線數。見 `backend/src/ticketing/core/settings.py:34`、`backend/src/ticketing/core/db.py:48`。[第 2 輪秒級監控](docs/evidence/loadtest-run2-20261121/a/metrics_1s.csv) · [壓測中監控畫面](docs/screenshots/11-monitoring-under-load.png) |
 | B 桌機 | 第 1 輪單程序 client 飽和，服務端 session 重驗失敗也造成整批斷線。第 2 輪仍有進度停滯觸發重連，但最終全部對上 DB，outbox 待編序與 archive 差異均為 0。見 `backend/src/ticketing/realtime/reader.py:161`、`backend/src/ticketing/realtime/revocation.py:101`。[第 1 輪 SSE client](docs/evidence/loadtest-run1-20261121/b/sse-client.txt) · [第 2 輪 SSE client](docs/evidence/loadtest-run2-20261121/b/sse-client.txt) |
 | 座位匯入／Excel 匯出 | 匯入計時含背景作業與回報。Excel 在同機實測已完成，`memory.current` 的峰值接近上限，同時可見大量可回收 page cache。更高磁碟 I/O 或與其他流量共用資源時的影響尚待量測。 |
+
+**水平擴充驗證（3 → 6 個 API 副本）**　同一台桌機、同一 commit `31d87c1`，以 `API_REPLICAS=6 loadtest/run.sh a` 重跑 Scenario A（10,000 席、3,000 VUs、60 秒）。
+
+| Scenario A | 3 個副本（第 2 輪） | 6 個副本 |
+|---|---:|---:|
+| 壓測結束並排空 90 秒後的占席（`held + sold`） | 8,997／10,000 | **10,000／10,000**（全數占用：held 7,829、sold 2,171） |
+| 已付款訂單／票 | 263／488 | **1,127／2,171** |
+| k6 新建鎖位 | 4,538 | 5,261 |
+| `503 server-busy`（k6 全路徑） | 113,642（84%） | **48,049（40%）** |
+| 業務 409（nginx 建單路徑，座位已被搶、限購等） | 12,494 | 29,278 |
+| k6 HTTP 請求數／吞吐 | 134,801／2,098 req/s | 120,426／1,919 req/s |
+| k6 HTTP p50／p95／p99 | 1,043／2,036／2,263 ms | 1,038／1,973／2,399 ms |
+| 冪等重放驗證 | 72／89 | **110／110** |
+| k6 `unexpected_errors`／nginx 499（付款路徑） | 6／6 | 51／50（47 筆建立付款、3 筆付款確認） |
+| 排空後 `consistency.sql` | 0 列 | **0 列** |
+| 壓測中 CPU（`docker stats` 單一時點擷圖） | API 各約 105%，PostgreSQL 約 155% | API 各約 70–102%，**PostgreSQL 約 352%** |
+
+增加副本後，過載拒絕從 84% 降到 40%，排空 90 秒後的快照中 10,000 席全數被占用（7,829 held、2,171 sold），付款完成訂單約為 4.3 倍，一致性仍為 0 違規。總請求數略降，研判是快速回應的 503 變少、進入交易的請求變多所致。單一時點擷圖中單副本 CPU 不再滿載、PostgreSQL 約 3.5 核；研判下一個瓶頸可能轉向資料庫與付款路徑（付款需同步呼叫單程序、SQLite 的模擬金流，付款路徑有 50 筆在 5 秒客戶端逾時前未完成），需持續量測才能確認。k6 因 51 筆非預期錯誤判定 **FAILED**（`unexpected_errors`），重放門檻全部通過。[環境與映像](docs/evidence/loadtest-run3-6replicas-20261121/environment.txt) · [k6](docs/evidence/loadtest-run3-6replicas-20261121/a/k6-summary.json) · [nginx 摘要](docs/evidence/loadtest-run3-6replicas-20261121/a/nginx-summary.txt) · [最終狀態](docs/evidence/loadtest-run3-6replicas-20261121/a/final-state.txt) · [一致性輸出（空）](docs/evidence/loadtest-run3-6replicas-20261121/a/consistency.txt) · [docker stats](docs/evidence/loadtest-run3-6replicas-20261121/docker-stats-during-a.png) · [監控畫面](docs/evidence/loadtest-run3-6replicas-20261121/monitoring-during-a.png)
 
 擴容可調高 Compose 的 `API_REPLICAS`、調整 API 啟動方式以增加每副本的 Uvicorn worker 數，或將產壓端移到另一台機器。增加 API 程序時需一併核算各程序的連線池。見 `compose.yaml:23`、`compose.yaml:120`、`backend/src/ticketing/api/main.py:39`、`loadtest/run.sh:222`。
 

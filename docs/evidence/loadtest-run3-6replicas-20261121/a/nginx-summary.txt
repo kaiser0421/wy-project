@@ -1,0 +1,18 @@
+# nginx access log summary, 6 API replicas (120426 requests)
+
+nginx request time (s): p50=1.021 p95=1.949 p99=2.345
+
+  29278  POST /api/v1/events/{id}/orders 409
+  27771  POST /api/v1/events/{id}/orders 503
+  27510  GET /api/v1/orders 200
+  11803  GET /api/v1/orders 503
+   7688  GET /api/v1/orders/{id} 200
+   5371  POST /api/v1/events/{id}/orders 201
+   5196  GET /api/v1/orders/{id} 503
+   2971  POST /api/v1/orders/{id}/payments 503
+   1127  POST /api/v1/orders/{id}/payments 201
+   1124  POST /pay/:id 200
+    309  POST /api/v1/orders/{id}/cancel 503
+    228  POST /api/v1/orders/{id}/cancel 200
+     47  POST /api/v1/orders/{id}/payments 499
+      3  POST /pay/:id 499

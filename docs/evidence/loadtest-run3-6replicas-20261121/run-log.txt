@@ -1,0 +1,100 @@
+
+==> Stack already running (set REBUILD=1 to rebuild)
+
+==> Scaling API from 3 to 6 replicas
+ Container wy-project-api-1 Running 
+ Container wy-project-api-2 Running 
+ Container wy-project-api-3 Running 
+ Container wy-project-api-6 Creating 
+ Container wy-project-api-4 Creating 
+ Container wy-project-api-5 Creating 
+ Container wy-project-api-6 Created 
+ Container wy-project-api-4 Created 
+ Container wy-project-api-5 Created 
+ Container wy-project-api-4 Starting 
+ Container wy-project-api-4 Started 
+ Container wy-project-api-5 Starting 
+ Container wy-project-api-5 Started 
+ Container wy-project-api-6 Starting 
+ Container wy-project-api-6 Started 
+ Container wy-project-api-5 Waiting 
+ Container wy-project-api-4 Waiting 
+ Container wy-project-api-6 Waiting 
+ Container wy-project-api-1 Waiting 
+ Container wy-project-api-2 Waiting 
+ Container wy-project-api-3 Waiting 
+ Container wy-project-api-5 Healthy 
+ Container wy-project-api-4 Healthy 
+ Container wy-project-api-6 Healthy 
+ Container wy-project-api-1 Healthy 
+ Container wy-project-api-2 Healthy 
+ Container wy-project-api-3 Healthy 
+
+==> Recording environment
+
+==> Scenario A: preparing event with 10000 seats and 3000 buyer sessions
+imported 10000 seats in 1.6s
+event 7: 10000 seats, 3000 buyer sessions -> /lt/out/20261121-202355/a
+
+==> Scenario A: k6 3000 VUs for 60s against event 7
+replays started=110 verified=110
+rush ↓ [ 100% ] 3000 VUs  1m0s
+
+running (1m01.8s), 0326/3000 VUs, 83392 complete and 0 interrupted iterations
+rush ↓ [ 100% ] 3000 VUs  1m0s
+
+running (1m02.8s), 0000/3000 VUs, 83718 complete and 0 interrupted iterations
+rush ✓ [ 100% ] 3000 VUs  1m0s
+
+     business_conflicts.............: 77327   1232.272283/s
+   ✓ checks.........................: 100.00% 110 out of 110
+     data_received..................: 106 MB  1.7 MB/s
+     data_sent......................: 45 MB   721 kB/s
+     http_req_blocked...............: avg=3.21ms   min=1.2µs  med=5.3µs    max=374.13ms p(90)=8.4µs    p(95)=19.59µs  p(99)=117.26ms
+     http_req_connecting............: avg=2.94ms   min=0s     med=0s       max=322.88ms p(90)=0s       p(95)=0s       p(99)=115.79ms
+     http_req_duration..............: avg=1.09s    min=3.95ms med=1.03s    max=5.44s    p(90)=1.82s    p(95)=1.97s    p(99)=2.39s   
+       { expected_response:true }...: avg=953.45ms min=3.95ms med=915.96ms max=4.97s    p(90)=1.68s    p(95)=1.9s     p(99)=2.36s   
+     http_req_failed................: 39.94%  48100 out of 120426
+     http_req_receiving.............: avg=547µs    min=0s     med=39.8µs   max=449.23ms p(90)=246.2µs  p(95)=598.47µs p(99)=9.07ms  
+     http_req_sending...............: avg=772.1µs  min=5.3µs  med=15.4µs   max=399.94ms p(90)=181.45µs p(95)=985.57µs p(99)=18.9ms  
+     http_req_tls_handshaking.......: avg=0s       min=0s     med=0s       max=0s       p(90)=0s       p(95)=0s       p(99)=0s      
+     http_req_waiting...............: avg=1.09s    min=3.77ms med=1.03s    max=5.44s    p(90)=1.82s    p(95)=1.97s    p(99)=2.39s   
+     http_reqs......................: 120426  1919.091933/s
+     iteration_duration.............: avg=2.17s    min=95.9ms med=1.88s    max=37.11s   p(90)=3.01s    p(95)=3.4s     p(99)=18.33s  
+     iterations.....................: 83718   1334.118367/s
+   ✓ replay_progress................: 50.00%  110 out of 220
+     replay_started.................: 110     1.752945/s
+   ✓ replay_unverified..............: 0       0/s
+     replay_verified................: 110     1.752945/s
+     scenario_a_iterations..........: 83718   1334.118367/s
+     scenario_a_outcomes............: 121379  1934.278808/s
+     server_busy....................: 48049   765.70216/s
+     successful_holds...............: 5261    83.838562/s
+   ✗ unexpected_errors..............: 0.04%   51 out of 120426
+     vus............................: 326     min=0               max=3000
+     vus_max........................: 3000    min=71              max=3000
+
+
+running (1m02.8s), 0000/3000 VUs, 83718 complete and 0 interrupted iterations
+rush ✓ [ 100% ] 3000 VUs  1m0s
+time="2026-11-21T12:25:47Z" level=error msg="thresholds on metrics 'unexpected_errors' have been crossed"
+
+==> Scenario A: waiting for holds, payments and outbox to drain (90 s)
+
+==> Scenario A: consistency checks (zero rows = consistent)
+     status      | orders | tickets 
+-----------------+--------+---------
+ pending_payment |   3906 |    7829
+ paid            |   1127 |    2171
+ cancelled       |    228 |     438
+(3 rows)
+
+ status | count 
+--------+-------
+ held   |  7829
+ sold   |  2171
+(2 rows)
+
+
+==> FAILED
+  - Scenario A k6 failed (exit 99)
