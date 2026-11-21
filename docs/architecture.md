@@ -48,8 +48,8 @@ flowchart TB
   Edge -->|"stub_status"| Collector
 ```
 
-- PostgreSQL 保存座位、訂單、配額、session、匯入 job、outbox 與監控資料。nginx、PostgreSQL 與 Redis 的 host port 預設綁在 loopback。三個 API 副本各由一個 Uvicorn 程序處理 REST 與 SSE。見 `compose.yaml:45`、`compose.yaml:97`、`compose.yaml:193`、`backend/src/ticketing/api/main.py:36`。
-- `migrate` 以 schema owner 執行，`seed` 與 runtime 使用低權限角色。Worker 分別排程匯入、hold expiry、付款 reconciler 與 maintenance。見 `compose.yaml:5`、`compose.yaml:80`、`backend/src/ticketing/worker/main.py:20`。
+- PostgreSQL 保存座位、訂單、配額、session、匯入 job、outbox 與監控資料。nginx、PostgreSQL 與 Redis 的 host port 預設綁在 loopback。三個 API 副本各由一個 Uvicorn 程序處理 REST 與 SSE。見 `compose.yaml:52`、`compose.yaml:110`、`compose.yaml:211`、`backend/src/ticketing/api/main.py:36`。
+- `migrate` 以 schema owner 執行，`seed` 與 runtime 使用低權限角色。Worker 分別排程匯入、hold expiry、付款 reconciler 與 maintenance。見 `compose.yaml:5`、`compose.yaml:91`、`backend/src/ticketing/worker/main.py:20`。
 - Redis Pub/Sub 通知 API 有 session 撤銷與匯入進度變化，持久狀態由 PostgreSQL 提供。見 `backend/src/ticketing/auth/sessions.py:89`、`backend/src/ticketing/auth/sessions.py:134`、`backend/src/ticketing/imports/runner.py:269`、`backend/src/ticketing/api/routes/imports.py:191`。
 
 ## 2. 訂票交易
@@ -133,7 +133,7 @@ sequenceDiagram
   W->>P: 套用查得的結果與退款狀態
 ```
 
-- Merchant 請求使用 `X-Payment-Provider-Token`。Paymock 啟動時讀取固定 `PAYMOCK_CALLBACK_URL`，Compose 預設為 `http://api:8000/api/v1/payments/callbacks`。配送重試會重新簽章。見 `compose.yaml:174`、`paymock/src/paymock/main.py:75`、`paymock/src/paymock/main.py:150`、`paymock/src/paymock/delivery.py:17`、`backend/src/ticketing/payments/provider.py:42`。
+- Merchant 請求使用 `X-Payment-Provider-Token`。Paymock 啟動時讀取固定 `PAYMOCK_CALLBACK_URL`，Compose 預設為 `http://api:8000/api/v1/payments/callbacks`。配送重試會重新簽章。見 `compose.yaml:192`、`paymock/src/paymock/main.py:75`、`paymock/src/paymock/main.py:150`、`paymock/src/paymock/delivery.py:17`、`backend/src/ticketing/payments/provider.py:42`。
 - 付款建立先提交 attempt，再發出外部呼叫。回呼與對帳共用結果處理，扣款判定在鎖內使用 PostgreSQL `app_now()`。已付款訂單取消後先進入 `refund_pending`，退款確認後釋放座位與配額。見 `backend/src/ticketing/payments/attempts.py:147`、`backend/src/ticketing/api/routes/payments.py:126`、`backend/src/ticketing/payments/callbacks.py:144`、`backend/src/ticketing/payments/reconciler.py:51`、`backend/src/ticketing/payments/reconciler.py:90`、`backend/src/ticketing/booking/orders.py:148`。
 
 ## 5. 監控資料流

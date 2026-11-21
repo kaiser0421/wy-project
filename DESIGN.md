@@ -16,9 +16,9 @@
 
 | 假設 | 適用範圍 |
 |---|---|
-| PostgreSQL 16 為座位、訂單、配額、session 與 job 的權威來源 | Compose 部署使用單一 PostgreSQL、三個 API 副本。帳務收斂另仰賴模擬金流保存 intent、capture、refund 並接受同一識別碼重試。見 `compose.yaml:45`、`compose.yaml:105`、`paymock/src/paymock/store.py:153`、`paymock/src/paymock/store.py:204`。 |
+| PostgreSQL 16 為座位、訂單、配額、session 與 job 的權威來源 | Compose 部署使用單一 PostgreSQL、三個 API 副本。帳務收斂另仰賴模擬金流保存 intent、capture、refund 並接受同一識別碼重試。見 `compose.yaml:52`、`compose.yaml:118`、`paymock/src/paymock/store.py:153`、`paymock/src/paymock/store.py:204`。 |
 | 每筆 1–4 張，每人每活動預設最多 4 張 | `pending_payment`、`paid`、`refund_pending` 佔配額。取消、逾時或退款完成而釋位時回補。預設 hold 為 600 秒，接受付款以持有訂單鎖後的 DB 時間為準。見 `backend/src/ticketing/booking/models.py:19`、`backend/src/ticketing/booking/models.py:40`、`backend/src/ticketing/core/settings.py:71`、`backend/src/ticketing/booking/orders.py:117`、`backend/src/ticketing/payments/callbacks.py:159`。 |
-| 自動收斂以依賴恢復、持久資料仍可用為前提 | Compose 常駐後端使用 `restart: unless-stopped`。worker 與 relay 恢復後從 DB 繼續處理。長時間停機或 backlog 堆積會延長收斂。見 `compose.yaml:28`、`compose.yaml:42`、`backend/src/ticketing/worker/main.py:20`、`backend/src/ticketing/realtime/relay.py:55`。 |
+| 自動收斂以依賴恢復、持久資料仍可用為前提 | Compose 常駐後端使用 `restart: unless-stopped`。worker 與 relay 恢復後從 DB 繼續處理。長時間停機或 backlog 堆積會延長收斂。見 `compose.yaml:34`、`compose.yaml:48`、`backend/src/ticketing/worker/main.py:20`、`backend/src/ticketing/realtime/relay.py:55`。 |
 
 ## Q1 座位不超賣
 

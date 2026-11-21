@@ -25,6 +25,12 @@ x-backend-env: &backend-env
   LOG_DIR: /data/logs
   PAYMENT_PROVIDER_URL: http://paymock:8000
 
+# Docker's default json-file driver never rotates; cap every container's log at 3 x 10 MB.
+# (Structured logs that the collector ingests are written to the app_logs volume separately.)
+x-logging: &default-logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+
 x-backend: &backend
   image: ticketing-backend:local
   build:
@@ -40,9 +46,12 @@ x-backend: &backend
     - app_logs:/data/logs
     - imports:/data/imports
   restart: unless-stopped
+  logging: *default-logging
 
 services:
   postgres:
+    logging: *default-logging
+    mem_limit: 2g
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-ticketing}
@@ -66,6 +75,8 @@ services:
     restart: unless-stopped
 
   redis:
+    logging: *default-logging
+    mem_limit: 256m
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
     volumes: [redis_data:/data]
@@ -78,6 +89,7 @@ services:
     restart: unless-stopped
 
   migrate:
+    mem_limit: 256m
     <<: *backend
     command: ["alembic", "upgrade", "head"]
     environment:
@@ -88,6 +100,7 @@ services:
       postgres: {condition: service_healthy}
 
   seed:
+    mem_limit: 256m
     <<: *backend
     command: ["ticketing-seed"]
     restart: "no"
@@ -121,6 +134,7 @@ services:
       redis: {condition: service_healthy}
 
   worker:
+    mem_limit: 768m
     <<: *backend
     command: ["ticketing-worker"]
     healthcheck:
@@ -135,6 +149,7 @@ services:
       redis: {condition: service_healthy}
 
   relay:
+    mem_limit: 256m
     <<: *backend
     command: ["ticketing-relay"]
     healthcheck:
@@ -149,6 +164,7 @@ services:
       redis: {condition: service_healthy}
 
   collector:
+    mem_limit: 512m
     <<: *backend
     command: ["ticketing-collector"]
     healthcheck:
@@ -167,6 +183,8 @@ services:
       redis: {condition: service_healthy}
 
   paymock:
+    logging: *default-logging
+    mem_limit: 256m
     image: ticketing-paymock:local
     build:
       context: .
@@ -193,6 +211,8 @@ services:
     restart: unless-stopped
 
   nginx:
+    logging: *default-logging
+    mem_limit: 256m
     image: ticketing-nginx:local
     build:
       context: .

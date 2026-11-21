@@ -20,7 +20,7 @@
 | **OS／版本**　macOS（Intel）。Excel 匯出日期為 2026-11-21（台北）。 | **OS／版本／日期／commit**　（待桌機壓測結果，填入 `environment.txt`） |
 | **拓樸**　筆電壓測的產壓程式、nginx、API、PostgreSQL 和其他服務共用宿主機。先前的 Scenario B 開發試跑使用單一 Uvicorn 和測試用 DB／Redis 容器，見 §3。 | **拓樸**　在另一台桌機執行 `loadtest/run.sh`。預設產壓端與整個 Compose stack 仍共用該機器。實際 CPU 限額與服務配置（待桌機壓測結果）。 |
 
-`compose.yaml` 預設啟動三個 API 副本（各 512 MiB）與 PostgreSQL 16。宿主機 nginx 預設 `127.0.0.1:8080`，產壓容器走 Compose network 的 `http://nginx:8080`。A 使用 `grafana/k6:0.57.0`，B 的 writer 與 SSE probe 使用專案 API image 中的 Python。兩個情境各自建立活動。見 `compose.yaml:45`、`compose.yaml:107`、`compose.yaml:203`、`loadtest/run.sh`。
+`compose.yaml` 預設啟動三個 API 副本（各 512 MiB）與 PostgreSQL 16。宿主機 nginx 預設 `127.0.0.1:8080`，產壓容器走 Compose network 的 `http://nginx:8080`。A 使用 `grafana/k6:0.57.0`，B 的 writer 與 SSE probe 使用專案 API image 中的 Python。兩個情境各自建立活動。見 `compose.yaml:52`、`compose.yaml:120`、`compose.yaml:223`、`loadtest/run.sh`。
 
 ## 2. Scenario A
 
@@ -72,7 +72,7 @@ Burst 的 8,337 次串流嘗試包含 6,110 次 HTTP request errors，並出現 
 
 ## 5. Excel 匯出
 
-以 `scripts/seed_orders_500k.sql` 灌入 **500,000** 筆訂單，以 Admin 經 nginx 呼叫 `GET /api/v1/events/{event_id}/reports/sales.xlsx?tz=Asia/Taipei`，完成下載後用 openpyxl read-only 驗證。三個 API 副本均驗證 cgroup 的 512 MiB 上限。見 `backend/src/ticketing/api/routes/reports.py:124`、`compose.yaml:107` 及 [Excel 匯出原始量測](docs/evidence/cp4-excel-500k.md)。
+以 `scripts/seed_orders_500k.sql` 灌入 **500,000** 筆訂單，以 Admin 經 nginx 呼叫 `GET /api/v1/events/{event_id}/reports/sales.xlsx?tz=Asia/Taipei`，完成下載後用 openpyxl read-only 驗證。三個 API 副本均驗證 cgroup 的 512 MiB 上限。見 `backend/src/ticketing/api/routes/reports.py:124`、`compose.yaml:120` 及 [Excel 匯出原始量測](docs/evidence/cp4-excel-500k.md)。
 
 | 項目 | 實測 |
 |---|---|
@@ -83,7 +83,7 @@ Burst 的 8,337 次串流嘗試包含 6,110 次 HTTP request errors，並出現 
 | OOM／重啟 | 三副本 `OOMKilled=false`、`RestartCount=0`。 |
 | 檔案驗證 | 33,419,621 bytes。含 `Summary`、`Zones`、`Orders`，明細 500,000 列，表頭標示 `Asia/Taipei`，金額以數值存放。 |
 
-匯出使用 server-side cursor 每批 5,000 列與 xlsxwriter `constant_memory`，暫存檔寫入容器掛載的 export volume。nginx 報表專用 `proxy_read_timeout` 為 300 秒。匯出量測涵蓋單次匯出與檔案驗證。倉庫另有要求 cgroup `memory.peak` 的 opt-in 測試，這次用 cgroup v2 取樣。見 `backend/src/ticketing/reports/sales.py:30`、`backend/src/ticketing/reports/sales.py:289`、`compose.yaml:103`、`infra/nginx/nginx.conf:138`、`backend/tests/reports/test_export_memory.py:22`。
+匯出使用 server-side cursor 每批 5,000 列與 xlsxwriter `constant_memory`，暫存檔寫入容器掛載的 export volume。nginx 報表專用 `proxy_read_timeout` 為 300 秒。匯出量測涵蓋單次匯出與檔案驗證。倉庫另有要求 cgroup `memory.peak` 的 opt-in 測試，這次用 cgroup v2 取樣。見 `backend/src/ticketing/reports/sales.py:30`、`backend/src/ticketing/reports/sales.py:289`、`compose.yaml:116`、`infra/nginx/nginx.conf:138`、`backend/tests/reports/test_export_memory.py:22`。
 
 ## 6. 一致性檢查
 
