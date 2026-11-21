@@ -68,10 +68,11 @@
 
 ## 本機開發
 
-在 repo 根目錄安裝 Python 3.12 workspace，執行靜態檢查。見 `pyproject.toml:5`、`Makefile:32`、`Makefile:41`。
+在 repo 根目錄安裝 Python 3.12 workspace，並用 Node.js 22 安裝前端依賴，再執行靜態檢查。見 `pyproject.toml:5`、`Makefile:32`。
 
 ```bash
 uv sync --python 3.12
+(cd frontend && npm ci)
 make lint typecheck
 ```
 
@@ -88,8 +89,10 @@ TICKETING_ORIGIN=http://127.0.0.1:8081 npm run dev -- --port 8080 --strictPort
 
 | 指令 | 驗證範圍 |
 | --- | --- |
-| `make test` | Docker 內執行後端 Ruff、mypy、import-linter、pytest 單元與整合測試（PostgreSQL 16、Redis 7，含併發訂票），以及前端 typecheck、build、Vitest、Playwright 預設 UI 測試（`smoke.spec.ts`、`seat-recovery.spec.ts`、`registration.spec.ts`）。見 `frontend/playwright.config.ts:8`、`Makefile:22`、`compose.test.yaml:4`、`compose.test.yaml:41`、`compose.test.yaml:68`。 |
+| `make test` | Docker 內執行後端 Ruff、mypy、import-linter、pytest 單元與整合測試（PostgreSQL 16、Redis 7，含併發訂票），以及前端 ESLint、typecheck、build、Vitest 覆蓋率與 Playwright 預設 UI 測試（`smoke.spec.ts`、`seat-recovery.spec.ts`、`registration.spec.ts`）。見 `frontend/playwright.config.ts:8`、`Makefile:22`、`compose.test.yaml`。 |
 | `make test-fast` | 以 `uv run pytest backend/tests/unit -q` 在 host 跑後端單元測試。見 `Makefile:29`。 |
+
+在 `frontend/` 執行 `npm run lint` 做型別感知的靜態檢查，或執行 `npm run test:coverage` 跑 Vitest 單元測試並產生覆蓋率摘要（JSON 位於 `frontend/coverage/coverage-summary.json`）。DOM 與頁面模組由 Playwright UI 測試涵蓋，Vitest 的摘要只計入單元測試覆蓋率。
 
 nginx 整合測試可另外執行。先啟動 Compose，準備一個已匯入座位並發布的活動，將下列 `123` 換成實際 ID。使用 Node.js 22，在 Bash 中執行。另可在可拋棄的測試堆疊設 `TICKETING_SMOKE_WRITE=1`，加入建活動與付款的案例。見 `infra/nginx/Dockerfile:3`、`frontend/playwright.config.ts:8`、`frontend/tests/e2e/nginx.spec.ts:6`、`frontend/tests/e2e/nginx.spec.ts:41`。
 

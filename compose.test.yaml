@@ -64,9 +64,10 @@ services:
       - -ec
       - |
         tar -C /source --exclude='./node_modules' --exclude='./.npm-cache' --exclude='./dist' \
-          --exclude='./playwright-report' --exclude='./test-results' -cf - . | tar -xf -
+          --exclude='./coverage' --exclude='./playwright-report' --exclude='./test-results' -cf - . | tar -xf -
         npm ci
+        npm run lint
         npm run typecheck
         npm run build
-        npm test
+        npm run test:coverage
         npm run test:e2e
