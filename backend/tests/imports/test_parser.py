@@ -48,7 +48,7 @@ def test_oversized_json_item_rejects_the_file_without_decoding(tmp_path, monkeyp
         parser._DECODER, "raw_decode", lambda raw: decoded.append(raw[:20]) or real(raw)
     )
     normal = json.dumps({"zone_code": "A", "row_label": "R1", "seat_number": 1})
-    huge = json.dumps({"zone_code": "A", "row_label": "x" * 10_000, "seat_number": 2})
+    huge = json.dumps({"zone_code": "A", "row_label": "x" * 70_000, "seat_number": 2})
     path = tmp_path / "seats.json"
     path.write_text(f"[{normal},\n{huge}]")
     with pytest.raises(InvalidLayout, match="invalid_json"):
@@ -60,4 +60,11 @@ def test_whitespace_does_not_count_towards_the_item_size(tmp_path):
     normal = json.dumps({"zone_code": "A", "row_label": "R1", "seat_number": 1})
     path = tmp_path / "seats.json"
     path.write_text("[" + normal + " " * 10_000 + "\n]")
+    assert [row[-1] for row in iter_rows(path, "json")] == [None]
+
+
+def test_pretty_printed_item_with_inner_whitespace_is_accepted(tmp_path):
+    item = '{"zone_code": "A",' + " " * 5_000 + '"row_label": "R1", "seat_number": 1}'
+    path = tmp_path / "seats.json"
+    path.write_text(f"[{item}]")
     assert [row[-1] for row in iter_rows(path, "json")] == [None]

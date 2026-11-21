@@ -80,8 +80,9 @@ def _csv_rows(path: Path) -> Iterator[Row]:
             raise InvalidLayout("invalid_csv", line) from exc
 
 
-# A seat item is ~100 bytes; a file containing a far larger item is rejected without decoding it.
-MAX_JSON_ITEM_BYTES = 4096
+# A seat item is ~100 bytes; a file containing an item over 64 KiB (even pretty-printed, far
+# beyond any real seat) is rejected without decoding it.
+MAX_JSON_ITEM_BYTES = 64 * 1024
 
 
 def _item_end(data: mmap, start: int) -> tuple[int, int]:

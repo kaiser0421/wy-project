@@ -63,6 +63,10 @@ environment() {
     docker info --format 'docker: {{.ServerVersion}} cpus={{.NCPU}} mem={{.MemTotal}} os={{.OperatingSystem}}'
     docker compose version
     echo "API_REPLICAS=${API_REPLICAS:-unset} API_REPLICAS_RUNNING=$1"
+    # Image IDs of the running containers: the checkout SHA alone does not prove what was tested.
+    docker compose ps --format '{{.Service}} {{.Image}}' 2>/dev/null | sort -u | while read -r svc img; do
+      echo "image: $svc $img $(docker image inspect -f '{{.Id}}' "$img" 2>/dev/null | cut -c8-19)"
+    done
     echo "VUS=$VUS DURATION=$DURATION SEATS=$SEATS CONNECTIONS=$CONNECTIONS B_DURATION=$B_DURATION B_RATE=$B_RATE"
     echo "SSE_PROCESSES=${SSE_PROCESSES:-auto} SSE_RAMP=$SSE_RAMP"
   } > "$OUT/environment.txt"

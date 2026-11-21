@@ -42,7 +42,8 @@ _ACTIVE = {"queued", "running"}
     description=(
         "The owner or an administrator may upload CSV or JSON to a draft. The file is streamed to "
         "disk before admitting one active job per event. Identical bytes replay the original job "
-        "with 200 regardless of mode or publication state."
+        "with 200 regardless of mode or publication state. Limits: 20 MiB, 100,000 rows, and "
+        "64 KiB per JSON item (a larger item fails the whole file as invalid_json)."
     ),
     responses={
         **problems(
