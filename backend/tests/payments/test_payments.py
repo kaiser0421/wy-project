@@ -555,3 +555,54 @@ async def test_cancellation_lock_timeout_does_not_skip_refunds(
         == 2
     )
     await assert_invariants(db)
+
+
+@pytest.mark.parametrize("mode", ["claim-error", "row-error", "timeout"])
+async def test_reconciler_poll_budget_does_not_block_cancellation_or_refund(
+    db, settings, test_clock, world, monkeypatch, mode
+):
+    buyer, _, provider, ctx = world
+    await test_clock.advance(timedelta())
+    event, seats = await inventory(db, buyer.user_id, 3)
+    payments = []
+    for index, seat in enumerate(seats):
+        hold = await book(buyer, event, f"phase-hold-{index}", seat_ids=[seat])
+        assert hold.status_code == 201
+        order_id = hold.json()["public_id"]
+        payment = await start(buyer, order_id, f"phase-pay-{index}")
+        assert payment.status_code == 201
+        payments.append((order_id, payment.json()))
+
+    refund_order, paid = payments[2]
+    capture = await confirm(provider, paid)
+    assert (await callback(buyer, settings, capture)).json() == {"disposition": "accepted"}
+    assert (await cancel(buyer, payments[1][0], "phase-cancel")).status_code == 200
+    assert (await cancel(buyer, refund_order, "phase-refund")).status_code == 200
+    await test_clock.advance(timedelta(seconds=16))
+    stalled = asyncio.Event()
+
+    async def fail(*_):
+        if mode == "timeout":
+            stalled.set()
+            await asyncio.Future()
+        raise RuntimeError("Injected polling failure")
+
+    with monkeypatch.context() as patch:
+        if mode != "row-error":
+            patch.setattr(reconciler, "_due_attempts", fail)
+        else:
+            patch.setattr(Provider, "poll", fail)
+        if mode == "timeout":
+            patch.setattr(reconciler, "_PHASE_TIMEOUT_S", 2)
+        async with asyncio.timeout(8):
+            await reconciler.tick(ctx)
+
+    if mode == "timeout":
+        assert stalled.is_set()
+    assert await db.fetchval("SELECT status FROM provider_cancellations") == "succeeded"
+    assert await db.fetchval("SELECT status FROM refunds") == "succeeded"
+    assert (
+        await db.fetchval("SELECT status FROM orders WHERE public_id=$1", UUID(refund_order))
+        == "refunded"
+    )
+    await assert_invariants(db)
