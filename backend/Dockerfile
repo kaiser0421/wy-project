@@ -46,4 +46,5 @@ COPY backend backend
 COPY paymock paymock
 COPY docs/openapi.json docs/openapi.json
 COPY scripts/gen_seats.py scripts/gen_seats.py
+COPY loadtest/sse_client.py loadtest/sse_client.py
 CMD ["pytest"]
