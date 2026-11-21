@@ -4,7 +4,7 @@
 
 - 從 repository 根目錄使用 Git、Bash、Docker（含 Compose v2）與 `curl`。Python 工具在 API image 內執行，情境 A 的 k6 使用 `grafana/k6:0.57.0`。見 `loadtest/run.sh:13`、`loadtest/run.sh:35`、`loadtest/run.sh:57`、`loadtest/run.sh:81`。
 - 使用可拋棄的 Compose 堆疊。Runner 假設預設主辦人 `user@example.com`／`User#Dev2026!`、SQL 帳號及資料庫皆名為 `ticketing`、cookie 名為 `sid`，且允許 `http://localhost:8080` 作為 Origin。只改 Compose 的憑證設定無法改寫 runner 的固定值。見 `loadtest/run.sh:40`、`loadtest/run.sh:83`、`loadtest/prepare_a.py:42`、`loadtest/prepare_a.py:56`、`loadtest/prepare_a.py:116`、`loadtest/sse_client.py:384`。
-- 確認 bind mount 的權限。Linux 上，runner 以 host 使用者建立輸出目錄，Python 容器使用 UID/GID 10001。若目錄由其他 UID 持有且權限為 `0755`，A 無法建立輸出目錄，B 無法建立 session 檔。使用自訂 `OUT` 時可先備妥空的輸出目錄與所需的 `a/`、`b/` 子目錄，讓 Python 可寫入兩者、k6 可讀 A 的 fixture 並寫入 summary，且 host 使用者可讀取輸出並移除 session 檔。見 `loadtest/run.sh:16`、`loadtest/run.sh:37`、`loadtest/run.sh:81`、`loadtest/run.sh:109`、`loadtest/run.sh:128`、`backend/Dockerfile:24`、`backend/Dockerfile:30`。
+- 寫入 `loadtest/` 的容器（Python 工具與 k6）以執行者的 UID/GID 執行（`loadtest/run.sh:19`），Linux bind mount 不需額外調整權限。
 
 ## 執行與參數
 

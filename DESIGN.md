@@ -55,6 +55,22 @@ Booking invariant violations: [{'invariant': 'seat active claims', 'id': 2}, {'i
 ======================= 3 passed, 9 deselected in 7.07s ========================
 ```
 
+以 `BREAK_IT_RAW=1` 執行時，`naive` 不再包住斷言，三層防線都移除後測試直接失敗（[原始輸出](docs/evidence/break-it-raw.txt)）：
+
+```text
+$ BREAK_IT_RAW=1 pytest -v "backend/tests/booking/test_booking.py::test_break_it"
+# PostgreSQL 16 (postgres:16 image), 2026-11-21 15:50 CST; normal and indexed are controls, naive removes all three protections
+
+backend/tests/booking/test_booking.py::test_break_it[normal] PASSED      [ 33%]
+backend/tests/booking/test_booking.py::test_break_it[indexed] PASSED     [ 66%]
+backend/tests/booking/test_booking.py::test_break_it[naive] FAILED       [100%]
+E       AssertionError: Booking invariant violations: [{'invariant': 'seat active claims', 'id': 2}, {'invariant': 'seat active claims', 'id': 1}, {'invariant': 'seat active claims', 'id': 3}]
+backend/tests/booking/support.py:117: AssertionError
+=========================== short test summary info ============================
+FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
+========================= 1 failed, 2 passed in 12.60s =========================
+```
+
 ## Q2 部分失敗後的狀態收斂
 
 **答案**　最大風險是模擬金流已扣款，PostgreSQL 尚未記錄 capture，且 hold 可能在此期間到期。這同時影響使用者的金額與座位。金流回呼與 reconciler 共用付款分類，依 DB 當下狀態接受或安排退款。
@@ -124,7 +140,7 @@ Booking invariant violations: [{'invariant': 'seat active claims', 'id': 2}, {'i
 **機制與流程**
 
 - **撤銷**　登出寫 `revoked_at` 再清 cookie。Admin 修改角色或啟用狀態時在同一交易更新 user、撤銷其現有 sessions。訂票交易依 `users → sessions` 順序取 `FOR SHARE` 並重驗。撤銷提交後的 Redis pub/sub 用於關閉座位 SSE。若通知遺失，座位 SSE 每個副本約每秒批次檢查已連線的 distinct session IDs，連續兩次檢查失敗即關閉該副本的座位串流。這是健康環境下的檢查週期，事件迴圈停頓時無固定上限。Admin 監控與匯入進度串流每輪另讀 session。見 `backend/src/ticketing/api/routes/auth.py:265`、`backend/src/ticketing/api/routes/admin_users.py:221`、`backend/src/ticketing/api/routes/admin_users.py:240`、`backend/src/ticketing/auth/sessions.py:111`、`backend/src/ticketing/realtime/revocation.py:96`、`backend/src/ticketing/api/routes/monitoring.py:362`、`backend/src/ticketing/api/routes/imports.py:169`。
-- **每請求成本**　一次 token hash、一次 DB pool acquire 與一次按唯一 `sessions.token_hash` 查 session、JOIN user，判斷撤銷、啟用、角色及有效期。idle 續期合併後批次更新，SQL 不會復活撤銷或過期的 session。訂票另有交易內兩次鎖定查詢。以有效 cookie 重放 `GET /api/v1/auth/me`，在 API 量測 `resolve_principal` 中 acquire wait 與 `authenticate` 單獨的 latency p50/p95/p99，分低負載與 A 負載時段並記錄錯誤數。可用 `EXPLAIN (ANALYZE, BUFFERS)` 驗證查詢 plan，SQL 時間與端到端時間分開報告。實測（待 session 驗證成本量測）。見 `backend/src/ticketing/api/security.py:99`、`backend/src/ticketing/auth/sessions.py:38`、`backend/src/ticketing/auth/sessions.py:50`、`backend/src/ticketing/auth/sessions.py:190`、`backend/migrations/versions/0001_baseline.py:69`。
+- **每請求成本**　一次 token hash、一次 DB pool acquire 與一次按唯一 `sessions.token_hash` 查 session、JOIN user，判斷撤銷、啟用、角色及有效期。idle 續期合併後批次更新，SQL 不會復活撤銷或過期的 session。訂票另有交易內兩次鎖定查詢。以有效 cookie 重放 `GET /api/v1/auth/me`，在 API 量測 `resolve_principal` 中 acquire wait 與 `authenticate` 單獨的 latency p50/p95/p99，分低負載與 A 負載時段並記錄錯誤數。可用 `EXPLAIN (ANALYZE, BUFFERS)` 驗證查詢 plan，SQL 時間與端到端時間分開報告。閒置堆疊實測：經 nginx 依序各 1,000 次，`GET /api/v1/auth/me` p50/p95/p99 為 10.89/25.38/35.78 ms，不查 session 的 `GET /healthz/live` 為 7.03/18.85/34.07 ms，中位數差約 3.9 ms，0 錯誤；`EXPLAIN ANALYZE` 顯示走 `sessions_token_hash_key`，索引查詢約 0.17 ms。高負載時的主要成本是等待連線池，於正式 A 結果中觀察。見 [session 驗證成本紀錄](docs/evidence/session-auth-cost.md)。見 `backend/src/ticketing/api/security.py:99`、`backend/src/ticketing/auth/sessions.py:38`、`backend/src/ticketing/auth/sessions.py:50`、`backend/src/ticketing/auth/sessions.py:190`、`backend/migrations/versions/0001_baseline.py:69`。
 - **匯入中停用建立者**　worker 每批檢查 `is_active`。finalize 在 DB 交易鎖住 creator、event 並驗證 fence 後，依當下角色、所有權與活動狀態決定能否套用。若停用已先提交，job 結束為 `cancelled`、原因 `creator_disabled`，只清理 staging。若 finalize 先鎖住並提交，之後的停用不回滾已匯入資料。這使正式座位的寫入與當時的有效權限一致。見 `backend/src/ticketing/imports/runner.py:125`、`backend/src/ticketing/imports/runner.py:170`、`backend/src/ticketing/imports/runner.py:279`。
 
 **驗證**　route introspection 巡覽所有已註冊的 API route，檢查 endpoint 宣告的 policy metadata，依 HTTP method 與完整路徑比對 public allowlist。另驗證缺少 policy 或繞過 SecureRouter 註冊的行為會遭拒。OpenAPI 測試逐 operation 核對 security 與錯誤契約，並比對匯出的 JSON。Runtime 整合測試驗證指定路由的角色與物件權限，其中匯入測試涵蓋上傳、查詢、進度串流與錯誤檔下載。最容易漏掉的是 `GET /api/v1/seat-imports/{job_id}/errors.csv`。URL 只有 job UUID，下載內容有原始欄位與錯誤資訊，因此先 JOIN parent event，以 Admin 或活動 owner 身分完成授權，才讀取錯誤列與建立下載檔。見 `backend/tests/authz/test_route_policies.py:52`、`backend/tests/authz/test_route_policies.py:75`、`backend/tests/authz/test_route_policies.py:93`、`backend/tests/authz/test_route_policies.py:102`、`backend/tests/authz/test_openapi.py:22`、`backend/tests/authz/test_openapi.py:76`、`backend/tests/imports/test_imports.py:70`、`backend/src/ticketing/api/routes/imports.py:256`、`backend/src/ticketing/imports/jobs.py:64`。

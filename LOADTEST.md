@@ -123,7 +123,7 @@ docker compose exec -T postgres psql -U ticketing -d ticketing \
 
 ## 8. 重現指令與產物
 
-從 repo root 使用 Git、Bash、Docker（Compose v2）及 `curl`。使用預設主辦人憑證、SQL 帳號和資料庫 `ticketing`、`sid` cookie，並允許 `http://localhost:8080` Origin。Linux bind mount 需先確認容器 UID 可讀寫輸出目錄。腳本透過 `http://127.0.0.1:${HTTP_PORT:-8080}/healthz/live` 檢查既有服務，未啟動時執行 `docker compose up -d --build`。若要按當前 checkout 重建可加 `REBUILD=1`。自訂 host port 請由 shell 傳入，例如 `HTTP_PORT=8081 loadtest/run.sh smoke`。見 `loadtest/run.sh:40`、`loadtest/run.sh:57`、`loadtest/run.sh:83`、`loadtest/prepare_a.py:56`。
+從 repo root 使用 Git、Bash、Docker（Compose v2）及 `curl`。使用預設主辦人憑證、SQL 帳號和資料庫 `ticketing`、`sid` cookie，並允許 `http://localhost:8080` Origin。寫入輸出的容器以執行者的 UID/GID 執行，Linux bind mount 不需額外設定。腳本透過 `http://127.0.0.1:${HTTP_PORT:-8080}/healthz/live` 檢查既有服務，未啟動時執行 `docker compose up -d --build`。若要按當前 checkout 重建可加 `REBUILD=1`。自訂 host port 請由 shell 傳入，例如 `HTTP_PORT=8081 loadtest/run.sh smoke`。見 `loadtest/run.sh:40`、`loadtest/run.sh:57`、`loadtest/run.sh:83`、`loadtest/prepare_a.py:56`。
 
 ```bash
 loadtest/run.sh smoke
