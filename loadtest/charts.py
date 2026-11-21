@@ -37,18 +37,6 @@ def k6(run: Path) -> dict:
     return json.loads((run / "a" / "k6-summary.json").read_text())["metrics"]
 
 
-def nginx_statuses(run: Path) -> dict[int, int]:
-    """Status totals from the nginx summary (runs 2 and 3) or the run log (run 1)."""
-    summary = run / "a" / "nginx-summary.txt"
-    totals: dict[int, int] = {}
-    if summary.exists():
-        for line in summary.read_text().splitlines():
-            match = re.match(r"\s*(\d+)\s+\S+\s+\S+\s+(\d{3})$", line)
-            if match:
-                totals[int(match[2])] = totals.get(int(match[2]), 0) + int(match[1])
-    return totals
-
-
 def seats(run: Path) -> dict[str, int]:
     text = (run / "a" / "final-state.txt").read_text()
     found = dict(re.findall(r"^\s*(available|held|sold)\s*\|\s*(\d+)", text, re.M))
@@ -58,16 +46,14 @@ def seats(run: Path) -> dict[str, int]:
 def chart_outcomes() -> None:
     """Scenario A: what happened to the requests, per run."""
     labels, ok, conflict, busy, error = [], [], [], [], []
-    run1_502 = 104_136  # run 1 nginx 502s (LOADTEST §2; raw access log not committed)
     for name, run in RUNS.items():
         metrics = k6(run)
         total = metrics["http_reqs"]["count"]
-        statuses = nginx_statuses(run)
         busy_count = metrics.get("server_busy", {}).get("count", 0)
         conflicts = metrics.get("business_conflicts", {}).get("count", 0) - busy_count
-        errors = statuses.get(502, 0) + statuses.get(500, 0) + statuses.get(499, 0)
-        if name.startswith("Run 1"):
-            errors = run1_502
+        # k6 counts every response outside the expected business outcomes (502s, 500s,
+        # client timeouts) as unexpected; use it for all runs so the bars add up to k6's total.
+        errors = metrics.get("unexpected_errors", {}).get("passes", 0)
         labels.append(name)
         busy.append(busy_count)
         conflict.append(max(conflicts, 0))
@@ -79,12 +65,12 @@ def chart_outcomes() -> None:
         (ok, "ok", "Answered (2xx)"),
         (conflict, "conflict", "Business 409"),
         (busy, "busy", "Shed: 503 server-busy"),
-        (error, "error", "Gateway/client errors (502/500/499)"),
+        (error, "error", "Unexpected: 502/500/timeouts (k6)"),
     ):
         ax.barh(labels, values, left=left, color=COLORS[key], label=text)
         left = [a + b for a, b in zip(left, values, strict=True)]
     ax.invert_yaxis()
-    ax.set_xlabel("Requests in 60 s (k6)")
+    ax.set_xlabel("Requests per run (k6 total, 60 s of load plus ramp-down)")
     ax.set_title("Scenario A: request outcomes (3,000 VUs, 10,000 seats)")
     ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:,.0f}"))
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=2, frameon=False)
@@ -122,7 +108,12 @@ def per_second(run: Path) -> list[dict]:
     rows = []
     with (run / "a" / "metrics_1s.csv").open() as source:
         for row in csv.DictReader(source):
-            if row["source"] == "edge" and row["scope"] == "all" and int(row["req_total"] or 0):
+            # Seconds under load only (health checks alone stay far below 100 requests/s).
+            if (
+                row["source"] == "edge"
+                and row["scope"] == "all"
+                and int(row["req_total"] or 0) > 100
+            ):
                 rows.append(row)
     return rows
 
@@ -143,7 +134,7 @@ def chart_timeline() -> None:
         axes[1].plot(xs, err, color=color, label=name)
         axes[2].plot(xs, p95, color=color, label=name)
     axes[0].set_ylabel("Requests/s")
-    axes[1].set_ylabel("5xx share (%)\n(503 = shed)")
+    axes[1].set_ylabel("5xx share (%)\n(nearly all 503 shed)")
     axes[2].set_ylabel("p95 latency (s)")
     axes[2].set_xlabel("Seconds since the first request (nginx, stored per second in PostgreSQL)")
     axes[0].set_title("Scenario A per second: 3 vs 6 API replicas")
