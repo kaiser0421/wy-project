@@ -40,7 +40,7 @@
 | 3.2 | **Admin** 可查看與管理所有使用者的訂單（列出全站訂單、篩選、查看明細、取消） | Admin 登入 → **All orders** 頁（[截圖](screenshots/12-admin-all-orders.png)）；API `GET /api/v1/admin/orders`；`backend/tests/booking/test_admin_orders.py` | ✅ |
 | 3.3 | **Admin** 可使用系統管理功能（使用者管理、監控、日誌查詢） | 導覽列 Monitoring、Users 只對 Admin 顯示；`test_monitoring_routes_require_admin`、`test_non_admin_cannot_list_users` | ✅ |
 | 3.4 | **User** 可建立活動、匯入座位、鎖位與付款 | User 登入 → Organizer 建活動並匯入 → Events 下單付款；`scripts/e2e_flow.py` | ✅ |
-| 3.5 | **User** 只能修改／刪除自己的活動；修改他人活動回 403 | `test_event_access` | ✅ |
+| 3.5 | **User** 只能修改／刪除自己的活動：修改他人已發布活動回 403；他人的草稿對 User 不可見，回 404（不透露存在） | `test_event_access` | ✅ |
 | 3.6 | **User** 只能查看自己的訂單；查看他人訂單回 404（不透露存在） | `test_admin_order_access_and_cancellation_replay` | ✅ |
 | 3.7 | **User** 只能下載自己活動的報表 | `test_report_authorization` | ✅ |
 | 3.8 | **Viewer** 只能瀏覽活動、座位與所有活動的報表；建立／修改活動、匯入、下單、付款等業務寫入一律回 403（登出等自身帳號操作除外） | Viewer 登入：無 Organizer／Monitoring；`test_report_authorization`、角色矩陣測試 | ✅ |
@@ -77,7 +77,7 @@
 | 5.2.6 | 匯入支援 CSV 與 JSON，欄位 `zone_code,row_label,seat_number` | samples 匯入成功；`test_parser.py` | ✅ |
 | 5.2.7 | 單檔上限 20 MB、100,000 列；超過即拒絕 | `test_upload_byte_cap_and_worker_row_cap` | ✅ |
 | 5.2.8 | 100,000 列在 60 秒內完成（CSV 與 JSON 各自） | `test_import_100k_under_60s`：CSV 11.38 秒、JSON 13.46 秒（[證據](evidence/import-100k.md)） | ✅ |
-| 5.2.9 | 匯入在背景執行，使用者即時看到進度 | Organizer 匯入時的進度條（SSE）；`test_imports.py` | ✅ |
+| 5.2.9 | 匯入在背景執行，使用者即時看到進度 | Organizer 匯入時的進度條（前端輪詢 job 狀態並顯示目前階段；另有 `/seat-imports/{id}/stream` 供 SSE 訂閱）；`test_imports.py` | ✅ |
 | 5.2.10 | `all_or_nothing`（預設）有任一錯誤即全部不寫；`skip_invalid` 只寫有效列 | `test_imports.py`；README 範例預期結果 | ✅ |
 | 5.2.11 | 錯誤報告含原始列號（CSV 含表頭、JSON 對應實體行）與錯誤原因，可下載 | `test_csv_multiline_record_reports_physical_line`、`test_json_line_numbers_match_physical_source` | ✅ |
 | 5.2.12 | 同活動重複上傳相同內容的檔案，回傳既有 job（200），不重複匯入 | `test_duplicate_upload_and_publish_serialize` | ✅ |
