@@ -1,356 +1,226 @@
-<title>搶票平台架構圖</title>
-<meta name="claude:viewport-fit-sides" content="cover">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&display=swap">
-<style>
-/* Layout: one reading column; the overview diagram breaks wider and scrolls on its own on phones. */
-:root{
-  --bg:#f3f5f8; --surface:#ffffff; --ink:#18212d; --muted:#5a6676; --line:#c9d1dc;
-  --edge:#3d5a80; --app:#2f6fb3; --bgsvc:#7a5aa6; --data:#a8641d; --client:#4f7a52;
-  --badge-bg:#18212d; --badge-fg:#ffffff; --band:#e8ecf2;
-  --f-display:"IBM Plex Sans Condensed","Noto Sans TC",system-ui,sans-serif;
-  --f-body:"Noto Sans TC",system-ui,-apple-system,"PingFang TC",sans-serif;
-  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
-}
-@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
-  --bg:#11161d; --surface:#18202a; --ink:#e4e9f0; --muted:#97a3b3; --line:#2f3a48;
-  --edge:#8fb0d8; --app:#6aa6e8; --bgsvc:#b59be0; --data:#e0a15a; --client:#8cc18f;
-  --badge-bg:#e4e9f0; --badge-fg:#11161d; --band:#151c25; color-scheme:dark } }
-:root[data-theme="dark"]{
-  --bg:#11161d; --surface:#18202a; --ink:#e4e9f0; --muted:#97a3b3; --line:#2f3a48;
-  --edge:#8fb0d8; --app:#6aa6e8; --bgsvc:#b59be0; --data:#e0a15a; --client:#8cc18f;
-  --badge-bg:#e4e9f0; --badge-fg:#11161d; --band:#151c25; color-scheme:dark }
-body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.7}
-.wrap{max-width:1180px;margin:0 auto;padding-block:40px 64px;
-  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
-  display:grid;gap:56px}
-header{display:grid;gap:10px;max-width:72ch}
-.eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase}
-h1{font-family:var(--f-display);font-weight:600;font-size:clamp(28px,4vw,40px);line-height:1.15;margin:0;text-wrap:balance}
-h2{font-family:var(--f-display);font-weight:600;font-size:22px;margin:0;text-wrap:balance}
-p{margin:0}
-.lede{color:var(--muted);max-width:68ch}
-section{display:grid;gap:16px;min-width:0}
-.sec-head{display:grid;gap:6px;max-width:72ch}
-.sec-head p{color:var(--muted)}
-.figure{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:16px;overflow-x:auto;min-width:0}
-.figure svg{display:block;min-width:900px;width:100%;height:auto}
-svg text{font-family:var(--f-body);fill:var(--ink)}
-svg .t-name{font-family:var(--f-display);font-weight:600;font-size:16px}
-svg .t-sub{font-size:12px;fill:var(--muted)}
-svg .t-band{font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;fill:var(--muted)}
-svg .band{fill:var(--band)}
-svg .box{fill:var(--surface);stroke-width:1.5}
-svg .k-client{stroke:var(--client)} svg .k-edge{stroke:var(--edge)} svg .k-app{stroke:var(--app)}
-svg .k-bg{stroke:var(--bgsvc)} svg .k-data{stroke:var(--data)}
-svg .bar-client{fill:var(--client)} svg .bar-edge{fill:var(--edge)} svg .bar-app{fill:var(--app)}
-svg .bar-bg{fill:var(--bgsvc)} svg .bar-data{fill:var(--data)}
-svg .flow{stroke:var(--muted);stroke-width:1.6;fill:none}
-svg .flow.dash{stroke-dasharray:5 4}
-svg .bus{stroke:var(--bgsvc);stroke-width:2.2;fill:none;opacity:.7}
-svg .head{fill:var(--muted)}
-svg .badge circle{fill:var(--badge-bg)}
-svg .badge text{fill:var(--badge-fg);font-family:var(--f-mono);font-size:11px;font-weight:500;text-anchor:middle;dominant-baseline:central}
-.legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px 28px;margin:0;padding:0;list-style:none}
-.legend li{display:grid;grid-template-columns:26px 1fr;gap:10px;align-items:start;min-width:0}
-.num{font-family:var(--f-mono);font-size:11px;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
-  background:var(--badge-bg);color:var(--badge-fg);margin-top:2px}
-.legend b{font-weight:500}
-.legend span{color:var(--muted);font-size:14px}
-.keys{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px;color:var(--muted)}
-.keys i{display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:-1px;margin-right:6px}
-.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
-.note{border-left:3px solid var(--line);padding:4px 0 4px 12px;font-size:14px;color:var(--muted)}
-.note b{color:var(--ink);font-weight:500;display:block}
-pre.mermaid{margin:0;background:transparent;font-family:var(--f-body)}
-table{border-collapse:collapse;width:100%;font-size:14px;min-width:620px}
-th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
-th{font-family:var(--f-mono);font-size:12px;font-weight:500;letter-spacing:.04em;color:var(--muted)}
-td code,.mono{font-family:var(--f-mono);font-size:13px}
-footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
-</style>
-
-<div class="wrap">
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>系統架構圖｜活動搶票平台</title>
+  <style>
+    :root { color-scheme: light; background: #f7f9fc; color: #162235; }
+    body { margin: 0; font: 1rem/1.65 system-ui, sans-serif; }
+    header { background: #16304b; color: #fff; }
+    header > div, main { max-width: 72rem; padding: 1.5rem clamp(1rem, 4vw, 3rem); margin: auto; }
+    header a { color: #d1ebff; }
+    h1 { font-size: clamp(1.8rem, 4vw, 2.7rem); margin: 0; letter-spacing: .025em; }
+    h2 { font-size: 1.35rem; margin: 0 0 .8rem; }
+    a { color: #145b91; text-underline-offset: .18em; }
+    nav { display: flex; flex-wrap: wrap; gap: .4rem 1.3rem; margin-top: .7rem; }
+    section { margin-bottom: 1.25rem; padding: 1.25rem; background: #fff; border: 1px solid #d8e1ec; border-radius: .65rem; }
+    .diagram { border: 1px solid #e1e7ef; border-radius: .4rem; overflow-x: auto; padding: .9rem; }
+    .mermaid { margin: 0; }
+    .mermaid svg { display: block; margin: auto; }
+    #topology svg, #booking svg, #payments svg { min-width: 40rem; }
+    #seats svg, #monitoring svg { min-width: 50rem; }
+    ul { padding-inline-start: 1.4rem; }
+    li + li { margin-top: .4rem; }
+    code { background: #eff4f8; overflow-wrap: anywhere; padding: .07em .2em; }
+    .status { padding: .6rem 1rem; background: #fff4da; border-radius: .4rem; }
+  </style>
+</head>
+<body>
   <header>
-    <div class="eyebrow">PLAN.md v1.2 · 實作前 · 2026-11-20</div>
-    <h1>高併發搶票與即時監控平台：系統架構</h1>
-    <p class="lede">PostgreSQL 是座位、訂單與配額的唯一真實來源；Redis 只負責投遞與限流，從不決定誰拿到座位。下圖是元件總覽，後面四張圖分別追蹤搶票、即時推送、付款與監控的資料流向。</p>
+    <div>
+      <h1>系統架構圖</h1>
+      <a href="architecture.md">Markdown</a> · <a href="../README.md#服務與設定">啟動與服務 port</a> · <a href="../DESIGN.md">設計問答</a>
+      <nav aria-label="目錄">
+        <a href="#topology">1. 服務拓撲</a>
+        <a href="#booking">2. 訂票交易</a>
+        <a href="#seats">3. 座位即時推送</a>
+        <a href="#payments">4. 付款與回呼</a>
+        <a href="#monitoring">5. 監控資料流</a>
+      </nav>
+    </div>
   </header>
+  <main>
+    <p id="diagram-error" class="status" role="status" hidden>架構圖載入失敗。可查看 <a href="architecture.md">Markdown 版本</a>。</p>
+    <section id="topology" aria-labelledby="topology-title">
+      <h2 id="topology-title">1. 服務拓撲</h2>
+      <div class="diagram"><pre class="mermaid">
+flowchart TB
+  Browser[&quot;瀏覽器 · TypeScript SPA · Canvas 座位圖&quot;]
+  Edge[&quot;nginx · 8080&quot;]
+  API[&quot;api ×3 · FastAPI · 512 MB / 副本&quot;]
+  Pay[&quot;paymock · FastAPI · SQLite volume&quot;]
+  Worker[&quot;worker · 匯入 · 鎖位逾時 · 對帳 · 退款 · 取消&quot;]
+  Relay[&quot;relay · 座位事件序號與歸檔&quot;]
+  Collector[&quot;collector · 日誌 · 指標 · 告警&quot;]
+  DB[(&quot;PostgreSQL 16&quot;)]
+  Redis[(&quot;Redis 7&quot;)]
+  Logs[(&quot;nginx 與應用 JSON 日誌&quot;)]
+  Imports[(&quot;匯入檔 volume&quot;)]
+  Exports[(&quot;Excel 暫存 volume&quot;)]
+  Init[&quot;migrate → seed&quot;]
 
-  <section aria-labelledby="s1">
-    <div class="sec-head">
-      <h2 id="s1">元件總覽與資料流向</h2>
-      <p>由上而下依信任邊界分層；右側為背景服務，經由共用通道存取資料層。圓形編號對應下方說明。</p>
-    </div>
-    <div class="keys" aria-hidden="true">
-      <span><i style="background:var(--client)"></i>使用者端</span>
-      <span><i style="background:var(--edge)"></i>邊界</span>
-      <span><i style="background:var(--app)"></i>應用服務</span>
-      <span><i style="background:var(--bgsvc)"></i>背景服務</span>
-      <span><i style="background:var(--data)"></i>資料層</span>
-    </div>
-    <div class="figure">
-      <svg viewBox="0 0 1200 760" role="img" aria-label="系統元件總覽圖">
-        <defs>
-          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0 0 L10 5 L0 10 z" class="head"/>
-          </marker>
-        </defs>
-
-        <!-- bands -->
-        <rect class="band" x="20" y="12" width="880" height="86" rx="4"/>
-        <text class="t-band" x="32" y="30">① 使用者端（不可信）</text>
-        <rect class="band" x="20" y="112" width="880" height="96" rx="4"/>
-        <text class="t-band" x="32" y="130">② 邊界</text>
-        <rect class="band" x="20" y="222" width="880" height="110" rx="4"/>
-        <text class="t-band" x="32" y="240">③ 應用層（無狀態）</text>
-        <rect class="band" x="930" y="112" width="250" height="360" rx="4"/>
-        <text class="t-band" x="942" y="130">④ 背景處理</text>
-        <rect class="band" x="20" y="612" width="1160" height="132" rx="4"/>
-        <text class="t-band" x="32" y="630">⑤ 資料層</text>
-
-        <!-- clients -->
-        <g>
-          <rect class="box k-client" x="120" y="38" width="200" height="50" rx="4"/><rect class="bar-client" x="120" y="38" width="4" height="50"/>
-          <text class="t-name" x="136" y="60">購票者瀏覽器</text><text class="t-sub" x="136" y="78">React SPA · Canvas 座位圖</text>
-          <rect class="box k-client" x="360" y="38" width="200" height="50" rx="4"/><rect class="bar-client" x="360" y="38" width="4" height="50"/>
-          <text class="t-name" x="376" y="60">管理者瀏覽器</text><text class="t-sub" x="376" y="78">即時監控儀表板</text>
-          <rect class="box k-client" x="600" y="38" width="200" height="50" rx="4"/><rect class="bar-client" x="600" y="38" width="4" height="50"/>
-          <text class="t-name" x="616" y="60">k6 壓測</text><text class="t-sub" x="616" y="78">profile: loadtest</text>
-        </g>
-
-        <!-- nginx -->
-        <rect class="box k-edge" x="120" y="140" width="680" height="54" rx="4"/><rect class="bar-edge" x="120" y="140" width="4" height="54"/>
-        <text class="t-name" x="136" y="163">nginx :8080</text>
-        <text class="t-sub" x="136" y="182">靜態檔 · 產生 X-Request-ID · 上傳上限 21MB · SSE 不緩衝 · JSON access log</text>
-
-        <!-- api x3 -->
-        <rect class="box k-app" x="128" y="258" width="440" height="62" rx="4" opacity=".55"/>
-        <rect class="box k-app" x="124" y="254" width="440" height="62" rx="4" opacity=".8"/>
-        <rect class="box k-app" x="120" y="250" width="440" height="62" rx="4"/><rect class="bar-app" x="120" y="250" width="4" height="62"/>
-        <text class="t-name" x="136" y="274">api ×3 · FastAPI</text>
-        <text class="t-sub" x="136" y="294">REST + SSE · Excel 匯出（專用 executor）· 每容器 512MB</text>
-
-        <!-- payment mock -->
-        <rect class="box k-app" x="620" y="250" width="180" height="62" rx="4"/><rect class="bar-app" x="620" y="250" width="4" height="62"/>
-        <text class="t-name" x="636" y="274">payment-mock</text>
-        <text class="t-sub" x="636" y="294">模擬金流 · 付款頁</text>
-
-        <!-- background services -->
-        <rect class="box k-bg" x="950" y="142" width="214" height="62" rx="4"/><rect class="bar-bg" x="950" y="142" width="4" height="62"/>
-        <text class="t-name" x="966" y="166">worker</text><text class="t-sub" x="966" y="186">匯入 · 逾時 sweeper · 對帳/退款</text>
-        <rect class="box k-bg" x="950" y="222" width="214" height="62" rx="4"/><rect class="bar-bg" x="950" y="222" width="4" height="62"/>
-        <text class="t-name" x="966" y="246">outbox-relay</text><text class="t-sub" x="966" y="266">指派連續 seq · 依序投遞</text>
-        <rect class="box k-bg" x="950" y="302" width="214" height="62" rx="4"/><rect class="bar-bg" x="950" y="302" width="4" height="62"/>
-        <text class="t-name" x="966" y="326">telemetry-collector</text><text class="t-sub" x="966" y="346">指標聚合 · 日誌入庫 · 告警</text>
-        <rect class="box k-bg" x="950" y="382" width="214" height="62" rx="4"/><rect class="bar-bg" x="950" y="382" width="4" height="62"/>
-        <text class="t-name" x="966" y="406">migrate / seed</text><text class="t-sub" x="966" y="426">one-shot · 建立三角色帳號</text>
-
-        <!-- data -->
-        <rect class="box k-data" x="60" y="640" width="520" height="92" rx="4"/><rect class="bar-data" x="60" y="640" width="4" height="92"/>
-        <text class="t-name" x="76" y="664">PostgreSQL 16 · 唯一真實來源</text>
-        <text class="t-sub" x="76" y="684">座位 · 訂單 · 配額 · Session · Job · outbox（seq replay log）</text>
-        <text class="t-sub" x="76" y="702">access/service logs · metrics_1s · seat_events · alert_events（每日分區）</text>
-        <rect class="box k-data" x="630" y="640" width="250" height="92" rx="4"/><rect class="bar-data" x="630" y="640" width="4" height="92"/>
-        <text class="t-name" x="646" y="664">Redis 7</text>
-        <text class="t-sub" x="646" y="684">Streams 投遞 · Pub/Sub 撤銷</text>
-        <text class="t-sub" x="646" y="702">限流 · 遙測 · admin:feed</text>
-        <rect class="box k-data" x="930" y="640" width="234" height="92" rx="4"/><rect class="bar-data" x="930" y="640" width="4" height="92"/>
-        <text class="t-name" x="946" y="664">Volumes</text>
-        <text class="t-sub" x="946" y="684">logs spool · imports</text>
-        <text class="t-sub" x="946" y="702">exports（2GB 配額）</text>
-
-        <!-- flows -->
-        <line class="flow" x1="220" y1="88" x2="220" y2="138" marker-end="url(#ah)"/>
-        <line class="flow" x1="460" y1="88" x2="460" y2="138" marker-end="url(#ah)"/>
-        <line class="flow" x1="700" y1="88" x2="700" y2="138" marker-end="url(#ah)"/>
-        <g class="badge"><circle cx="460" cy="113" r="10"/><text x="460" y="113">1</text></g>
-
-        <line class="flow" x1="300" y1="194" x2="300" y2="248" marker-end="url(#ah)"/>
-        <g class="badge"><circle cx="300" cy="221" r="10"/><text x="300" y="221">2</text></g>
-
-        <line class="flow" x1="680" y1="194" x2="680" y2="248" marker-end="url(#ah)"/>
-        <g class="badge"><circle cx="680" cy="221" r="10"/><text x="680" y="221">3</text></g>
-        <line class="flow dash" x1="760" y1="250" x2="760" y2="196" marker-end="url(#ah)"/>
-        <g class="badge"><circle cx="760" cy="221" r="10"/><text x="760" y="221">4</text></g>
-
-        <line class="flow" x1="560" y1="282" x2="618" y2="282" marker-end="url(#ah)"/>
-        <g class="badge"><circle cx="590" cy="282" r="10"/><text x="590" y="282">5</text></g>
-
-        <line class="flow" x1="200" y1="312" x2="200" y2="638" marker-end="url(#ah)"/>
-        <g class="badge"><circle cx="200" cy="470" r="10"/><text x="200" y="470">6</text></g>
-
-        <line class="flow" x1="420" y1="312" x2="690" y2="638" marker-end="url(#ah)"/>
-        <line class="flow" x1="740" y1="640" x2="470" y2="314" marker-end="url(#ah)"/>
-        <g class="badge"><circle cx="580" cy="476" r="10"/><text x="580" y="476">7</text></g>
-
-        <line class="flow" x1="540" y1="312" x2="975" y2="638" marker-end="url(#ah)"/>
-        <g class="badge"><circle cx="820" cy="522" r="10"/><text x="820" y="522">8</text></g>
-
-        <!-- background bus -->
-        <path class="bus" d="M950 173 H910 M950 253 H910 M950 333 H910 M950 413 H910 M910 173 V590 M330 590 H1050 M330 590 V638 M755 590 V638 M1050 590 V638"/>
-        <g class="badge"><circle cx="910" cy="520" r="10"/><text x="910" y="520">9</text></g>
-
-        <line class="flow" x1="950" y1="190" x2="802" y2="268" marker-end="url(#ah)"/>
-        <g class="badge"><circle cx="872" cy="227" r="10"/><text x="872" y="227">10</text></g>
-      </svg>
-    </div>
-    <ol class="legend">
-      <li><div class="num">1</div><div><b>瀏覽器與壓測 → nginx</b><br><span>HTTP(S)，session cookie + CSRF header。本機為 http://localhost:8080。</span></div></li>
-      <li><div class="num">2</div><div><b>nginx → api</b><br><span>REST 與 SSE（least_conn）。nginx 產生 X-Request-ID，一路傳到所有服務的日誌。</span></div></li>
-      <li><div class="num">3</div><div><b>nginx → payment-mock</b><br><span>買家開啟模擬付款頁 /pay/*。</span></div></li>
-      <li><div class="num">4</div><div><b>payment-mock → api 回呼</b><br><span>HMAC 簽章，每次重送重新簽章，失敗重試 24 小時。</span></div></li>
-      <li><div class="num">5</div><div><b>api → payment-mock</b><br><span>以同一個 merchant id 冪等建立付款意圖。</span></div></li>
-      <li><div class="num">6</div><div><b>api → PostgreSQL</b><br><span>搶票單一短交易（鎖座位、寫訂單、寫 outbox）、session 驗證、報表快照讀取。</span></div></li>
-      <li><div class="num">7</div><div><b>api ⇄ Redis</b><br><span>寫入：限流、每秒 histogram、撤銷 Pub/Sub。讀取：座位事件 Stream、撤銷通知、admin:feed。</span></div></li>
-      <li><div class="num">8</div><div><b>api → Volumes</b><br><span>上傳暫存檔（fsync 後才建立 job）與 Excel 匯出檔。</span></div></li>
-      <li><div class="num">9</div><div><b>背景服務 ⇄ 資料層</b><br><span>worker 以 SKIP LOCKED + lease + fence 處理 job；relay 在 PG 指派 seq、同交易寫入 seat_events，再依序 XADD 到 Redis；collector 讀 logs spool 與遙測、以 COPY 批次寫入 PG；migrate/seed 初始化資料庫。</span></div></li>
-      <li><div class="num">10</div><div><b>worker → payment-mock</b><br><span>reconciler 每 15 秒輪詢沒有回呼的付款、執行退款與取消意圖。</span></div></li>
-    </ol>
-    <div class="notes">
-      <div class="note"><b>所有服務都寫 JSON 日誌</b>nginx、api、worker、relay、payment-mock 的日誌寫入 logs spool，collector 依 request_id 入庫，供 Admin 查詢單一請求的跨服務日誌。</div>
-      <div class="note"><b>告警的備援路徑</b>collector 失聯時，api 自行把 MONITOR_DOWN 寫入 PostgreSQL 並推給 Admin；Redis 也掛時 Admin 頁改為輪詢。</div>
-      <div class="note"><b>Redis 不是真實來源</b>Redis 被清空時，relay 以新 generation 從 PostgreSQL 的 replay log 重建 Stream，客戶端重新取快照。</div>
-    </div>
-  </section>
-
-  <section aria-labelledby="s2">
-    <div class="sec-head">
-      <h2 id="s2">搶票寫入路徑（防超賣）</h2>
-      <p>一個請求從進入 API 到提交的完整路徑。保護從第 ⑤ 步鎖座位開始，到 COMMIT 釋放；第 ⑦ 步的 partial unique index 是最後一道防線。</p>
-    </div>
-    <div class="figure">
-<pre class="mermaid">
+  Browser --&gt;|&quot;UI、REST、SSE、付款頁&quot;| Edge
+  Edge --&gt;|&quot;least_conn · X-Request-ID&quot;| API
+  Edge --&gt;|&quot;/pay/&quot;| Pay
+  API --&gt;|&quot;建立付款 intent&quot;| Pay
+  Pay --&gt;|&quot;簽章回呼&quot;| API
+  Worker --&gt;|&quot;查詢、退款、取消&quot;| Pay
+  API --&gt; DB
+  Worker --&gt; DB
+  Relay --&gt; DB
+  Collector --&gt; DB
+  Init --&gt;|&quot;schema 與預設帳號&quot;| DB
+  API &lt;--&gt;|&quot;限流、撤銷、遙測&quot;| Redis
+  Worker --&gt;|&quot;匯入進度、心跳&quot;| Redis
+  Relay --&gt;|&quot;心跳&quot;| Redis
+  Collector &lt;--&gt;|&quot;遙測、心跳、告警通知&quot;| Redis
+  API --&gt; Imports
+  Imports --&gt; Worker
+  API --&gt; Exports
+  Edge --&gt; Logs
+  API --&gt; Logs
+  Worker --&gt; Logs
+  Relay --&gt; Logs
+  Logs --&gt; Collector
+  Edge --&gt;|&quot;stub_status&quot;| Collector
+</pre></div>
+      <ul>
+        <li>PostgreSQL 保存座位、訂單、配額、session、匯入 job、outbox 與監控資料。nginx、PostgreSQL 與 Redis 的 host port 預設綁在 loopback。三個 API 副本各由一個 Uvicorn 程序處理 REST 與 SSE。見 <code>compose.yaml:45</code>、<code>compose.yaml:97</code>、<code>compose.yaml:193</code>、<code>backend/src/ticketing/api/main.py:36</code>。</li>
+        <li><code>migrate</code> 以 schema owner 執行，<code>seed</code> 與 runtime 使用低權限角色。Worker 分別排程匯入、hold expiry、付款 reconciler 與 maintenance。見 <code>compose.yaml:5</code>、<code>compose.yaml:80</code>、<code>backend/src/ticketing/worker/main.py:20</code>。</li>
+        <li>Redis Pub/Sub 通知 API 有 session 撤銷與匯入進度變化，持久狀態由 PostgreSQL 提供。見 <code>backend/src/ticketing/auth/sessions.py:89</code>、<code>backend/src/ticketing/auth/sessions.py:134</code>、<code>backend/src/ticketing/imports/runner.py:269</code>、<code>backend/src/ticketing/api/routes/imports.py:191</code>。</li>
+      </ul>
+    </section>
+    <section id="booking" aria-labelledby="booking-title">
+      <h2 id="booking-title">2. 訂票交易</h2>
+      <div class="diagram"><pre class="mermaid">
 sequenceDiagram
-  autonumber
-  participant C as 購票者
+  participant C as 瀏覽器
   participant N as nginx
   participant A as api
   participant P as PostgreSQL
-  C->>N: POST /api/v1/events/{id}/orders（Idempotency-Key）
-  N->>A: 加上 X-Request-ID
-  A->>P: session 驗證（索引查詢）
-  A->>P: BEGIN
-  A->>P: ① 冪等 advisory try-lock，查既有結果
-  A->>P: ② 活動閘門（已發布、開賣時窗）
-  A->>P: ③ 配額 guarded UPDATE（reserved ≤ 4−n）
-  A->>P: ④ INSERT orders 表頭
-  A->>P: ⑤ 鎖座位 NOWAIT / SKIP LOCKED（保護開始）
-  A->>P: ⑥ UPDATE seats WHERE status='available'（筆數須相符）
-  A->>P: ⑦ INSERT order_items（partial unique index）
-  A->>P: ⑧ 計價、expires_at、outbox、冪等回應
-  A->>P: COMMIT（保護釋放）
-  alt 成功或相同內容重送
-    A-->>C: 201 Created
-  else 座位被占、競爭、限購、未開賣
-    A-->>C: 409 problem+json
-  else 同 key 不同內容
-    A-->>C: 422 problem+json
-  else 鎖等待逾時
-    A-->>C: 503 server-busy
+  C-&gt;&gt;N: POST /api/v1/events/{event_id}/orders + Idempotency-Key
+  N-&gt;&gt;A: 轉送請求與 X-Request-ID
+  A-&gt;&gt;P: BEGIN · session fence · 冪等檢查
+  alt 已完成且內容相同
+    A-&gt;&gt;P: 結束交易
+    A--&gt;&gt;C: 回放 201
+  else 新請求
+    A-&gt;&gt;P: 檢查活動開賣 · 原子保留配額 · 建立訂單表頭
+    A-&gt;&gt;P: 指定座位 NOWAIT 或區域配位 SKIP LOCKED
+    A-&gt;&gt;P: 取樣 app_now() · 重檢時窗 · 更新 available → held
+    A-&gt;&gt;P: 寫入 order_items · 計價與期限 · outbox · 冪等回應
+    A-&gt;&gt;P: COMMIT · 釋放列鎖
+    A--&gt;&gt;C: 201 Created
   end
-</pre>
-    </div>
-  </section>
-
-  <section aria-labelledby="s3">
-    <div class="sec-head">
-      <h2 id="s3">即時座位推送</h2>
-      <p>順序由 PostgreSQL 保證：relay 先在資料庫提交連續 seq，再依序投遞到 Redis。每個座位帶 version，客戶端只套用較新的狀態，因此畫面不會倒退。</p>
-    </div>
-    <div class="figure">
-<pre class="mermaid">
+</pre></div>
+      <p>指定座位的保護取自 <code>FOR NO KEY UPDATE NOWAIT</code>。更新再檢查座位為 <code>available</code>，partial unique index 保證每席最多一筆未釋放的 order item。配額透過同一交易內的 guarded UPDATE 保留，失敗時一併回滾。見 <code>backend/src/ticketing/api/routes/orders.py:38</code>、<code>backend/src/ticketing/booking/create.py:51</code>、<code>backend/src/ticketing/booking/create.py:87</code>、<code>backend/src/ticketing/booking/create.py:122</code>、<code>backend/src/ticketing/booking/create.py:239</code>、<code>backend/src/ticketing/booking/database.py:30</code>、<code>backend/migrations/versions/0001_baseline.py:189</code>。</p>
+    </section>
+    <section id="seats" aria-labelledby="seats-title">
+      <h2 id="seats-title">3. 座位即時推送</h2>
+      <div class="diagram"><pre class="mermaid">
 flowchart LR
-  TX["訂票或釋放交易&lt;br/&gt;COMMIT（含 outbox 列）"] --> OB[("outbox&lt;br/&gt;seq IS NULL")]
-  OB -->|"每 50ms 依 id 排序"| RL["outbox-relay&lt;br/&gt;1. 提交連續 seq + seat_events&lt;br/&gt;2. 依序投遞"]
-  RL -->|"XADD seq-0"| RS[("Redis Stream&lt;br/&gt;seat:gen:event")]
-  RS -->|"XREAD 連續性檢查"| RD["api 程序 reader&lt;br/&gt;100ms 合併、共享 ring"]
-  RD -->|"SSE delta&lt;br/&gt;seat_idx, status, version"| CL["瀏覽器&lt;br/&gt;version 較大者勝"]
-  CL -.->|"斷層時重連&lt;br/&gt;Last-Event-ID = 最後套用的 gen:seq"| RD
-  RD -.->|"回補：ring → Redis → PG 已指派 outbox → 版本化快照"| PGR[("PostgreSQL&lt;br/&gt;replay log / 快照")]
-</pre>
-    </div>
-  </section>
-
-  <section aria-labelledby="s4">
-    <div class="sec-head">
-      <h2 id="s4">付款與回呼</h2>
-      <p>每筆訂單只有一個可扣款的 attempt。回呼在單一交易內去重、鎖訂單，期限前成交，期限後先歸還座位與配額、再建立退款。</p>
-    </div>
-    <div class="figure">
-<pre class="mermaid">
+  TX[&quot;鎖位、付款、釋放或匯入&lt;br/&gt;業務交易與 outbox 一起提交&quot;]
+  Pending[(&quot;outbox · 待指派 seq&quot;)]
+  Relay[&quot;relay · PostgreSQL advisory lock&quot;]
+  Assigned[(&quot;outbox · 已指派 seq&lt;br/&gt;event_stream_state · head&quot;)]
+  Archive[(&quot;seat_events · 座位狀態歸檔&quot;)]
+  Reader[&quot;每個 API 的活動 reader&lt;br/&gt;依 seq 輪詢 · 合併變更 · 共用 ring&quot;]
+  SSE[&quot;nginx → 瀏覽器 SSE&lt;br/&gt;delta / layout / progress / resync&quot;]
+  Browser[&quot;先讀 REST 快照&lt;br/&gt;以 last_seq 建立 SSE&quot;]
+  TX --&gt; Pending --&gt; Relay
+  Relay --&gt;|&quot;同一 PostgreSQL 交易&lt;br/&gt;依活動指派連續 seq&quot;| Assigned
+  Relay --&gt;|&quot;同一交易歸檔座位變更&quot;| Archive
+  Assigned --&gt;|&quot;每 100 ms 輪詢&quot;| Reader
+  Reader --&gt; SSE --&gt; Browser
+  Browser -.-&gt;|&quot;Last-Event-ID 續傳&quot;| Reader
+  Reader -.-&gt;|&quot;ring 缺段則查 PostgreSQL&quot;| Assigned
+</pre></div>
+      <ul>
+        <li>relay 依可見 outbox 列排序，為每個活動指派連續的 <code>seq</code>。同一座位的寫入受列鎖序列化，不同座位的序號可與交易提交順序不同。所有 API 副本讀取相同序號，各自合併連續列。同一座位保留較新的版本，layout 事件切開合併區間。見 <code>backend/src/ticketing/realtime/relay.py:14</code>、<code>backend/src/ticketing/realtime/relay.py:46</code>、<code>backend/src/ticketing/realtime/frames.py:40</code>、<code>backend/src/ticketing/realtime/reader.py:161</code>。</li>
+        <li>瀏覽器先讀 <code>GET /api/v1/events/{event_id}/seats</code>，再連 <code>GET /api/v1/events/{event_id}/seat-stream</code>，以 <code>Last-Event-ID</code> 帶入快照的 <code>last_seq</code> 或最後套用的數字序號。遇到缺段可重連回放。收到 layout、resync 或回放失敗時重新取快照。寫入逾時會結束串流。nginx 對此路徑停用 buffering。見 <code>backend/src/ticketing/api/routes/seats.py:58</code>、<code>backend/src/ticketing/api/routes/seats.py:112</code>、<code>backend/src/ticketing/realtime/stream.py:45</code>、<code>frontend/src/events.ts:300</code>、<code>infra/nginx/nginx.conf:115</code>。</li>
+      </ul>
+    </section>
+    <section id="payments" aria-labelledby="payments-title">
+      <h2 id="payments-title">4. 付款與回呼</h2>
+      <div class="diagram"><pre class="mermaid">
 sequenceDiagram
-  autonumber
-  participant C as 購票者
+  participant C as 瀏覽器
+  participant N as nginx
   participant A as api
   participant P as PostgreSQL
-  participant M as payment-mock
+  participant M as paymock
   participant W as worker
-  C->>A: POST /orders/{id}/payments
-  A->>P: txn1：建立唯一 attempt，寫入 idempotency（in_progress）
-  A->>M: 建立 intent（merchant id 冪等）
-  A->>P: txn2：awaiting_customer，idempotency 完成
-  A-->>C: checkout_url
-  C->>M: 完成付款
-  M->>A: 回呼（HMAC，失敗重試 24h）
-  A->>P: 單一交易：去重、鎖訂單、在鎖內查 capture
-  alt 期限前
-    A->>P: paid，座位 held → sold
-  else 期限後仍為 pending
-    A->>P: release_order 歸還座位與配額，建立退款
-  else 已過期、已取消或重複扣款
-    A->>P: 只建立退款
+  C-&gt;&gt;N: POST /api/v1/orders/{order_id}/payments + Idempotency-Key
+  N-&gt;&gt;A: 轉送
+  A-&gt;&gt;P: 交易內檢查訂單，建立或重用 payment attempt
+  A-&gt;&gt;M: 以 service token 建立 intent
+  A-&gt;&gt;P: 新交易保存 intent 與冪等結果
+  A--&gt;&gt;C: checkout_url
+  C-&gt;&gt;N: 開啟付款頁 /pay/
+  N-&gt;&gt;M: 轉送付款頁與確認操作
+  M-&gt;&gt;M: SQLite 保存付款結果與待送回呼
+  M-&gt;&gt;A: HMAC 回呼至固定 URL
+  A-&gt;&gt;P: 驗簽後鎖訂單與 attempt，去重並套用結果
+  alt 期限內有效扣款
+    A-&gt;&gt;P: 訂單 paid，座位 sold，寫入 outbox
+  else 晚到或額外的扣款
+    A-&gt;&gt;P: 排入退款，符合逾期條件時釋放 hold
   end
-  W->>M: 每 15 秒輪詢未回呼的付款，執行退款
-</pre>
-    </div>
-  </section>
-
-  <section aria-labelledby="s5">
-    <div class="sec-head">
-      <h2 id="s5">監控資料流</h2>
-      <p>兩個來源：nginx 日誌代表使用者實際感受，應用層 histogram 負責歸因。多副本的數據以 collector 校準後的時間分桶，副本時鐘偏移不影響圖表。</p>
-    </div>
-    <div class="figure">
-<pre class="mermaid">
+  A--&gt;&gt;M: 提交後回應
+  W-&gt;&gt;M: 用 service token 對帳、退款或取消
+  W-&gt;&gt;P: 套用查得的結果與退款狀態
+</pre></div>
+      <ul>
+        <li>Merchant 請求使用 <code>X-Payment-Provider-Token</code>。Paymock 啟動時讀取固定 <code>PAYMOCK_CALLBACK_URL</code>，Compose 預設為 <code>http://api:8000/api/v1/payments/callbacks</code>。配送重試會重新簽章。見 <code>compose.yaml:174</code>、<code>paymock/src/paymock/main.py:75</code>、<code>paymock/src/paymock/main.py:150</code>、<code>paymock/src/paymock/delivery.py:17</code>、<code>backend/src/ticketing/payments/provider.py:42</code>。</li>
+        <li>付款建立先提交 attempt，再發出外部呼叫。回呼與對帳共用結果處理，扣款判定在鎖內使用 PostgreSQL <code>app_now()</code>。已付款訂單取消後先進入 <code>refund_pending</code>，退款確認後釋放座位與配額。見 <code>backend/src/ticketing/payments/attempts.py:147</code>、<code>backend/src/ticketing/api/routes/payments.py:126</code>、<code>backend/src/ticketing/payments/callbacks.py:144</code>、<code>backend/src/ticketing/payments/reconciler.py:51</code>、<code>backend/src/ticketing/payments/reconciler.py:90</code>、<code>backend/src/ticketing/booking/orders.py:148</code>。</li>
+      </ul>
+    </section>
+    <section id="monitoring" aria-labelledby="monitoring-title">
+      <h2 id="monitoring-title">5. 監控資料流</h2>
+      <div class="diagram"><pre class="mermaid">
 flowchart LR
-  NGL["nginx access log&lt;br/&gt;使用者實際感受"] --> SP[("logs spool")]
-  APL["api、worker、payment-mock&lt;br/&gt;JSON logs（含 request_id）"] --> SP
-  HIST["api middleware&lt;br/&gt;每秒 histogram、interval_no"] --> TS[("Redis telemetry")]
-  SP --> COL["telemetry-collector"]
-  TS --> COL
-  STUB["nginx stub_status"] -->|"每秒"| COL
-  COL -->|"COPY 與 checkpoint 同交易"| T1[("access_logs、service_logs&lt;br/&gt;metrics_1s、business_1s&lt;br/&gt;alert_events")]
-  COL -->|"每秒評估告警"| FEED[("Redis admin:feed")]
-  FEED --> SSEA["api → Admin SSE&lt;br/&gt;即時圖表與告警"]
-  ADM["Admin"] -->|"GET /admin/requests/{id}/logs"| API2["api"]
-  API2 -->|"依 request_id 查詢"| T1
-  API2 -.->|"collector 失聯時直接寫告警"| T1
-</pre>
-    </div>
-  </section>
-
-  <section aria-labelledby="s6">
-    <div class="sec-head">
-      <h2 id="s6">部署拓撲</h2>
-      <p>以 <span class="mono">docker compose up -d --build</span> 一次啟動全部服務。</p>
-    </div>
-    <div class="figure">
-      <table>
-        <thead><tr><th>SERVICE</th><th>數量</th><th>依賴</th><th>對外</th></tr></thead>
-        <tbody>
-          <tr><td><code>nginx</code></td><td>1</td><td>api healthy</td><td>:8080（本機 http，TLS 選配）</td></tr>
-          <tr><td><code>api</code></td><td>3</td><td>migrate、seed 完成；postgres、redis healthy</td><td>僅經 nginx</td></tr>
-          <tr><td><code>worker</code></td><td>1</td><td>migrate、postgres</td><td>–</td></tr>
-          <tr><td><code>outbox-relay</code></td><td>1</td><td>migrate、postgres、redis</td><td>–</td></tr>
-          <tr><td><code>telemetry-collector</code></td><td>1</td><td>migrate、postgres、redis</td><td>–</td></tr>
-          <tr><td><code>payment-mock</code></td><td>1</td><td>–</td><td>內部網路；付款頁經 nginx</td></tr>
-          <tr><td><code>postgres</code> / <code>redis</code></td><td>各 1</td><td>–</td><td>–</td></tr>
-          <tr><td><code>migrate</code> / <code>seed</code></td><td>one-shot</td><td>postgres</td><td>–</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <footer>來源：<span class="mono">docs/architecture.md</span>（交付用 Mermaid 原始檔）與 <span class="mono">PLAN.md</span> v1.2。實作完成後會依實際程式碼更新。</footer>
-</div>
+  N[&quot;nginx · edge access log&quot;]
+  S[&quot;後端服務 · JSON log&quot;]
+  Conn[&quot;nginx stub_status&quot;]
+  API[&quot;API middleware · 每秒路由直方圖&lt;br/&gt;業務結果與 SSE gauge&quot;]
+  T[(&quot;Redis · telemetry:app&quot;)]
+  C[&quot;collector · tail、聚合、告警&quot;]
+  PG[(&quot;PostgreSQL · access_logs / service_logs&lt;br/&gt;metrics_1s / business_1s / alert_events&quot;)]
+  R[(&quot;Redis Pub/Sub · admin:alerts&quot;)]
+  Admin[&quot;Admin · 即時圖表、告警、request_id 查詢&quot;]
+  Read[&quot;api · Admin 專用 REST / SSE&quot;]
+  N --&gt; C
+  S --&gt; C
+  Conn --&gt;|&quot;每秒取樣&quot;| C
+  API --&gt; T --&gt; C
+  C --&gt;|&quot;分批入庫&quot;| PG
+  C --&gt;|&quot;告警狀態變化&quot;| R
+  PG --&gt;|&quot;查詢已保存的資料&quot;| Read
+  Read --&gt;|&quot;metrics / alerts SSE · 日誌查詢&quot;| Admin
+</pre></div>
+      <ul>
+        <li>Collector tail nginx 與共享目錄中的應用 JSON 日誌，COPY 與 checkpoint 在同一交易內完成。Edge RPS 與延遲依 nginx access log 分秒聚合，連線數來自 <code>stub_status</code>。應用遙測按 boot UUID 與 interval number 去重，入庫後才 ACK Redis stream。見 <code>backend/src/ticketing/telemetry/logs.py:266</code>、<code>backend/src/ticketing/telemetry/collector.py:153</code>、<code>backend/src/ticketing/telemetry/app_metrics.py:132</code>。</li>
+        <li>Admin 的 <code>/api/v1/admin/metrics/stream</code> 與 <code>/api/v1/admin/alerts/stream</code> 讀 PostgreSQL 快照。告警狀態變更另送 Redis 的 <code>admin:alerts</code>。<code>GET /api/v1/admin/requests/{request_id}/logs</code> 查找入口與關聯服務日誌。見 <code>backend/src/ticketing/telemetry/common.py:8</code>、<code>backend/src/ticketing/telemetry/collector.py:170</code>、<code>backend/src/ticketing/api/routes/monitoring.py:418</code>、<code>backend/src/ticketing/api/routes/monitoring.py:471</code>、<code>backend/src/ticketing/api/routes/monitoring.py:559</code>。</li>
+        <li>時鐘校正、保留期與缺測判讀見 <a href="../backend/src/ticketing/telemetry/README.md">監控資料契約</a>。</li>
+      </ul>
+    </section>
+    <noscript><p class="status">請啟用 JavaScript 以顯示架構圖，或查看 <a href="architecture.md">Markdown 版本</a>。</p></noscript>
+  </main>
+  <script type="module">
+    try {
+      const { default: mermaid } = await import("https://cdn.jsdelivr.net/npm/mermaid@11.12.0/dist/mermaid.esm.min.mjs");
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "neutral",
+        flowchart: { useMaxWidth: true },
+        sequence: { useMaxWidth: true },
+      });
+      await mermaid.run({ querySelector: ".mermaid" });
+    } catch (error) {
+      document.getElementById("diagram-error").hidden = false;
+      console.error(error);
+    }
+  </script>
+</body>
+</html>
