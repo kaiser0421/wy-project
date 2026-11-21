@@ -1,62 +1,51 @@
 # 壓測工具包
 
-只需要 **Git、Docker（含 Compose v2）與 bash**（Linux、macOS，或 Windows 的 WSL / Git Bash）。所有 Python 工具都在專案的後端映像檔內執行，k6 使用官方映像檔，主機不需安裝任何語言環境。
+## 執行前提
 
-## 執行
+- 從 repository 根目錄使用 Git、Bash、Docker（含 Compose v2）與 `curl`。Python 工具在 API image 內執行，情境 A 的 k6 使用 `grafana/k6:0.57.0`。見 `loadtest/run.sh:13`、`loadtest/run.sh:35`、`loadtest/run.sh:57`、`loadtest/run.sh:81`。
+- 使用可拋棄的 Compose 堆疊。Runner 假設預設主辦人 `user@example.com`／`User#Dev2026!`、SQL 帳號及資料庫皆名為 `ticketing`、cookie 名為 `sid`，且允許 `http://localhost:8080` 作為 Origin。只改 Compose 的憑證設定無法改寫 runner 的固定值。見 `loadtest/run.sh:40`、`loadtest/run.sh:83`、`loadtest/prepare_a.py:42`、`loadtest/prepare_a.py:56`、`loadtest/prepare_a.py:116`、`loadtest/sse_client.py:384`。
+- 確認 bind mount 的權限。Linux 上，runner 以 host 使用者建立輸出目錄，Python 容器使用 UID/GID 10001。若目錄由其他 UID 持有且權限為 `0755`，A 無法建立輸出目錄，B 無法建立 session 檔。使用自訂 `OUT` 時可先備妥空的輸出目錄與所需的 `a/`、`b/` 子目錄，讓 Python 可寫入兩者、k6 可讀 A 的 fixture 並寫入 summary，且 host 使用者可讀取輸出並移除 session 檔。見 `loadtest/run.sh:16`、`loadtest/run.sh:37`、`loadtest/run.sh:81`、`loadtest/run.sh:109`、`loadtest/run.sh:128`、`backend/Dockerfile:24`、`backend/Dockerfile:30`。
 
-```sh
-git clone git@github.com:kaiser0421/wy-project.git && cd wy-project
+## 執行與參數
 
-# 1. 先確認工具包可用（小規模，約 3 分鐘）
+```bash
 loadtest/run.sh smoke
-
-# 2. 正式壓測：情境 A（10,000 席、3,000 VU、60 秒）+ 一致性檢查 + 情境 B（2,000 條 SSE）
 loadtest/run.sh all
 ```
 
-腳本會自動執行 `docker compose up -d --build`（若堆疊已在運作則沿用；設 `REBUILD=1` 強制重建）、建立壓測資料、跑壓測、等待排空、執行一致性檢查並打包結果。
+`smoke` 預設跑 A（50 VUs／15 秒／1,000 席）與 B（50 條 SSE／30 秒／20 changes/s）。`all` 依序跑 A 與 B 的正式規模，也可用 `loadtest/run.sh a` 或 `loadtest/run.sh b` 單獨執行。腳本沿用通過 host health probe 的堆疊，否則執行 `docker compose up -d --build`。見 `loadtest/run.sh:20`、`loadtest/run.sh:57`、`loadtest/run.sh:134`。
 
-完成後把 **`loadtest/out/<時間戳>.tar.gz`** 傳回即可。打包前會刪除含登入憑證的 `sessions.json`。
-
-## 單獨執行與參數
-
-| 指令 | 內容 |
-|---|---|
-| `loadtest/run.sh a` | 只跑情境 A + 一致性檢查 |
-| `loadtest/run.sh b` | 只跑情境 B |
-| `loadtest/run.sh smoke` | 兩個情境的縮小版 |
-
-| 環境變數 | 預設 | 說明 |
+| Shell 變數 | 正式預設值 | 說明 |
 |---|---|---|
-| `VUS` | 3000 | 情境 A 的虛擬使用者數（每人一個獨立帳號與 session） |
-| `DURATION` | 60s | 情境 A 持續時間 |
-| `SEATS` | 10000 | 座位數 |
-| `CONNECTIONS` | 2000 | 情境 B 的 SSE 訂閱數（每條一個獨立 session） |
-| `B_DURATION` | 80 | 情境 B 訂閱秒數（寫入端在第 15 秒開始，持續 `B_DURATION-25` 秒） |
-| `B_RATE` | 300 | 情境 B 每秒座位變更數 |
-| `K6_CPUS` | 不限 | 限制 k6 容器可用 CPU，例如 `K6_CPUS=2` |
+| `VUS` | `3000` | A 的虛擬使用者數（正整數，每人一組獨立帳號與 session）。 |
+| `DURATION` | `60s` | A 的正值 k6 duration，需帶時間單位。 |
+| `SEATS` | `10000` | A、B 共用。A 平均分至四區，會向下取 4 的倍數，但 SQL 仍以原值核對，故請用正的 4 倍數且不超過匯入的 100,000 列上限。B 至少 16 席（4 個 writer × 每批 4 席）。 |
+| `CONNECTIONS` | `2000` | B 的 SSE 訂閱數（正整數，每條獨立 session）。 |
+| `B_DURATION` | `80` | B 訂閱秒數，須為大於 25 的整數。Writer 等 15 秒後開始，持續 `B_DURATION-25` 秒。 |
+| `B_RATE` | `300` | B 的每秒目標座位變更數，須為正值。 |
+| `K6_CPUS` | 未設定 | 限制 k6 容器可用 CPU，例如 `K6_CPUS=2`。 |
+| `REBUILD` | `0` | 設為 `1` 時執行 Compose 建置及啟動，即使既有入口已通過探測。 |
+| `OUT` | `loadtest/out/<時間戳>` | 使用 `loadtest/` 下的相對路徑，容器會映射到 `/lt/`。每輪用新的輸出目錄。 |
+| `HTTP_PORT` | `8080` | Runner 的 host probe 直接讀 shell。自訂 host port 可執行 `HTTP_PORT=8081 loadtest/run.sh smoke`。容器內仍走 `http://nginx:8080`。 |
 
-例：`VUS=1000 DURATION=30s loadtest/run.sh a`
+參數實作見 `loadtest/run.sh:16`、`loadtest/run.sh:57`、`loadtest/run.sh:81`、`loadtest/run.sh:117`、`loadtest/prepare_a.py:72`、`loadtest/scenario_b_writer.py:99`、`loadtest/scenario_b_writer.py:179`、`backend/src/ticketing/core/settings.py:90`。
 
-## 輸出內容
+A 以 `POST /api/v1/auth/login` 登入主辦人。買家及其 session 直接寫入 PostgreSQL，避開登入限流。合成 session 的初始 idle 與 absolute deadline 皆為 12 小時，正常登入預設分別為 30 分鐘與 12 小時。直接執行 `prepare_a.py` 時，可透過 `LOADTEST_DATABASE_URL` 或 `--database-url` 指定寫入 fixture 的 DSN，未設定時依序使用 `DATABASE_URL` 或本機預設 DSN。Runner 使用 Compose 注入的 `DATABASE_URL`，不會從 shell 轉傳 `LOADTEST_DATABASE_URL`。見 `loadtest/prepare_a.py:44`、`loadtest/prepare_a.py:54`、`loadtest/prepare_a.py:97`、`backend/src/ticketing/core/settings.py:46`、`loadtest/run.sh:37`、`compose.yaml:7`。
 
-```
-loadtest/out/<時間戳>/
-  environment.txt        機器規格、Docker 版本、git commit、參數
-  run.log                全程摘要
-  a/k6.log               k6 完整輸出（RPS、p50/p90/p95、錯誤率、業務結果分類）
-  a/k6-summary.json      k6 指標 JSON
-  a/consistency.txt      一致性檢查（0 列 = 一致）
-  a/final-state.txt      訂單與座位的最終狀態統計
-  a/metrics_1s.csv       壓測期間每秒系統指標（監控資料表）
-  a/business_1s.csv      每秒業務指標
-  a/nginx-access.json    本次壓測的 nginx 存取紀錄
-  b/seed.txt, writer.txt 情境 B 準備與寫入端輸出
-  b/sse-client.txt       訂閱端結果：連線數、首次連線與套用延遲、斷層、重同步、最終狀態比對
-```
+## 輸出與結果核對
 
-## 注意
+| 產物（相對於 `OUT`） | 內容 |
+|---|---|
+| `environment.txt`、`run.log` | 主機、Docker、commit、主要參數及執行摘要。 |
+| `a/k6.log`、`a/k6-summary.json` | `metrics.http_reqs.rate` 為總 RPS。`metrics.http_req_duration.med` 與 `metrics.http_req_duration["p(95)"]` 為 p50／p95（ms）。另核對 `checks` 與 `unexpected_errors` thresholds。 |
+| `a/nginx-access.json` | 以同輪 run ID 篩選的 nginx 存取日誌。用 `req_ms` 欄位換算成毫秒後計算入口 p99（原值單位為秒）。 |
+| `a/consistency.txt`、`a/final-state.txt` | A 結束 90 秒後的 SQL 查核及訂單、座位狀態統計。 |
+| `a/event.json`、`a/metrics_1s.csv`、`a/business_1s.csv` | 活動 ID、秒級監控及業務指標。 |
+| `b/seed.txt`、`b/writer.txt`、`b/sse-client.txt` | B 的 fixture、座位變更速率、SSE 建連與套用延遲、錯誤率及最終 audit。 |
 
-- 產壓端（k6、SSE client）與受測系統在同一台機器上，會互相競爭 CPU；報告中請一併記錄 `environment.txt` 的規格。
-- 情境 A 的 3,000 個買家與 session 直接寫入資料庫（與 `POST /auth/login` 產生的資料相同），避免準備階段觸發登入限流。
-- 重複執行會建立新的活動與帳號，不影響之前的資料；要清空可執行 `docker compose down -v`。
+結果存於 `OUT` 與旁邊的 `<OUT>.tar.gz`，預設為 `loadtest/out/<時間戳>/` 與 `loadtest/out/<時間戳>.tar.gz`。只有進入打包步驟才會刪除含憑證的 `sessions.json`。若提早中斷，輸出目錄可能仍有該檔。部分階段失敗後仍會打包，需核對下列結果。見 `loadtest/run.sh:86`、`loadtest/run.sh:94`、`loadtest/run.sh:122`、`loadtest/run.sh:128`。
+
+- **A**　k6 的 `checks` 必須全數成功且 `unexpected_errors` 為零。90 秒後的 SQL 可能仍有有效 hold。待 hold 到期、金流待辦與 relay 排空，再執行 SQL，確認查詢成功且回傳零違規列。見 `loadtest/scenario_a.js:27`、`loadtest/run.sh:91`、[排空後重驗指令](../LOADTEST.md#6-一致性檢查)。
+- **B**　`peak_active` 與 `matching_clients` 都須等於 `target_connections`，且 `outbox_pending` 與 `archive_mismatches` 都為零。另記錄連線錯誤率與 writer 的實得速率。見 `loadtest/sse_client.py:348`、`loadtest/sse_client.py:363`。
+
+產壓端與受測服務同機，會共享 CPU。每輪會新增活動與測試資料。`docker compose down -v` 會刪除整個 Compose 專案的 volumes，包含 PostgreSQL、Redis、金流及共享檔案。見 `compose.yaml:223`。結果與瓶頸分析見 [LOADTEST.md](../LOADTEST.md)。
