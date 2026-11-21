@@ -39,4 +39,15 @@ def test_close_returns_within_deadline_when_the_sink_is_stalled(monkeypatch) -> 
         writer.msg(f'{{"event": "e{index}"}}')
     started = time.perf_counter()
     writer.close()
-    assert time.perf_counter() - started < 2
+    assert time.perf_counter() - started < 1  # the deadline holds even though the sink is stuck
+
+
+def test_dropped_record_is_collector_compatible(monkeypatch) -> None:
+    import orjson
+
+    writer = _TeeWriter(None, background=False, service="api")
+    record = orjson.loads(writer._dropped_record(3))
+    assert record["event"] == "service_logs.dropped"
+    assert record["count"] == 3
+    assert {"ts", "service", "boot_uuid", "level"} <= set(record)
+    assert record["service"] == "api"
