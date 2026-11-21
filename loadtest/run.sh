@@ -103,6 +103,10 @@ scenario_a() {
     -e SESSIONS_FILE="$OUT_IN/a/sessions.json" -e INVENTORY_FILE="$OUT_IN/a/inventory.json" \
     grafana/k6:0.57.0 run --summary-export="$OUT_IN/a/k6-summary.json" scenario_a.js \
     > "$OUT/a/k6.log" 2>&1 || record_failure "Scenario A k6 failed (exit $?)"
+  # Every replay that started must have been verified (none cut off by the end of the run).
+  py -c 'import json,sys; m=json.load(open(sys.argv[1]))["metrics"]; c=lambda k: int(m.get(k,{}).get("count",0)); s,v=c("replay_started"),c("replay_verified"); print(f"replays started={s} verified={v}"); sys.exit(s!=v)' \
+    "$OUT_IN/a/k6-summary.json" | tee -a "$OUT/run.log" \
+    || record_failure "Scenario A replays started and verified differ"
   tail -40 "$OUT/a/k6.log" | tee -a "$OUT/run.log"
   local ended; ended=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 

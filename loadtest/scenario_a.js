@@ -41,6 +41,7 @@ const conflicts = new Counter('business_conflicts');
 const busy = new Counter('server_busy');
 const replayUnverified = new Counter('replay_unverified');
 const replayVerified = new Counter('replay_verified');
+const replayStarted = new Counter('replay_started');
 const replayProgress = new Rate('replay_progress');
 const modes = new Counter('scenario_a_iterations');
 const unexpected = new Rate('unexpected_errors');
@@ -122,14 +123,16 @@ function buy(session, body, idem) {
 
 function retryAfterSeconds(header) {
   if (header === undefined) return 1;
-  if (/^\d+$/.test(header)) return Number(header);
+  // Capped so ten retries always fit inside the 90 s graceful stop.
+  if (/^\d+$/.test(header)) return Math.min(5, Number(header));
   const retryAt = Date.parse(header);
-  return Number.isFinite(retryAt) ? Math.max(0, (retryAt - Date.now()) / 1000) : 1;
+  return Number.isFinite(retryAt) ? Math.min(5, Math.max(0, (retryAt - Date.now()) / 1000)) : 1;
 }
 
 function replay(session, body, idem, manifest) {
   // No samples when no replay is selected. Record the attempt before any request or sleep.
   replayProgress.add(false);
+  replayStarted.add(1);
   const path = `/api/v1/events/${eventId}/orders`;
   let result = request('POST', path, 'replay_order', session, body, idem);
   for (let attempt = 1; attempt < 10; attempt += 1) {
