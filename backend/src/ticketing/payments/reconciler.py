@@ -20,16 +20,20 @@ from ticketing.payments.callbacks import AppliedEvent, apply_event, lock_payment
 from ticketing.payments.provider import Provider, ProviderUnavailable
 
 log = get_logger(__name__)
+# Per tick, each phase may handle up to this many rows. Every open checkout is re-polled about
+# every 15 s, so polling gets the larger budget (a Scenario A run leaves hundreds open).
 _BATCH_SIZE = 50
-# Every open attempt is re-polled about every 15 s, so polling needs the larger budget: a
-# Scenario A run leaves a few hundred checkouts open. 200 polls at 6 concurrent rows fit well
-# within the phase timeout even at ~300 ms per provider call.
 _POLL_BATCH_SIZE = 200
+# Rows are claimed only when they can start: a phase claims `width` rows, processes them, then
+# claims again. Widths 4 + 1 + 1 keep the reconciler at <= 6 of the worker's DB connections
+# (DB_POOL_MAX, default 10), leaving room for the sweeper, imports and maintenance.
+_POLL_WIDTH = 4
+_QUEUE_WIDTH = 1
 # Less than the 30-second durable lease so a stalled phase cannot outlive its claim.
 _PHASE_TIMEOUT_S = 12.0
 
 
-async def _due_attempts(ctx: ServiceContext) -> list[asyncpg.Record]:
+async def _due_attempts(ctx: ServiceContext, limit: int) -> list[asyncpg.Record]:
     async with transaction(ctx.db, ctx.settings) as conn:
         rows: list[asyncpg.Record] = await conn.fetch(
             """WITH due AS (
@@ -47,7 +51,7 @@ async def _due_attempts(ctx: ServiceContext) -> list[asyncpg.Record]:
                )
                UPDATE payment_attempts p SET last_polled_at=app_now() FROM due
                WHERE p.id=due.id RETURNING p.*""",
-            _POLL_BATCH_SIZE,
+            limit,
         )
     return rows
 
@@ -66,7 +70,7 @@ async def _recover_attempt(ctx: ServiceContext, provider: Provider, row: asyncpg
         log.warning("payment.attempt_retry", error=type(exc).__name__, attempt_id=str(attempt.id))
 
 
-async def _claim_refunds(ctx: ServiceContext, owner: str) -> list[asyncpg.Record]:
+async def _claim_refunds(ctx: ServiceContext, owner: str, limit: int) -> list[asyncpg.Record]:
     async with transaction(ctx.db, ctx.settings) as conn:
         rows: list[asyncpg.Record] = await conn.fetch(
             """WITH due AS (
@@ -81,7 +85,7 @@ async def _claim_refunds(ctx: ServiceContext, owner: str) -> list[asyncpg.Record
                WHERE r.id=due.id AND r.provider_capture_id=c.provider_capture_id
                RETURNING r.id,r.attempts,r.reason,c.provider_capture_id,c.amount_twd,c.order_id""",
             owner,
-            _BATCH_SIZE,
+            limit,
         )
     return rows
 
@@ -126,7 +130,7 @@ async def _refund(
                 raise RuntimeError("Refunded order could not release its seats.")
 
 
-async def _claim_cancellations(ctx: ServiceContext, owner: str) -> list[asyncpg.Record]:
+async def _claim_cancellations(ctx: ServiceContext, owner: str, limit: int) -> list[asyncpg.Record]:
     async with transaction(ctx.db, ctx.settings) as conn:
         rows: list[asyncpg.Record] = await conn.fetch(
             """WITH due AS (
@@ -140,7 +144,7 @@ async def _claim_cancellations(ctx: ServiceContext, owner: str) -> list[asyncpg.
                FROM due, payment_attempts p WHERE c.attempt_id=due.attempt_id AND p.id=c.attempt_id
                RETURNING c.attempt_id,c.attempts,p.order_id,p.amount_twd,p.expires_at""",
             owner,
-            _BATCH_SIZE,
+            limit,
         )
     return rows
 
@@ -229,34 +233,39 @@ async def _clean_completed_keys(ctx: ServiceContext) -> None:
         )
 
 
-# Rows processed concurrently across the poll, cancel and refund phases of one tick.
-_MAX_CONCURRENT_ROWS = 6
-
-
 async def _run_phase(
     ctx: ServiceContext,
     name: str,
-    claim: Callable[[], Awaitable[list[asyncpg.Record]]],
+    claim: Callable[[int], Awaitable[list[asyncpg.Record]]],
     process: Callable[[asyncpg.Record], Awaitable[None]],
-    slots: asyncio.Semaphore,
+    budget: int,
+    width: int,
 ) -> None:
-    """Spend each queue's budget independently and let unprocessed leases become due again."""
+    """Claim small batches as they can start, until the queue, the budget or the time runs out.
+
+    A claim marks rows as handled (poll time or lease), so claiming only what runs right away
+    means a phase timeout never leaves claimed-but-untouched rows behind.
+    """
     if ctx.stop.is_set():
         return
 
     async def run_row(row: asyncpg.Record) -> None:
         try:
-            async with slots:  # shared across phases so the worker pool keeps room for other jobs
-                await process(row)
+            await process(row)
         except Exception as exc:
             log.warning("payment.reconcile_row_failed", phase=name, error=type(exc).__name__)
 
+    handled = 0
     try:
         async with asyncio.timeout(_PHASE_TIMEOUT_S):
-            rows = await claim()
-            async with asyncio.TaskGroup() as work:
-                for row in rows:
-                    work.create_task(run_row(row))
+            while handled < budget and not ctx.stop.is_set():
+                rows = await claim(min(width, budget - handled))
+                if not rows:
+                    return
+                handled += len(rows)
+                async with asyncio.TaskGroup() as work:
+                    for row in rows:
+                        work.create_task(run_row(row))
     except Exception as exc:
         log.warning("payment.reconcile_phase_failed", phase=name, error=type(exc).__name__)
 
@@ -267,33 +276,35 @@ async def tick(ctx: ServiceContext) -> None:
     owner = str(uuid4())
     async with create_http_client(ctx.settings.payment_provider_url) as http:
         provider = Provider(http, ctx.settings)
-        slots = asyncio.Semaphore(_MAX_CONCURRENT_ROWS)
         async with asyncio.TaskGroup() as phases:
             phases.create_task(
                 _run_phase(
                     ctx,
                     "poll",
-                    lambda: _due_attempts(ctx),
+                    lambda limit: _due_attempts(ctx, limit),
                     lambda row: _recover_attempt(ctx, provider, row),
-                    slots,
+                    _POLL_BATCH_SIZE,
+                    _POLL_WIDTH,
                 )
             )
             phases.create_task(
                 _run_phase(
                     ctx,
                     "cancel",
-                    lambda: _claim_cancellations(ctx, owner),
+                    lambda limit: _claim_cancellations(ctx, owner, limit),
                     lambda row: _cancel_provider(ctx, provider, owner, row),
-                    slots,
+                    _BATCH_SIZE,
+                    _QUEUE_WIDTH,
                 )
             )
             phases.create_task(
                 _run_phase(
                     ctx,
                     "refund",
-                    lambda: _claim_refunds(ctx, owner),
+                    lambda limit: _claim_refunds(ctx, owner, limit),
                     lambda row: _refund(ctx, provider, owner, row),
-                    slots,
+                    _BATCH_SIZE,
+                    _QUEUE_WIDTH,
                 )
             )
     if not ctx.stop.is_set():

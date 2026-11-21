@@ -340,6 +340,8 @@ def main() -> None:
         http="httptools",
         access_log=False,
         timeout_graceful_shutdown=10,
+        # Longer than nginx's upstream keepalive_timeout (60 s), so nginx closes idle ones first.
+        timeout_keep_alive=75,
     )
 
 
