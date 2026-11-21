@@ -395,4 +395,4 @@ API 呼叫 paymock 時透過 `X-Request-ID` 傳遞識別碼，paymock 以路由�
 | Q4 跨 reader 序列一致、斷線可補送、慢客戶端隔離 | `backend/tests/realtime/`、[Scenario B 本機紀錄](loadtest/scenario_b.md#local-measurements)、[正式 Scenario B 結果](LOADTEST.md#3-scenario-b)。 |
 | Q5 授權、cookie 撤銷、匯入取消 | `backend/tests/authz/`、`backend/tests/integration/test_auth.py`、`backend/tests/integration/test_admin_users.py`、`backend/tests/imports/test_imports.py`。 |
 | Q6 分桶、去重、延遲與告警 | `backend/tests/telemetry/`、`backend/tests/realtime/test_api.py:683`。 |
-| 完整測試與端到端驗證 | `make test` 經 `compose.test.yaml` 跑 PostgreSQL 整合與前端測試（`Makefile:22`、`compose.test.yaml:30–64`）。`scripts/e2e_flow.py` 走匯入、發布、鎖位與模擬付款（`scripts/e2e_flow.py:91–119`、`scripts/e2e_flow.py:140–166`）。 |
+| 完整測試與端到端驗證 | `make test` 經 `compose.test.yaml` 跑 PostgreSQL 整合與前端測試（`Makefile:22–27`、`compose.test.yaml:30–73`）。`scripts/e2e_flow.py` 走匯入、發布、鎖位與模擬付款（`scripts/e2e_flow.py:94–151`）。 |

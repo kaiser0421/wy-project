@@ -54,10 +54,10 @@
 | 檢查 | 第 1 輪 | 第 2 輪 | 6 副本 |
 | --- | --- | --- | --- |
 | 抽樣重送：驗證到的全部正確 | 8／8 正確（60 筆因過載沒回應） | 72／72 正確（17 筆重試 10 次仍被擋） | 110／110 正確 |
-| 非預期錯誤 = 0 | 106,186 | 6（逾時） | 51（k6 客戶端逾時） |
+| 非預期錯誤 = 0 | 106,186 | 6（逾時） | 51 |
 | k6 判定 | FAILED | FAILED | FAILED |
 
-三輪情境 A 的 k6 均為 FAILED。第 1 輪另未通過①的正確性檢查。第 2 輪的 k6 自我檢查記錄 17 筆重放未能驗證及 6 筆客戶端逾時。6 副本的重放全數驗證，k6 計入 51 筆非預期錯誤（客戶端逾時），nginx 另記錄 50 筆付款路徑的 499。所有已驗證的重放都回傳原訂單。
+三輪情境 A 的 k6 均為 FAILED。第 1 輪另未通過①的正確性檢查。第 2 輪的 k6 自我檢查記錄 17 筆重放未能驗證及 6 筆客戶端逾時。6 副本的重放全數驗證，k6 計入 51 筆非預期錯誤，nginx 另記錄 50 筆付款路徑的 499。所有已驗證的重放都回傳原訂單。[6 副本 k6 摘要](docs/evidence/loadtest-run3-6replicas-20261121/a/k6-summary.json) · [6 副本 nginx 摘要](docs/evidence/loadtest-run3-6replicas-20261121/a/nginx-summary.txt)
 
 ### 其他資源指標
 
@@ -76,8 +76,8 @@
 | --- | --- |
 | ![情境 A 請求結果](docs/evidence/charts/a-request-outcomes.png) | ![情境 A 座位結果](docs/evidence/charts/a-seat-inventory.png) |
 
-- **綠色**：其餘有回應的請求（k6 總數扣掉其餘三類的殘餘值，包含依重放邏輯分類的 502／504）。**棕色**：業務 409。**灰色**：過載保護 503。**紅色**：k6 的 `unexpected_errors` 計數。
-- 第 1 輪非預期錯誤以 nginx 502 為主。第 2 輪有 6 筆、6 副本有 51 筆 k6 非預期錯誤，皆為客戶端逾時。6 副本的 nginx 另記到 50 筆付款路徑的 499。長條涵蓋整輪約 64 秒（60 秒負載加收尾）。
+- **綠色**為其餘 k6 請求，從 k6 請求總數扣除另外三類的計數得出。**棕色**為業務 409。**灰色**為過載保護 503。**紅色**為 k6 的 `unexpected_errors` 計數。
+- 第 1 輪非預期錯誤以 nginx 502 為主。第 2 輪的 6 筆 k6 非預期錯誤為客戶端逾時。6 副本的 k6 記錄 51 筆非預期錯誤，nginx 另記錄 50 筆付款路徑的 499。長條涵蓋整輪約 64 秒（60 秒負載加收尾）。
 - 座位圖：藍色為已付款、棕色為鎖位中、灰色為空位。
 
 ## 目錄
@@ -169,7 +169,7 @@
 | 最終對上 DB 的 client | 1,326／2,000 | 2,000／2,000 |
 | `outbox_pending`／`archive_mismatches` | 0／0 | 0／0 |
 
-Delta 套用延遲從 frame 內最早的 outbox `created_at` 計至 client 套用，含提交前剩餘時間。SSE 錯誤率以含重連的嘗試數為分母。第 2 輪 client 偵測到進度停滯後主動重連，所有 client 最終收斂，尾端延遲仍高。見 `loadtest/sse_client.py:239–247`。[第 1 輪 SSE client](docs/evidence/loadtest-run1-20261121/b/sse-client.txt) · [第 1 輪 writer](docs/evidence/loadtest-run1-20261121/b/writer.txt) · [第 2 輪 SSE client](docs/evidence/loadtest-run2-20261121/b/sse-client.txt) · [第 2 輪 writer](docs/evidence/loadtest-run2-20261121/b/writer.txt)
+Delta 套用延遲從 frame 內最早的 outbox `created_at` 計至 client 套用，含提交前剩餘時間（`loadtest/scenario_b_writer.py:140–163`、`backend/src/ticketing/realtime/outbox.py:20–32`、`backend/migrations/versions/0001_baseline.py:282–289`、`backend/src/ticketing/realtime/frames.py:30–69`、`loadtest/sse_client.py:125–146`、`loadtest/sse_client.py:227–231`）。SSE 錯誤率以含重連的嘗試數為分母。client 偵測到進度停滯後會主動重連（`loadtest/sse_client.py:76–78`、`loadtest/sse_client.py:197–205`、`loadtest/sse_client.py:232–242`、`loadtest/sse_client.py:251–292`）。第 2 輪所有 client 最終收斂，尾端延遲仍高。[第 1 輪 SSE client](docs/evidence/loadtest-run1-20261121/b/sse-client.txt) · [第 1 輪 writer](docs/evidence/loadtest-run1-20261121/b/writer.txt) · [第 2 輪 SSE client](docs/evidence/loadtest-run2-20261121/b/sse-client.txt) · [第 2 輪 writer](docs/evidence/loadtest-run2-20261121/b/writer.txt)
 
 **開發試跑（macOS x86_64、單一 Uvicorn）**
 
@@ -262,7 +262,7 @@ docker compose exec -T postgres psql -XAt -U ticketing -d ticketing \
 | 排空後 `consistency.sql` | 0 列 | **0 列** |
 | 壓測中 CPU（`docker stats` 單一時點擷圖） | API 各約 105%，PostgreSQL 約 155% | API 各約 70–102%，**PostgreSQL 約 352%** |
 
-增加副本後，過載拒絕從 84% 降到 40%，排空 90 秒後的快照中 10,000 席全數被占用（7,829 held、2,171 sold），付款完成訂單約為 4.3 倍，一致性仍為 0 違規。總請求數略降，研判是快速回應的 503 變少、進入交易的請求變多所致。單一時點擷圖中單副本 CPU 不再滿載、PostgreSQL 約 3.5 核；研判下一個瓶頸可能轉向資料庫與付款路徑（付款需同步呼叫單程序、SQLite 的模擬金流，付款路徑有 50 筆在 5 秒客戶端逾時前未完成），需持續量測才能確認。k6 因 51 筆非預期錯誤判定 **FAILED**（`unexpected_errors`），重放門檻全部通過。[環境與映像](docs/evidence/loadtest-run3-6replicas-20261121/environment.txt) · [k6](docs/evidence/loadtest-run3-6replicas-20261121/a/k6-summary.json) · [nginx 摘要](docs/evidence/loadtest-run3-6replicas-20261121/a/nginx-summary.txt) · [最終狀態](docs/evidence/loadtest-run3-6replicas-20261121/a/final-state.txt) · [一致性輸出（空）](docs/evidence/loadtest-run3-6replicas-20261121/a/consistency.txt) · [docker stats](docs/evidence/loadtest-run3-6replicas-20261121/docker-stats-during-a.png) · [監控畫面](docs/evidence/loadtest-run3-6replicas-20261121/monitoring-during-a.png)
+增加副本後，過載拒絕從 84% 降到 40%，排空 90 秒後的快照中 10,000 席全數被占用（7,829 held、2,171 sold），付款完成訂單約為 4.3 倍，一致性仍為 0 違規。總請求數略降，研判是快速回應的 503 變少、進入交易的請求變多所致。單一時點擷圖中單副本 CPU 不再滿載、PostgreSQL 約 3.5 核；研判下一個瓶頸可能轉向資料庫與付款路徑（付款需同步呼叫單程序、SQLite 的模擬金流，nginx 在付款路徑記錄 50 筆 499），需持續量測才能確認。k6 因 51 筆非預期錯誤判定 **FAILED**（`unexpected_errors`），重放門檻全部通過。[環境與映像](docs/evidence/loadtest-run3-6replicas-20261121/environment.txt) · [k6](docs/evidence/loadtest-run3-6replicas-20261121/a/k6-summary.json) · [nginx 摘要](docs/evidence/loadtest-run3-6replicas-20261121/a/nginx-summary.txt) · [最終狀態](docs/evidence/loadtest-run3-6replicas-20261121/a/final-state.txt) · [一致性輸出（空）](docs/evidence/loadtest-run3-6replicas-20261121/a/consistency.txt) · [docker stats](docs/evidence/loadtest-run3-6replicas-20261121/docker-stats-during-a.png) · [監控畫面](docs/evidence/loadtest-run3-6replicas-20261121/monitoring-during-a.png)
 
 擴容可調高 Compose 的 `API_REPLICAS`、調整 API 啟動方式以增加每副本的 Uvicorn worker 數，或將產壓端移到另一台機器。增加 API 程序時需一併核算各程序的連線池。見 `compose.yaml:23`、`compose.yaml:120`、`backend/src/ticketing/api/main.py:39`、`loadtest/run.sh:222`。
 

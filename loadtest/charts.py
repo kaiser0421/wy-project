@@ -45,7 +45,7 @@ def seats(run: Path) -> dict[str, int]:
 
 def chart_outcomes() -> None:
     """Scenario A: what happened to the requests, per run."""
-    labels, answered, conflict, busy, error = [], [], [], [], []
+    labels, remaining, conflict, busy, error = [], [], [], [], []
     for name, run in RUNS.items():
         metrics = k6(run)
         total = metrics["http_reqs"]["count"]
@@ -60,11 +60,11 @@ def chart_outcomes() -> None:
         busy.append(busy_count)
         conflict.append(conflicts)
         error.append(errors)
-        answered.append(residual)
+        remaining.append(residual)
     fig, ax = plt.subplots(figsize=(8, 3.6))
     left = [0] * len(labels)
     for values, key, text in (
-        (answered, "ok", "Answered (k6 residual)"),
+        (remaining, "ok", "Remaining k6 requests"),
         (conflict, "conflict", "Business 409"),
         (busy, "busy", "Shed: 503 server-busy"),
         (error, "error", "k6 unexpected_errors"),
