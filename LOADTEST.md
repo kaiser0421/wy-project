@@ -24,7 +24,7 @@
 
 ## 2. Scenario A
 
-**參數與流量**　單一開賣活動 10,000 席、3,000 個 `constant-vus`，持續 60 秒。準備腳本以 `POST /api/v1/auth/login` 登入主辦人，透過 API 建立活動、匯入座位並發布，並直接在 PostgreSQL 建立每位買家的獨立 session。初始 idle 與 absolute deadline 均為 12 小時。正常登入的預設分別為 30 分鐘與 12 小時。每次購買抽 1–4 張，約 70% 指定席、30% 區域配位。成功後約 80% 模擬付款並輪詢訂單、10% 取消、10% 保留至期限，另抽約 2% 用原 key 驗證重放。觸及個人配額後，確認已有 4 張的 VU 切到查訂單。請求 timeout 5 秒，指定的可重試 409 最多重送兩次。見 `loadtest/prepare_a.py:56`、`loadtest/prepare_a.py:72`、`loadtest/prepare_a.py:110`、`backend/src/ticketing/core/settings.py:46`、`loadtest/scenario_a.js`。
+**參數與流量**　單一開賣活動 10,000 席、3,000 個 `constant-vus`，持續 60 秒。準備腳本以 `POST /api/v1/auth/login` 登入主辦人，透過 API 建立活動、匯入座位並發布，並直接在 PostgreSQL 建立每位買家的獨立 session。初始 idle 與 absolute deadline 均為 12 小時。正常登入的預設分別為 30 分鐘與 12 小時。每次購買抽 1–4 張，約 70% 指定席、30% 區域配位。成功後約 80% 模擬付款並輪詢訂單、10% 取消、10% 保留至期限，另抽約 2% 用原請求內容及 Idempotency-Key 驗證重放。重放遇 502／504 或 `503 server-busy` 時依 `Retry-After`（預設 1 秒）重送，合計最多 10 次嘗試。每筆有回覆的重放須符合原訂單，發起重放時至少一筆須驗證成功。觸及個人配額後，確認已有 4 張的 VU 切到查訂單。請求 timeout 5 秒，指定的可重試 409 最多重送兩次。見 `loadtest/prepare_a.py:56`、`loadtest/prepare_a.py:72`、`loadtest/prepare_a.py:110`、`backend/src/ticketing/core/settings.py:46`、`loadtest/scenario_a.js`。
 
 | 正式結果 | 數值 | 來源／口徑 |
 |---|---|---|
@@ -39,11 +39,11 @@
 
 ## 3. Scenario B
 
-**參數與流量**　對同一活動預建 2,000 個獨立 session。SSE client 依可見 CPU 數啟動最多 8 個程序，各自先取得一份起始快照，所有連線在前 10 秒均勻啟動，並維持每第十條為慢速讀取。80 秒後最多再等 20 秒排空。Writer 啟動後等 15 秒，再由 4 個 worker 以總目標 100 seat changes/s 寫入 55 秒。`B_RATE=300` 為高負載版本。各 writer worker 在不重疊的範圍切換座位狀態與版本，走正式 transactional outbox。累積量、速度、連線及最終比對都從工具實際輸出擷取。見 `loadtest/run.sh`、`loadtest/scenario_b_writer.py`、`loadtest/sse_client.py`。
+**參數與流量**　對同一活動預建 2,000 個獨立 session。SSE client 依可見 CPU 數啟動最多 8 個程序，各自先取得一份起始快照，所有連線在前 10 秒均勻啟動，並維持每第十條為慢速讀取。Runner 最多等 80 秒達成 2,000 條同時連線，達標後由 4 個 writer worker 以總目標 100 seat changes/s 寫入 55 秒。至少量測 80 秒，並於 writer 結束後最多再等 20 秒排空。第 1 輪使用 `B_RATE=300`。各 writer worker 在不重疊的範圍切換座位狀態與版本，走正式 transactional outbox。累積量、速度、連線及最終比對都從工具實際輸出擷取。見 `loadtest/run.sh`、`loadtest/scenario_b_writer.py`、`loadtest/sse_client.py`。
 
 | 正式結果 | 數值 | 來源／口徑 |
 |---|---|---|
-| 峰值同時 SSE／目標 | （待桌機壓測結果）／2,000 | `peak_active`／`target_connections`。 |
+| 全程／寫入期間同時 SSE 峰值及目標 | （待桌機壓測結果）／2,000 | `peak_active`、`peak_active_during_writes`、`target_connections`。寫入期間以 writer 程序的執行時間為準。 |
 | SSE 嘗試數／errors／錯誤率 | （待桌機壓測結果） | `stream_attempts`、`stream_request_errors`、`stream_error_rate`。分母為 SSE 嘗試數，含重連。 |
 | SSE 建連／快照 p50／p95／p99（ms） | （待桌機壓測結果） | 合併各程序的延遲分桶後計算 `connect_ms`、`snapshot_ms`，建連計時自發出 SSE 請求起算。 |
 | Delta 套用樣本數及 p50／p95／p99（ms） | （待桌機壓測結果） | `delta_apply_samples` 與 `delta_apply_ms`。延遲從合併 frame 內最早的 outbox `created_at` 計至 probe 套用，包含提交前剩餘時間。 |
@@ -123,7 +123,7 @@ docker compose exec -T postgres psql -U ticketing -d ticketing \
 
 ## 8. 重現指令與產物
 
-從 repo root 使用 Git、Bash、Docker（Compose v2）及 `curl`。使用預設主辦人憑證、SQL 帳號和資料庫 `ticketing`、`sid` cookie，並允許 `http://localhost:8080` Origin。寫入輸出的容器以執行者的 UID/GID 執行，Linux bind mount 不需額外設定。腳本透過 `http://127.0.0.1:${HTTP_PORT:-8080}/healthz/live` 檢查既有服務，未啟動時執行 `docker compose up -d --build`。若要按當前 checkout 重建可加 `REBUILD=1`。自訂 host port 請由 shell 傳入，例如 `HTTP_PORT=8081 loadtest/run.sh smoke`。見 `loadtest/run.sh`、`loadtest/prepare_a.py:56`。
+從 repo root 使用 Git、Bash、Docker（Compose v2）及 `curl`。使用預設主辦人憑證、SQL 帳號和資料庫 `ticketing`、`sid` cookie，並允許 `http://localhost:8080` Origin。寫入輸出的容器以執行者的 UID/GID 執行，Linux bind mount 不需額外設定。腳本透過 `http://127.0.0.1:${HTTP_PORT:-8080}/healthz/live` 檢查既有服務，未啟動時執行 `docker compose up -d --build`。若要按當前 checkout 重建可加 `REBUILD=1`。Shell 設定 `API_REPLICAS` 時，runner 會在情境開始前依實際運行數調整 API 副本並等待就緒。自訂 host port 請由 shell 傳入，例如 `HTTP_PORT=8081 loadtest/run.sh smoke`。見 `loadtest/run.sh`、`loadtest/prepare_a.py:56`。
 
 ```bash
 loadtest/run.sh smoke
@@ -132,11 +132,11 @@ loadtest/run.sh a
 loadtest/run.sh b
 ```
 
-`smoke` 為 A 50 VUs／15 秒／1,000 席與 B 50 SSE／30 秒／20 changes/s。`all` 依序跑正式參數的 A、B。`a` 和 `b` 可獨立執行。B 預設 100 changes/s，可用 `B_RATE=300 loadtest/run.sh b` 執行高負載版本。`SSE_PROCESSES` 與 `SSE_RAMP` 分別覆寫 SSE 程序數與連線爬升秒數，實際程序數可在 `b/sse-client.txt` 的 `processes` 查閱。可用 `VUS`、`DURATION`、`SEATS`、`CONNECTIONS`、`B_DURATION` 覆寫規模與時間。A、B 共用 `SEATS`。A 向下取 4 的倍數，SQL 仍用原值核對。B 至少 16 席，且 `B_DURATION` 為大於 25 的整數秒。`K6_CPUS` 可限制 A 的產壓容器 CPU，設值時需記入正式報告。自訂 `OUT` 時使用 `loadtest/` 下的相對路徑，以配合容器的掛載。見 `loadtest/run.sh`。
+`smoke` 為 A 50 VUs／15 秒／1,000 席與 B 50 SSE／30 秒／20 changes/s。`all` 依序跑正式參數的 A、B。`a` 和 `b` 可獨立執行。B 預設 100 changes/s，可用 `B_RATE=300 loadtest/run.sh b` 重現第 1 輪速率設定。`SSE_PROCESSES` 與 `SSE_RAMP` 分別覆寫 SSE 程序數與連線爬升秒數，實際程序數可在 `b/sse-client.txt` 的 `processes` 查閱。可用 `VUS`、`DURATION`、`SEATS`、`CONNECTIONS`、`B_DURATION` 覆寫規模與時間。A、B 共用 `SEATS`。A 向下取 4 的倍數，SQL 仍用原值核對。B 至少 16 席，且 `B_DURATION` 為大於 25 的整數秒。`K6_CPUS` 可限制 A 的產壓容器 CPU，設值時需記入正式報告。自訂 `OUT` 時使用 `loadtest/` 下的相對路徑，以配合容器的掛載。見 `loadtest/run.sh`。
 
 | 產物 | 用途 |
 |---|---|
-| `loadtest/out/<timestamp>/environment.txt`、`run.log` | 填機器規格、版本、commit、參數、執行摘要。 |
+| `loadtest/out/<timestamp>/environment.txt`、`run.log` | 填機器規格、版本、commit、參數、執行摘要及情境開始前實際運行的 API 副本數。 |
 | `a/k6-summary.json`、`a/k6.log`、`a/nginx-access.json` | 填 A 的 RPS、latency、錯誤率與狀態分布。 |
 | `a/metrics_1s.csv`、`a/business_1s.csv`、`a/event.json` | 對照系統與業務秒級資料，定位該輪活動。 |
 | `a/consistency.txt`、`a/final-state.txt` | 核對 SQL 輸出及訂單／座位統計。保留排空後重驗輸出。 |
