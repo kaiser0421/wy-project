@@ -6399,6 +6399,264 @@
         ]
       }
     },
+    "/api/v1/admin/logs/access": {
+      "get": {
+        "tags": [
+          "monitoring"
+        ],
+        "summary": "List persisted nginx access logs",
+        "description": "Admins can read persisted access logs in a rolling window of up to one hour, newest first. Filters are combined and the path prefix is matched literally.",
+        "operationId": "recent_access_logs_api_v1_admin_logs_access_get",
+        "parameters": [
+          {
+            "name": "since_minutes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 60,
+              "minimum": 1,
+              "description": "Window in minutes.",
+              "default": 15,
+              "title": "Since Minutes"
+            },
+            "description": "Window in minutes."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Maximum entries.",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Maximum entries."
+          },
+          {
+            "name": "status_class",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "2xx",
+                    "3xx",
+                    "4xx",
+                    "5xx"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "HTTP status class.",
+              "title": "Status Class"
+            },
+            "description": "HTTP status class."
+          },
+          {
+            "name": "method",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z]{1,32}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "HTTP method.",
+              "title": "Method"
+            },
+            "description": "HTTP method."
+          },
+          {
+            "name": "path_prefix",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512,
+                  "pattern": "^[^\\x00]+$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Literal request path prefix.",
+              "title": "Path Prefix"
+            },
+            "description": "Literal request path prefix."
+          },
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact request correlation ID.",
+              "title": "Request Id"
+            },
+            "description": "Exact request correlation ID."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessLogs"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "unauthenticated": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/unauthenticated",
+                      "title": "Unauthenticated",
+                      "status": 401,
+                      "code": "unauthenticated",
+                      "retryable": false
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "forbidden",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "forbidden": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/forbidden",
+                      "title": "Forbidden",
+                      "status": 403,
+                      "code": "forbidden",
+                      "retryable": false
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation-failed",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "validation-failed": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/validation-failed",
+                      "title": "Validation failed",
+                      "status": 422,
+                      "code": "validation-failed",
+                      "retryable": false
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "server-busy",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "server-busy": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/server-busy",
+                      "title": "Server busy",
+                      "status": 503,
+                      "code": "server-busy",
+                      "retryable": true
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal-error",
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "internal-error": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/internal-error",
+                      "title": "Internal error",
+                      "status": 500,
+                      "code": "internal-error",
+                      "retryable": false
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-allowed-roles": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/requests/{request_id}/logs": {
       "get": {
         "tags": [
@@ -6787,6 +7045,23 @@
           "ingest_lag_ms"
         ],
         "title": "AccessLog"
+      },
+      "AccessLogs": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccessLog"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "Persisted access logs, newest first."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "AccessLogs"
       },
       "AdminUserOut": {
         "properties": {
@@ -8761,7 +9036,7 @@
               {
                 "postgres": "ok",
                 "redis": "ok",
-                "schema": "0006_recent_logs"
+                "schema": "0007_observability"
               }
             ]
           }

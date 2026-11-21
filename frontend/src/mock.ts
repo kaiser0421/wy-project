@@ -1,4 +1,4 @@
-import type { Alert, EventInfo, ImportJob, Metric, Order, RecentLog, Role, Seat, SeatChange, Session, Zone } from "./api";
+import type { AccessLog, Alert, EventInfo, ImportJob, Metric, Order, RecentLog, Role, Seat, SeatChange, Session, Zone } from "./api";
 
 const now = Date.now();
 const iso = (time: number) => new Date(time).toISOString();
@@ -29,6 +29,8 @@ const alerts: Alert[] = [{ id: 1, rule_id: "EDGE_P99", scope: "All traffic", sta
   value: 168, threshold: 150 }];
 const recentLogs: RecentLog[] = [{ ts: iso(now - 30_000), service: "api", level: "warning",
   event: "request.db_overload", request_id: "demo-request-1", attrs: { error_type: "TimeoutError" } }];
+const access: AccessLog = { ts: iso(now - 30_000), method: "GET", path: "/api/v1/events",
+  status: 503, req_ms: 18, request_id: "demo-request-1" };
 let seq = 0;
 const replay: { from: number; to: number; changes: SeatChange[] }[] = [];
 
@@ -280,7 +282,15 @@ export function mock(resource: string, init: RequestInit): Response {
     return list(recentLogs.filter(entry => (!service || entry.service === service) && (!level || entry.level === level)
       && Date.parse(entry.ts) >= cutoff).slice(0, Number(limit ?? 50)));
   }
-  if (path === "/admin/requests/demo-request-1/logs") return json({ entries: recentLogs });
+  if (path === "/admin/logs/access") {
+    if (session.user.role !== "admin") return problem(403, "forbidden", "Admin access is required.");
+    const { status_class, method, path_prefix, request_id, since_minutes } = Object.fromEntries(url.searchParams);
+    const cutoff = Date.now() - Number(since_minutes ?? 15) * 60_000;
+    return list((!status_class || status_class === "5xx") && (!method || method.toUpperCase() === access.method)
+      && (!path_prefix || access.path?.startsWith(path_prefix)) && (!request_id || access.request_id === request_id)
+      && Date.parse(access.ts) >= cutoff ? [access] : []);
+  }
+  if (path === "/admin/requests/demo-request-1/logs") return json({ access_log: access, service_logs: recentLogs });
   if (path.startsWith("/admin/requests/")) return json({ entries: [
     { ts: iso(Date.now()), service: "edge", method: "GET", path: "/api/v1/events", status: 200, req_ms: 18 },
     { ts: iso(Date.now()), service: "api", level: "info", event: "request_finished" },

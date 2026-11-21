@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -65,6 +65,8 @@ class AppliedEvent:
     event_id: int | None = None
     outcome: str | None = None
     expired: bool = False
+    origin_request_id: str | None = None
+    new_callback: bool = False
 
     def record(self) -> None:
         # Metrics are emitted after commit, including events consumed by the worker.
@@ -198,9 +200,11 @@ async def _capture(
         else "late_capture"
     )
     await conn.execute(
-        "INSERT INTO refunds (provider_capture_id, reason, next_try_at) VALUES ($1,$2,app_now())",
+        """INSERT INTO refunds (provider_capture_id, reason, next_try_at, origin_request_id)
+           VALUES ($1,$2,app_now(),$3)""",
         event.capture_id,
         reason,
+        current_request_id(),
     )
     terminal = await conn.fetchval(
         """UPDATE payment_attempts SET status='abandoned',updated_at=app_now()
@@ -214,7 +218,7 @@ async def _capture(
 
 async def apply_event(conn: asyncpg.Connection, event: PaymentEvent) -> AppliedEvent:
     identity = await conn.fetchrow(
-        "SELECT order_id, amount_twd FROM payment_attempts WHERE id=$1",
+        "SELECT order_id, amount_twd, origin_request_id FROM payment_attempts WHERE id=$1",
         event.merchant_payment_id,
     )
     if identity is None:
@@ -250,10 +254,17 @@ async def apply_event(conn: asyncpg.Connection, event: PaymentEvent) -> AppliedE
             )
             if previous is None:
                 raise RuntimeError("Recorded capture event has no capture.")
-            return AppliedEvent(previous)
-        return AppliedEvent()
+            return AppliedEvent(previous, origin_request_id=identity["origin_request_id"])
+        return AppliedEvent(origin_request_id=identity["origin_request_id"])
 
-    order, attempt = await lock_payment(conn, identity["order_id"], event.merchant_payment_id)
+    applied = await _apply_new_event(conn, identity["order_id"], event)
+    return replace(applied, new_callback=True, origin_request_id=identity["origin_request_id"])
+
+
+async def _apply_new_event(
+    conn: asyncpg.Connection, order_id: int, event: PaymentEvent
+) -> AppliedEvent:
+    order, attempt = await lock_payment(conn, order_id, event.merchant_payment_id)
     if event.event_type == "captured":
         return await _capture(conn, order, attempt, event)
     updated = await conn.fetchval(

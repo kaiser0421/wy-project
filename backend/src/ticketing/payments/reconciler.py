@@ -11,6 +11,7 @@ import asyncpg
 from ticketing.booking.database import transaction
 from ticketing.booking.idempotency import finish_payment
 from ticketing.booking.orders import release_order
+from ticketing.core.context import request_operation
 from ticketing.core.errors import ProblemError
 from ticketing.core.http import create_http_client
 from ticketing.core.logging import get_logger
@@ -83,7 +84,8 @@ async def _claim_refunds(ctx: ServiceContext, owner: str, limit: int) -> list[as
                  lease_owner=$1, lease_until=app_now()+interval '30 seconds'
                FROM due, payment_captures c
                WHERE r.id=due.id AND r.provider_capture_id=c.provider_capture_id
-               RETURNING r.id,r.attempts,r.reason,c.provider_capture_id,c.amount_twd,c.order_id""",
+               RETURNING r.id,r.attempts,r.reason,r.origin_request_id,
+                         c.provider_capture_id,c.amount_twd,c.order_id""",
             owner,
             limit,
         )
@@ -142,7 +144,8 @@ async def _claim_cancellations(ctx: ServiceContext, owner: str, limit: int) -> l
                UPDATE provider_cancellations c SET attempts=c.attempts+1,
                  lease_owner=$1, lease_until=app_now()+interval '30 seconds'
                FROM due, payment_attempts p WHERE c.attempt_id=due.attempt_id AND p.id=c.attempt_id
-               RETURNING c.attempt_id,c.attempts,p.order_id,p.amount_twd,p.expires_at""",
+               RETURNING c.attempt_id,c.attempts,c.origin_request_id,
+                         p.order_id,p.amount_twd,p.expires_at""",
             owner,
             limit,
         )
@@ -292,10 +295,12 @@ async def _run_phase(
     async def run_row(row: asyncpg.Record) -> None:
         if ctx.stop.is_set():
             return  # never started: stays in `unfinished` and is handed back below
-        try:
-            await process(row)
-        except Exception as exc:
-            log.warning("payment.reconcile_row_failed", phase=name, error=type(exc).__name__)
+        with request_operation(row.get("origin_request_id")):
+            log.info("payment.reconcile_started", phase=name)
+            try:
+                await process(row)
+            except Exception as exc:
+                log.warning("payment.reconcile_row_failed", phase=name, error=type(exc).__name__)
         unfinished.remove(row)
 
     handled = 0

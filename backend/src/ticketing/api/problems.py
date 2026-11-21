@@ -82,7 +82,11 @@ async def _validation_handler(request: Request, exc: Exception) -> JSONResponse:
 
 
 async def _unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
-    log.error("request.internal_error", error_type=type(exc).__name__, path=request.url.path)
+    log.error(
+        "request.internal_error",
+        error_type=type(exc).__name__,
+        route=getattr(request.scope.get("route"), "path", None),
+    )
     problem = ProblemError(
         500,
         "internal-error",
@@ -103,7 +107,11 @@ _OVERLOAD_ERRORS = (
 
 
 async def _overload_handler(request: Request, exc: Exception) -> JSONResponse:
-    log.warning("request.db_overload", error_type=type(exc).__name__, path=request.url.path)
+    log.warning(
+        "request.db_overload",
+        error_type=type(exc).__name__,
+        route=getattr(request.scope.get("route"), "path", None),
+    )
     return _render(server_busy(), request)
 
 

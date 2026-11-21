@@ -32,6 +32,7 @@ Source = Literal["edge", "app"]
 AlertState = Literal["pending", "firing", "resolved"]
 LogService = Literal["api", "worker", "relay", "collector", "paymock", "seed"]
 LogLevel = Literal["warning", "error", "critical"]
+StatusClass = Literal["2xx", "3xx", "4xx", "5xx"]
 EXAMPLE_TS = "2026-11-20T12:00:00Z"
 EXAMPLE_ID = "657f152f5d414b80b54903dde00693a8"
 TRACE_LIMIT = 1000
@@ -195,6 +196,10 @@ class AccessLog(BaseModel):
     )
 
 
+class AccessLogs(BaseModel):
+    items: list[AccessLog] = Field(description="Persisted access logs, newest first.")
+
+
 class ServiceLog(BaseModel):
     ts: datetime = Field(description="Service wall-clock timestamp.", examples=[EXAMPLE_TS])
     request_id: str | None = Field(
@@ -302,6 +307,15 @@ ORDER BY ts DESC LIMIT $5
 _ACCESS_LOG = """
 SELECT *, extract(epoch FROM ingested_at - ts)::double precision * 1000 AS ingest_lag_ms
 FROM access_logs WHERE request_id = $1 ORDER BY ts DESC LIMIT 1
+"""
+_RECENT_ACCESS_LOGS = """
+SELECT ts, request_id, method, path, status, req_ms, upstream_ms, upstream, bytes,
+       load_run, user_agent, extract(epoch FROM ingested_at - ts)::double precision * 1000
+           AS ingest_lag_ms
+FROM access_logs
+WHERE ts >= $1 AND ts < $2 AND ($3::smallint IS NULL OR status BETWEEN $3 AND $3 + 99)
+  AND ($4::text IS NULL OR method = $4)
+  AND ($5::text IS NULL OR starts_with(path, $5))
 """
 _SERVICE_LOGS = """
 SELECT *, extract(epoch FROM ingested_at - ts)::double precision * 1000 AS ingest_lag_ms
@@ -606,6 +620,54 @@ async def recent_logs(
         )
     response.headers["Cache-Control"] = "private, no-store"
     return RecentLogs(items=[_recent_log(row) for row in rows])
+
+
+@router.get(
+    "/logs/access",
+    policy=ADMIN,
+    response_model=AccessLogs,
+    summary="List persisted nginx access logs",
+    description=(
+        "Admins can read persisted access logs in a rolling window of up to one hour, "
+        "newest first. Filters are combined and the path prefix is matched literally."
+    ),
+    responses=_problem_responses(),
+)
+async def recent_access_logs(
+    request: Request,
+    response: Response,
+    since_minutes: Annotated[int, Query(ge=1, le=60, description="Window in minutes.")] = 15,
+    limit: Annotated[int, Query(ge=1, le=200, description="Maximum entries.")] = 50,
+    status_class: Annotated[StatusClass | None, Query(description="HTTP status class.")] = None,
+    method: Annotated[
+        str | None, Query(pattern=r"^[A-Za-z]{1,32}$", description="HTTP method.")
+    ] = None,
+    path_prefix: Annotated[
+        str | None,
+        Query(pattern=r"^[^\x00]+$", max_length=512, description="Literal request path prefix."),
+    ] = None,
+    request_id: Annotated[
+        str | None, Query(pattern=REQUEST_ID_PATTERN, description="Exact request correlation ID.")
+    ] = None,
+) -> AccessLogs:
+    now = datetime.now(UTC)
+    state = request.app.state
+    # Give exact request-ID lookups an indexable predicate in the cached query plan.
+    request_filter = " AND request_id = $7" if request_id is not None else ""
+    sql = _RECENT_ACCESS_LOGS + request_filter + " ORDER BY ts DESC LIMIT $6"
+    async with acquire(state.db, state.settings.db_pool_acquire_timeout_s) as conn:
+        rows = await conn.fetch(
+            sql,
+            now - timedelta(minutes=since_minutes),
+            now,
+            int(status_class[0]) * 100 if status_class else None,
+            method.upper() if method else None,
+            path_prefix,
+            limit,
+            *((request_id,) if request_id is not None else ()),
+        )
+    response.headers["Cache-Control"] = "private, no-store"
+    return AccessLogs(items=[AccessLog.model_validate(dict(row)) for row in rows])
 
 
 def _service_log(row: asyncpg.Record) -> ServiceLog:

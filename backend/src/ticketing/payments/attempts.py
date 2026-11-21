@@ -11,7 +11,9 @@ import asyncpg
 from ticketing.booking.database import fence, transaction
 from ticketing.booking.idempotency import Claim, Result, finish_payment
 from ticketing.booking.orders import release_order, visible_order
+from ticketing.core.context import current_request_id
 from ticketing.core.errors import ProblemError, server_busy
+from ticketing.core.logging import get_logger
 from ticketing.core.settings import Settings
 from ticketing.payments.callbacks import (
     AppliedEvent,
@@ -23,6 +25,8 @@ from ticketing.payments.callbacks import (
 )
 from ticketing.payments.models import Checkout, PaymentAttempt
 from ticketing.payments.provider import Intent, Provider, ProviderUnavailable
+
+log = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,11 +65,12 @@ async def _begin(
     if row is None:
         row = await conn.fetchrow(
             """INSERT INTO payment_attempts
-                 (order_id,amount_twd,status,expires_at,created_at,updated_at)
-               VALUES ($1,$2,'creating',$3,app_now(),app_now()) RETURNING *""",
+                 (order_id,amount_twd,status,expires_at,created_at,updated_at,origin_request_id)
+               VALUES ($1,$2,'creating',$3,app_now(),app_now(),$4) RETURNING *""",
             order["id"],
             order["total_twd"],
             order["expires_at"],
+            current_request_id(),
         )
     attempt = Attempt.from_row(row)
     result = _current_result(order, row)
@@ -116,6 +121,7 @@ async def finalize_attempt(
     ):
         raise inconsistent_event()
     applied = AppliedEvent()
+    intent_created = False
     async with transaction(pool, settings) as conn:
         # Event insertion precedes order locking on both the API and reconciler paths.
         if intent.event is not None:
@@ -137,10 +143,13 @@ async def finalize_attempt(
             )
             if updated is None:
                 raise RuntimeError("Locked attempt could not be finalized.")
+            intent_created = True
             result = checkout(attempt, url)
         await finish_payment(conn, attempt.id, result)
     applied.record()
     expiry.record()
+    if intent_created:
+        log.info("payment.intent_created", attempt_id=str(attempt.id), order_id=attempt.order_id)
     return result
 
 

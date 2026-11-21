@@ -19,6 +19,7 @@ from ticketing.api.routes.events import WRITE, Current, EventId, problems
 from ticketing.api.security import SecureRouter, resolve_principal
 from ticketing.core.db import acquire
 from ticketing.core.errors import ProblemError
+from ticketing.core.logging import get_logger
 from ticketing.events.access import EventActor, event_transaction, get_event, live_writer
 from ticketing.imports.jobs import admit, job_out, read_job, safe_cell
 from ticketing.imports.models import JobOut
@@ -31,6 +32,7 @@ JobId = Annotated[
 ]
 _CSV = ("line", "item_index", "zone_code", "row_label", "seat_number", "reason")
 _ACTIVE = {"queued", "running"}
+log = get_logger(__name__)
 
 
 @router.post(
@@ -125,6 +127,8 @@ async def upload(
     if not placed:
         stored.path.unlink(missing_ok=True)
         response.status_code = 200
+    else:
+        log.info("import.job_queued", job_id=str(row["id"]), event_id=event_id)
     response.headers["Location"] = f"/api/v1/seat-imports/{row['id']}"
     return job_out(row, state.settings.import_max_rows)
 

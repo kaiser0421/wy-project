@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import asyncpg
 from anyio import to_thread
 
+from ticketing.core.context import request_operation
 from ticketing.core.db import acquire
 from ticketing.core.logging import get_logger
 from ticketing.core.service import ServiceContext
@@ -374,16 +375,18 @@ async def tick(ctx: ServiceContext) -> None:
         if job is None:
             return
         if job["status"] == "running":
-            try:
-                await _process(ctx, conn, job)
-            except LeaseLost:
-                return
-            except Exception as exc:
-                log.warning(
-                    "import.attempt_failed", error=type(exc).__name__, job_id=str(job["id"])
-                )
-                await _relinquish(conn, job)
-                return
+            with request_operation(job["origin_request_id"]):
+                log.info("import.job_started", job_id=str(job["id"]), attempt=job["attempt_no"])
+                try:
+                    await _process(ctx, conn, job)
+                except LeaseLost:
+                    return
+                except Exception as exc:
+                    log.warning(
+                        "import.attempt_failed", error=type(exc).__name__, job_id=str(job["id"])
+                    )
+                    await _relinquish(conn, job)
+                    return
         await _signal(ctx, job["id"])
         terminal = await conn.fetchval(
             """SELECT status NOT IN ('queued', 'running') FROM import_jobs

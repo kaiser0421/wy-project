@@ -8,8 +8,12 @@ from uuid import UUID
 import asyncpg
 
 from ticketing.booking.models import Order, OrderItem, OrderPage
+from ticketing.core.context import current_request_id
 from ticketing.core.errors import ProblemError
+from ticketing.core.logging import get_logger
 from ticketing.realtime.outbox import emit_seat_changes
+
+log = get_logger(__name__)
 
 _ITEMS_SQL = """
 SELECT i.order_id, i.seat_id, z.code AS zone_code, s.row_label, s.seat_number, i.unit_price_twd
@@ -125,11 +129,12 @@ async def release_order(
         raise RuntimeError("Order release violates quota invariants.")
     if expected == "pending_payment":
         await conn.execute(
-            """INSERT INTO provider_cancellations (attempt_id, next_try_at)
-               SELECT id, app_now() FROM payment_attempts
+            """INSERT INTO provider_cancellations (attempt_id, next_try_at, origin_request_id)
+               SELECT id, app_now(), COALESCE($2, origin_request_id) FROM payment_attempts
                WHERE order_id=$1 AND status IN ('creating','awaiting_customer')
                ON CONFLICT DO NOTHING""",
             order_id,
+            current_request_id(),
         )
     await emit_seat_changes(
         conn,
@@ -150,10 +155,11 @@ async def cancel_order(conn: asyncpg.Connection, order: asyncpg.Record) -> async
             order_id,
         )
         refund = await conn.fetchval(
-            """INSERT INTO refunds (provider_capture_id, reason, next_try_at)
-               SELECT provider_capture_id, 'order_cancelled', app_now() FROM payment_captures
+            """INSERT INTO refunds (provider_capture_id, reason, next_try_at, origin_request_id)
+               SELECT provider_capture_id, 'order_cancelled', app_now(), $2 FROM payment_captures
                WHERE order_id=$1 AND disposition='accepted' RETURNING id""",
             order_id,
+            current_request_id(),
         )
         if refund is None:
             raise RuntimeError("Paid order has no accepted capture.")
@@ -161,4 +167,6 @@ async def cancel_order(conn: asyncpg.Connection, order: asyncpg.Record) -> async
         raise ProblemError(409, "order-not-cancellable", "Order cannot be cancelled")
     if result is None:
         raise RuntimeError("Locked order changed during cancellation.")
+    if result["status"] == "cancelled":
+        log.info("order.hold_cancellation_staged", order_id=str(order["public_id"]))
     return result

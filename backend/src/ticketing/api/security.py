@@ -120,6 +120,7 @@ def _enforce(policy: Policy) -> Callable[[Request], Any]:
         principal = await resolve_principal(request)
         if principal is None:
             raise problem_unauthenticated()
+        request.state.principal = principal
         assert policy.roles is not None
         if principal.role not in policy.roles:
             raise problem_forbidden()
@@ -140,7 +141,6 @@ def _enforce(policy: Policy) -> Callable[[Request], Any]:
                 )
             if request.headers.get("origin") is not None:
                 check_origin(request)
-        request.state.principal = principal
         return principal
 
     dependency.__name__ = f"policy_{policy.name.replace(':', '_').replace(',', '_')}"

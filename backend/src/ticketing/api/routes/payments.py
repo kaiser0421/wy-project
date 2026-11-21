@@ -12,6 +12,7 @@ from ticketing.booking.api_docs import READ_ERRORS, REPLAY_HEADER, WRITE_ERRORS,
 from ticketing.booking.database import connection, transaction
 from ticketing.booking.idempotency import Claim, IdempotencyKey, request_hash
 from ticketing.core.errors import ProblemError
+from ticketing.core.logging import get_logger
 from ticketing.payments.attempts import create_payment, list_attempts
 from ticketing.payments.callbacks import apply_event, verify_signature
 from ticketing.payments.models import (
@@ -25,6 +26,7 @@ from ticketing.payments.provider import Provider
 
 router = SecureRouter(prefix="/api/v1", tags=["payments"])
 _MAX_CALLBACK_BYTES = 8192
+log = get_logger(__name__)
 
 
 @router.post(
@@ -151,4 +153,10 @@ async def payment_callback(
     async with transaction(state.db, state.settings) as conn:
         applied = await apply_event(conn, event)
     applied.record()
+    log.info(
+        "payment.callback_applied" if applied.new_callback else "payment.callback_replayed",
+        attempt_id=str(event.merchant_payment_id),
+        disposition=applied.disposition,
+        origin_request_id=applied.origin_request_id,
+    )
     return CallbackResult(disposition=applied.disposition)

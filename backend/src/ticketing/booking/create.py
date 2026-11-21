@@ -13,9 +13,12 @@ from ticketing.booking.idempotency import Claim, Result
 from ticketing.booking.models import SpecificSeats, ZoneSeats
 from ticketing.booking.orders import order_models
 from ticketing.core.errors import ProblemError
+from ticketing.core.logging import get_logger
 from ticketing.core.settings import Settings
 from ticketing.realtime.outbox import emit_seat_changes
 from ticketing.telemetry import business
+
+log = get_logger(__name__)
 
 
 class ShortAllocation(Exception):
@@ -257,4 +260,5 @@ async def create_order(
             business.record(event_id, outcome)
         raise
     business.record(event_id, "hold_ok")
+    log.info("order.hold_created", event_id=event_id, order_id=result.body["public_id"])
     return result
