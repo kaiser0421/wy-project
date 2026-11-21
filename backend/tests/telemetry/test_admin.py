@@ -4,13 +4,17 @@ import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import asyncpg
 import httpx
 import orjson
 import pytest
+from asgi_lifespan import LifespanManager
 from starlette.types import ASGIApp, Message
 
+from paymock.delivery import send_due
+from paymock.main import create_app as create_paymock
 from tests.support import create_user, login
 from tests.telemetry.test_logs import edge_line, service_line
 from ticketing.core.settings import Settings
@@ -86,6 +90,90 @@ async def test_admin_request_trace_returns_linked_entries_in_timestamp_sequence_
     missing = await client.get(BASE + "/requests/missing/logs")
     assert (missing.status_code, missing.json()["code"]) == (404, "not-found")
     assert missing.headers["cache-control"] == "private, no-store"
+
+
+async def test_admin_request_trace_returns_paymock_processing_and_delivery(
+    client: httpx.AsyncClient,
+    db: asyncpg.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logs = tmp_path / "logs"
+    monkeypatch.setenv("LOG_DIR", str(logs))
+    monkeypatch.setenv("PAYMOCK_STORE_PATH", str(tmp_path / "paymock.sqlite3"))
+    monkeypatch.setenv("PAYMENT_WEBHOOK_SECRET", "test-hook-secret")
+    monkeypatch.setenv("PAYMENT_PROVIDER_TOKEN", "test-provider-token")
+    monkeypatch.setenv("PAYMOCK_CALLBACK_URL", "http://api/callbacks")
+    monkeypatch.setenv("PAYMOCK_DROP_CALLBACKS", "1")
+    monkeypatch.setenv("PAYMOCK_DELAY_CALLBACK_S", "0")
+    merchant_request = "merchant-request-1"
+    checkout_request = "checkout-request-1"
+    paymock = create_paymock()
+
+    def receive_callback(request: httpx.Request) -> httpx.Response:
+        assert request.headers["X-Request-ID"] == checkout_request
+        return httpx.Response(204)
+
+    async with (
+        LifespanManager(paymock),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=paymock), base_url="http://paymock"
+        ) as provider,
+        httpx.AsyncClient(transport=httpx.MockTransport(receive_callback)) as target,
+    ):
+        created = await provider.post(
+            "/v1/intents",
+            headers={
+                "X-Request-ID": merchant_request,
+                "X-Payment-Provider-Token": "test-provider-token",
+            },
+            json={
+                "merchant_payment_id": str(uuid4()),
+                "amount_twd": 100,
+                "currency": "TWD",
+                "expires_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+            },
+        )
+        assert created.status_code == 200
+        token = created.json()["intent_id"]
+        confirmed = await provider.post(
+            f"/pay/{token}/confirm?test=private-query",
+            headers={"X-Request-ID": checkout_request},
+        )
+        assert confirmed.status_code == 200
+        await send_due(
+            target, paymock.state.store, "test-hook-secret", False, paymock.state.service_log
+        )
+
+    settings = Settings(log_dir=str(logs), nginx_log_dir=str(tmp_path / "nginx"))
+    (segment,) = discover(settings)
+    raw = segment.path.read_text()
+    assert all(value not in raw for value in (token, "private-query", "test-provider-token"))
+    assert await ingest_segment(db, segment) == 3
+
+    await create_user(db, "admin@example.com", role="admin")
+    await login(client, "admin@example.com")
+    merchant_trace = await client.get(f"{BASE}/requests/{merchant_request}/logs")
+    assert merchant_trace.status_code == 200
+    (creation,) = merchant_trace.json()["service_logs"]
+    assert (creation["service"], creation["event"], creation["attrs"]["path"]) == (
+        "paymock",
+        "request.completed",
+        "/v1/intents",
+    )
+    checkout_trace = await client.get(f"{BASE}/requests/{checkout_request}/logs")
+    assert checkout_trace.status_code == 200
+    processing, delivery = checkout_trace.json()["service_logs"]
+    assert (processing["service"], processing["event"], processing["attrs"]["path"]) == (
+        "paymock",
+        "request.completed",
+        "/pay/{intent_id}/confirm",
+    )
+    assert (delivery["service"], delivery["event"], delivery["attrs"]["status"]) == (
+        "paymock",
+        "callback.delivery",
+        204,
+    )
 
 
 async def test_concurrent_ack_keeps_first_admin_and_single_audit_entry(

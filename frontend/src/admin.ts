@@ -96,8 +96,8 @@ function metricsPanel(signal: AbortSignal): HTMLElement {
     chart("Request latency", "ms", httpSeries(["p50_ms", "p95_ms", "p99_ms"], ["p50", "p95", "p99"]), signal),
     chart("Error rate", "%", httpSeries(["error_rate"], [""], 100), signal),
     chart("Active connections", "", [
-      { label: "HTTP active", color: colors[0]!, read: metric => metric.connections?.active },
-      { label: "Seat and admin SSE", color: colors[1]!, read: metric => metric.connections?.sse },
+      { label: "nginx active TCP connections", color: colors[0]!, read: metric => metric.connections?.active },
+      { label: "Seat SSE", color: colors[1]!, read: metric => metric.connections?.sse },
     ], signal),
   ];
   const funnel = el("dl", { class: "metric-strip" });

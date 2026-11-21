@@ -177,8 +177,10 @@ services:
       PAYMENT_PROVIDER_TOKEN: ${PAYMENT_PROVIDER_TOKEN:-dev-provider-token-change-me}
       PAYMOCK_CALLBACK_URL: ${PAYMOCK_CALLBACK_URL:-http://api:8000/api/v1/payments/callbacks}
       PAYMOCK_STORE_PATH: /data/paymock/store.sqlite3
+      LOG_DIR: /data/logs
     volumes:
       - paymock_data:/data/paymock
+      - app_logs:/data/logs
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]

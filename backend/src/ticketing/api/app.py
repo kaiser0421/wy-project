@@ -256,6 +256,9 @@ def _document_operations(schema: dict[str, Any], routes: Iterable[APIRoute]) -> 
             for status_code, problems in codes.items():
                 _ensure_problem(responses, status_code, problems)
             _ensure_problem(responses, 500, ("internal-error",))
+            # All application routes use the shared database overload handler.
+            if route.endpoint not in (health.live, health.ready):
+                _ensure_problem(responses, 503, ("server-busy",))
             if "422" in responses:
                 _ensure_problem(responses, 422, ("validation-failed",))
             if not policy.public:

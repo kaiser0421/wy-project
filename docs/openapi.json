@@ -582,6 +582,17 @@
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
           },
           "500": {
@@ -781,6 +792,17 @@
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
           }
         },
@@ -915,6 +937,17 @@
                 },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
@@ -1286,6 +1319,17 @@
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
           },
           "403": {
@@ -1543,6 +1587,17 @@
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
           },
           "409": {
@@ -1682,6 +1737,17 @@
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
           },
           "404": {
@@ -1819,6 +1885,17 @@
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
           },
           "403": {
@@ -1948,6 +2025,17 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
@@ -2099,6 +2187,17 @@
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
           },
           "403": {
@@ -2243,6 +2342,17 @@
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
           },
           "404": {
@@ -2350,6 +2460,17 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
@@ -2546,6 +2667,17 @@
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
           },
           "403": {
@@ -2652,6 +2784,17 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
@@ -2761,6 +2904,17 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
@@ -2887,6 +3041,17 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
@@ -4894,6 +5059,17 @@
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
           }
         },
@@ -5034,6 +5210,17 @@
                 },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
@@ -5226,6 +5413,17 @@
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
           },
           "500": {
@@ -5362,6 +5560,17 @@
                 },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
@@ -5567,6 +5776,17 @@
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
+                }
+              }
             }
           },
           "500": {
@@ -5703,6 +5923,17 @@
                 },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
@@ -5874,6 +6105,17 @@
                 },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
@@ -6063,6 +6305,17 @@
                 },
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Wait before retrying when present.",
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1"
+                  ]
                 }
               }
             }
