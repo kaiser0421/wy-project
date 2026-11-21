@@ -9,6 +9,11 @@ export const date = (value: string) => Number.isFinite(Date.parse(value)) ? date
 const clockTime = new Intl.DateTimeFormat(undefined, {
   hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3, hourCycle: "h23",
 });
+const shortDateTime = new Intl.DateTimeFormat(undefined, {
+  month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+/** Compact month/day and time for dense tables (the full date stays available on hover). */
+export const shortDate = (value: string) => Number.isFinite(Date.parse(value)) ? shortDateTime.format(new Date(value)) : "—";
 /** Compact time of day for log tables (the full date stays available on hover). */
 export const clock = (value: string) => Number.isFinite(Date.parse(value)) ? clockTime.format(new Date(value)) : "—";
 export const label = (value: string) => value.replaceAll("_", " ").replace(/^./, character => character.toUpperCase());

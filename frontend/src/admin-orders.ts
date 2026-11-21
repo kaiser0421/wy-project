@@ -1,5 +1,5 @@
 import { api, ApiError, orderStatuses, type AdminOrder, type AdminOrderFilters, type User } from "./api";
-import { date, label, money } from "./format";
+import { date, label, money, shortDate } from "./format";
 import { IntentUnavailable, MutationIntent } from "./intent";
 import { button, el, errorText, field, formValue, heading, link, notice, panel, select, show, table } from "./view";
 
@@ -32,13 +32,15 @@ export function adminOrdersPage(root: HTMLElement, user: User, signal: AbortSign
 
   function renderRow(order: AdminOrder, activeFilters: AdminOrderFilters): HTMLTableRowElement {
     const detail = link(order.public_id, `#/orders/${encodeURIComponent(order.public_id)}`);
+    detail.textContent = order.public_id.slice(0, 8);
+    detail.title = order.public_id;
     const orderStatus = el("td", {}, label(order.status));
     const actions = el("td");
     const row = el("tr", {}, el("th", { scope: "row" }, detail),
       el("td", {}, `${order.event_title} (#${order.event_id})`), el("td", {}, order.buyer_email),
       orderStatus, el("td", {}, order.quantity), el("td", {}, order.total_twd === null ? "—" : money(order.total_twd)),
-      el("td", {}, el("time", { datetime: order.created_at }, date(order.created_at))),
-      el("td", {}, order.expires_at ? el("time", { datetime: order.expires_at }, date(order.expires_at)) : "—"), actions);
+      el("td", { class: "nowrap" }, el("time", { datetime: order.created_at, title: date(order.created_at) }, shortDate(order.created_at))),
+      el("td", { class: "nowrap" }, order.expires_at ? el("time", { datetime: order.expires_at, title: date(order.expires_at) }, shortDate(order.expires_at)) : "—"), actions);
     const cancellation = new MutationIntent<null>(user.id, {
       operation: "cancellation", event: order.event_id, order: order.public_id,
     });
