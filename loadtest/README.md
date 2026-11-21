@@ -55,4 +55,4 @@ B 每個 worker 先取得一份共用起始快照，再透過各自的 session �
 - **A**　k6 的 `checks` 必須全數成功且 `unexpected_errors` 為零。有發起重放時，至少一筆須驗證成功。重放沿用原請求內容及 Idempotency-Key，遇 502／504 或 `503 server-busy` 時依 `Retry-After`（預設 1 秒）重送，合計最多 10 次嘗試。SQL 須執行成功且回傳零違規列。k6 將 HTTP 409 標記為預期回應，未識別的 409 仍計入 `unexpected_errors`。`503 server-busy` 仍計入 `http_req_failed`，可用 `server_busy` 判讀服務過載。90 秒後仍可能有有效鎖位，可待鎖位到期、金流待辦與 relay 排空後重驗。見 [排空後重驗指令](../LOADTEST.md#6-一致性檢查)。
 - **B**　寫入程式須成功結束且提交至少一次座位變更，客戶端須至少取得一筆 `delta_apply_samples`。每條連線的游標、版面版本與座位狀態及版本都須符合 PostgreSQL 最終快照。`peak_active` 與 `matching_clients` 都須等於 `target_connections`，且 `outbox_pending` 與 `archive_mismatches` 都為零。SQL 與 SSE 稽核皆在 outbox 保留的序號範圍內比對封存資料，並檢查該範圍是否連續且抵達最新已編序位置。維護程序可清除已編序超過一小時的前段資料。
 
-產壓端與受測服務同機，會共享 CPU。每輪會新增活動與測試資料。`docker compose down -v` 會刪除整個 Compose 專案的 volumes，包含 PostgreSQL、Redis、金流及共享檔案。見 `compose.yaml:243`。結果與瓶頸分析見 [LOADTEST.md](../LOADTEST.md)。
+產壓端與受測服務同機，會共享 CPU。每輪會新增活動與測試資料。`docker compose down -v` 會刪除整個 Compose 專案的 volumes，包含 PostgreSQL、Redis、金流及共享檔案。見 `compose.yaml:247`。結果與瓶頸分析見 [LOADTEST.md](../LOADTEST.md)。

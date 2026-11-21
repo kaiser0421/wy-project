@@ -48,8 +48,8 @@ flowchart TB
   Edge -->|"stub_status"| Collector
 ```
 
-- PostgreSQL 保存座位、訂單、配額、session、匯入 job、outbox 與監控資料。nginx、PostgreSQL 與 Redis 的 host port 預設綁在 loopback。三個 API 副本各由一個 Uvicorn 程序處理 REST 與 SSE。見 `compose.yaml:52`、`compose.yaml:110`、`compose.yaml:211`、`backend/src/ticketing/api/main.py:36`。
-- `migrate` 以 schema owner 執行，`seed` 與 runtime 使用低權限角色。Worker 分別排程匯入、hold expiry、付款 reconciler 與 maintenance。見 `compose.yaml:5`、`compose.yaml:91`、`backend/src/ticketing/worker/main.py:20`。
+- PostgreSQL 保存座位、訂單、配額、session、匯入 job、outbox 與監控資料。nginx、PostgreSQL 與 Redis 的 host port 預設綁在 loopback。三個 API 副本各由一個 Uvicorn 程序處理 REST 與 SSE。見 `compose.yaml:52`、`compose.yaml:67`、`compose.yaml:85`、`compose.yaml:120`、`compose.yaml:227`、`backend/src/ticketing/api/main.py:36`。
+- `migrate` 以 schema owner 執行，`seed` 與 runtime 使用低權限角色。Worker 分別排程匯入、hold expiry、付款 reconciler 與 maintenance。見 `compose.yaml:7`、`compose.yaml:99`、`backend/src/ticketing/worker/main.py:20`。
 - Redis Pub/Sub 通知 API 有 session 撤銷與匯入進度變化，持久狀態由 PostgreSQL 提供。見 `backend/src/ticketing/auth/sessions.py:89`、`backend/src/ticketing/auth/sessions.py:134`、`backend/src/ticketing/imports/runner.py:269`、`backend/src/ticketing/api/routes/imports.py:191`。
 
 ## 2. 訂票交易
@@ -100,7 +100,7 @@ flowchart LR
 ```
 
 - relay 依可見 outbox 列排序，為每個活動指派連續的 `seq`。同一座位的寫入受列鎖序列化，不同座位的序號可與交易提交順序不同。所有 API 副本讀取相同序號，各自合併連續列。同一座位保留較新的版本，layout 事件切開合併區間。見 `backend/src/ticketing/realtime/relay.py:14`、`backend/src/ticketing/realtime/relay.py:46`、`backend/src/ticketing/realtime/frames.py:40`、`backend/src/ticketing/realtime/reader.py:161`。
-- 瀏覽器先讀 `GET /api/v1/events/{event_id}/seats`，再連 `GET /api/v1/events/{event_id}/seat-stream`，以 `Last-Event-ID` 帶入快照的 `last_seq` 或最後套用的數字序號。遇到缺段可重連回放。收到 layout、resync 或回放失敗時重新取快照。寫入逾時會結束串流。nginx 對此路徑停用 buffering。見 `backend/src/ticketing/api/routes/seats.py:58`、`backend/src/ticketing/api/routes/seats.py:112`、`backend/src/ticketing/realtime/stream.py:45`、`frontend/src/events.ts:300`、`infra/nginx/nginx.conf:115`。
+- 瀏覽器先讀 `GET /api/v1/events/{event_id}/seats`，再連 `GET /api/v1/events/{event_id}/seat-stream`，以 `Last-Event-ID` 帶入快照的 `last_seq` 或最後套用的數字序號。遇到缺段可重連回放。收到 layout、resync 或回放失敗時重新取快照。寫入逾時會結束串流。nginx 對此路徑停用 buffering。見 `backend/src/ticketing/api/routes/seats.py:58`、`backend/src/ticketing/api/routes/seats.py:112`、`backend/src/ticketing/realtime/stream.py:45`、`frontend/src/events.ts:300`、`infra/nginx/nginx.conf:128`。
 
 ## 4. 付款與回呼
 
@@ -133,7 +133,7 @@ sequenceDiagram
   W->>P: 套用查得的結果與退款狀態
 ```
 
-- Merchant 請求使用 `X-Payment-Provider-Token`。Paymock 啟動時讀取固定 `PAYMOCK_CALLBACK_URL`，Compose 預設為 `http://api:8000/api/v1/payments/callbacks`。配送重試會重新簽章。見 `compose.yaml:192`、`paymock/src/paymock/main.py:75`、`paymock/src/paymock/main.py:150`、`paymock/src/paymock/delivery.py:17`、`backend/src/ticketing/payments/provider.py:42`。
+- Merchant 請求使用 `X-Payment-Provider-Token`。Paymock 啟動時讀取固定 `PAYMOCK_CALLBACK_URL`，Compose 預設為 `http://api:8000/api/v1/payments/callbacks`。配送重試會重新簽章。見 `compose.yaml:198`、`paymock/src/paymock/main.py:75`、`paymock/src/paymock/main.py:150`、`paymock/src/paymock/delivery.py:17`、`backend/src/ticketing/payments/provider.py:42`。
 - 付款建立先提交 attempt，再發出外部呼叫。回呼與對帳共用結果處理，扣款判定在鎖內使用 PostgreSQL `app_now()`。已付款訂單取消後先進入 `refund_pending`，退款確認後釋放座位與配額。見 `backend/src/ticketing/payments/attempts.py:147`、`backend/src/ticketing/api/routes/payments.py:126`、`backend/src/ticketing/payments/callbacks.py:144`、`backend/src/ticketing/payments/reconciler.py:51`、`backend/src/ticketing/payments/reconciler.py:90`、`backend/src/ticketing/booking/orders.py:148`。
 
 ## 5. 監控資料流
