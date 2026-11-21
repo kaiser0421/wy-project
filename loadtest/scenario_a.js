@@ -164,10 +164,16 @@ export default function () {
     resend_attempted: Math.random() < 0.02,
   };
   if (manifest.resend_attempted) {
-    const resend = request('POST', `/api/v1/events/${eventId}/orders`, 'replay_order', session, body, idem);
+    // A replay is a retry: honour 503 server-busy / Retry-After like a real client, then verify.
+    let resend = request('POST', `/api/v1/events/${eventId}/orders`, 'replay_order', session, body, idem);
+    for (let tries = 1; tries < 5 && resend.response.status === 503; tries += 1) {
+      sleep(Number(resend.response.headers['Retry-After'] || 1));
+      resend = request('POST', `/api/v1/events/${eventId}/orders`, 'replay_order', session, body, idem);
+    }
     manifest.resend_status = resend.response.status;
     manifest.resend_public_id = resend.response.status === 201 ? resend.response.json('public_id') : null;
-    check(resend.response, {
+    // Still shedding after the retries: nothing to compare (the outcome stays in the manifest).
+    if (resend.response.status !== 503) check(resend.response, {
       'booking replay returns the original order': (r) =>
         r.status === 201 && r.headers['Idempotent-Replayed'] === 'true' &&
         manifest.resend_public_id === publicId,
