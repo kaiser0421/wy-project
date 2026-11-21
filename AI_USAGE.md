@@ -1,39 +1,76 @@
-# AI 使用紀錄
+# AI 使用說明
 
-## 工具與分工
+本專案以兩個 AI 編碼工具協作開發，由作者負責需求解讀、架構決策、取捨與最終驗收。以下說明使用了哪些工具、用在哪些部分，並列出 AI 產生的程式碼中實際發生的錯誤，以及如何發現與修正。
 
-| 工具 | 實際產出與角色 |
+## 1. 使用的 AI 工具與用途
+
+| 工具 | 主要用途 |
 | --- | --- |
-| Claude Code | 規劃需求與交易邊界、撰寫 `PLAN.md` 和交付文件初稿。實作 P0／P1 的 Compose、migration、共用 runtime、驗證與授權基礎。整合平行 workstream 的共用介面、服務入口與部署，審查 bundle、修正整合問題並合併。見 `1914243`、`5c6d46e`、`107d916`、`40cb535`。 |
-| OpenAI Codex CLI | 在獨立 Git worktree 平行實作 A 訂票與金流、B 活動／匯入／報表、C 座位即時推送、D 監控，以及後續 E 前端與測試。也扮演交叉審查與 red-team，檢查設計反例、交易競爭、權限與故障恢復。見 `853b184`、`d05450e`、`4235115`、`74e43f6`、`5e0151f`。 |
+| **Claude Code**（Anthropic，Claude Opus） | 需求拆解與整體規劃（[PLAN.md](PLAN.md)）、架構與交易邊界設計、模組間介面約定；基礎設施與共用程式（Docker Compose、nginx、migration、設定、日誌、驗證與授權框架）；整合各模組、審查所有變更、執行測試與壓測並修正問題；撰寫交付文件初稿。 |
+| **OpenAI Codex CLI** | 依模組在獨立的 Git worktree 平行實作功能；對每批變更做交叉審查與紅隊檢查（併發競爭、權限、故障恢復）；依審查結果修正；核對文件中的數字與程式行號。 |
 
-## 整合流程
+**各部分由誰產出**
 
-1. Claude 先訂共用 contracts，包含路由政策、session fence、outbox 寫入、背景 `tick(ctx)`、migration 順序與檔案所有權。[平行開發約定](docs/development/workstreams.md)
-2. Codex 依 workstream 在獨立 worktree 開發，以 Git bundle 交回各分支的 commits。Claude 匯入並審查，處理 app factory、服務入口、Compose 與 volumes 的整合。
-3. Codex 交叉審查實作與整合 diff，回報風險與驗證建議。整合者依實際問題修正，用 pytest、Compose 整合檢查與端到端流程確認後合併。合併紀錄包括 `1a00f7d`、`c41c2b8`、`5f974b0`、`514ffa8`、`9d19e86`。[實作審查](docs/ai-reviews/implementation/) · [端到端流程](scripts/e2e_flow.py)
-4. 後續專項審查發現的問題各自進入修正分支，再合併後端／安全與前端／測試改動。見 `d27af81`、`a7ed2aa`。[專項審查](docs/ai-reviews/expert/)
+| 部分 | 主要實作 | 審查 |
+| --- | --- | --- |
+| 訂票、限購、冪等、金流、退款 | Codex | Claude + Codex |
+| 活動、座位匯入、報表（Excel） | Codex | Claude + Codex |
+| 座位即時推送（outbox、relay、SSE） | Codex | Claude + Codex |
+| 監控（指標、告警、日誌查詢） | Codex | Claude + Codex |
+| 前端（座位圖、監控頁、深色主題） | Codex | Claude + Codex |
+| Compose、nginx、基礎 schema（migration 0001）、驗證與授權、共用框架 | Claude | Codex |
+| 各功能的 migration（0002–0006） | Codex | Claude + Codex |
+| 測試、壓測工具、文件 | 兩者 | 兩者交叉 |
 
-## 實作中的 AI 程式碼缺陷
+## 2. 使用方式與把關
 
-以下取自 [AI 缺陷日誌](docs/ai-defects.log)，提交 ID 可用 `git show <commit>` 查閱。
+1. **先定約定再平行開發**：Claude 先寫好模組邊界、路由權限、交易與事件寫入方式等約定（[平行開發約定](docs/development/workstreams.md)），Codex 再分模組平行實作，避免各自發明介面。
+2. **每次變更都經雙重審查**：Claude 審查程式碼後，再由 Codex 以另一個角度審查；審查結論為「修正後才能推送」時，修正後再審一輪，直到通過才推送。審查原文保存在 [docs/ai-reviews/](docs/ai-reviews/)。
+3. **以實際執行驗證，不只看程式碼**：單元與整合測試（PostgreSQL 16）、併發測試、移除防線的破壞驗證、端到端流程、瀏覽器截圖，以及兩台機器上的壓測。下列多數錯誤都是在「實際跑起來」時才被發現。
+4. **人工決策**：範圍取捨（例如即時推送不用 Redis Streams、匯出維持同步下載）、接受或拒絕審查意見、交付時程，由作者決定。
 
-| 缺陷與產生者 | 產生的程式碼及影響 | 發現方式 | 修正與 commit |
-| --- | --- | --- | --- |
-| D01 · Claude Code | P0 將 bootstrap superuser 的連線字串共用給 API 與背景服務。應用連線因此持有 schema owner 的權限。 | Codex P0 diff review #1 對照 Compose 連線配置與 PostgreSQL 角色。 | 初始化時建立低權限 `ticketing_app`。Compose 將 runtime 與 migration 的 DSN 拆開，migration 以 schema owner 執行並授予 runtime 所需權限。見 `5c6d46e`、`fb2c04c`、`compose.yaml:5`。 |
-| D02 · Claude Code | `orders` 金額的 CHECK 只判斷總額為 NULL 或等於小計加服務費。當總額已填且其他欄位為 NULL，等式得到 UNKNOWN，PostgreSQL 仍接受該列。 | Codex P0 diff review #6 以部分 NULL 的資料反推 SQL 三值邏輯。 | 明確要求三欄全 NULL，或三欄皆有值且加總相符。加入 `test_order_amounts_are_all_or_nothing_and_balanced` 實際插入錯誤金額。見 `fb2c04c`、`83df8cd`、`backend/tests/integration/test_constraints.py:96`。 |
-| D03 · Claude Code | `payment_captures` 的欄位各自指向有效 attempt 與 order 時，仍可把 attempt 接到另一筆訂單。 | Codex P0 diff review #7 檢查跨欄位資料關聯，找出兩個單欄外鍵都能通過的反例。 | 以 `(attempt_id, order_id)` 複合外鍵連至 `payment_attempts(id, order_id)`，並用 `test_capture_must_belong_to_the_attempts_order` 驗證錯配會遭拒。見 `fb2c04c`、`83df8cd`、`backend/migrations/versions/0001_baseline.py:242`。 |
-| D15 · OpenAI Codex | 報表路由在授權前先取得 export slot。無權讀取報表的呼叫仍可能占用有限的匯出容量，與合法下載競爭。 | Workstream B 的 Codex review #6 追蹤報表 handler 的呼叫順序。 | 先檢查活動與報表存取權，再進入匯出流程取得 slot。見 `76e6a21`、`backend/src/ticketing/api/routes/reports.py:169`。 |
-| D16 · OpenAI Codex | 活動列表 cursor 的 HMAC 未納入角色。Admin 降權後重新登入仍可能用舊 cursor 繼續翻閱先前的高權限快照。 | Workstream B 的 Codex review #3 比對 cursor 簽章輸入與降權後的身分。 | 將角色納入簽章，角色變更後舊 cursor 驗證失敗。測試另行隔離 TTL 與角色變更兩種失效原因。見 `76e6a21`、`5ec31ca`、`backend/src/ticketing/events/pagination.py:94`。 |
+完整錯誤清單見 [AI 缺陷日誌](docs/ai-defects.log)（共 23 筆）。
 
-審查原文見 [P0 review](docs/ai-reviews/implementation/p0-codex-review.md) 與 [Workstream B review](docs/ai-reviews/implementation/ws-b-codex-review.md)。
+## 3. AI 產生的程式碼錯誤（節錄 6 例）
 
-## 設計審查紀錄
+### 例 1：金額約束因 SQL 三值邏輯而失效（Claude Code）
+- **錯誤的程式碼**：Claude 產生的初版 schema（送審版本）中，訂單表的檢查條件寫成 `CHECK (total_twd IS NULL OR total_twd = subtotal_twd + fee_twd)`。
+- **問題**：小計或服務費為 NULL 時，等式結果是 UNKNOWN，而 PostgreSQL 的 CHECK 會放行 UNKNOWN，於是「總額有值、明細卻是 NULL」的錯誤訂單可以寫入。
+- **如何發現**：Codex 審查時用部分欄位為 NULL 的資料推演出反例。
+- **如何修正**：合併前改成「三欄全為 NULL，或三欄都有值且加總相符」，並新增測試實際寫入錯誤金額、確認被資料庫拒絕（`backend/tests/integration/test_constraints.py`）。
 
-| 草案問題 | 後續決策與實作 |
-| --- | --- |
-| 用 watermark 保護活動翻頁，頁間編輯可能改變排序與成員。 | 第一頁物化清單快照，後續透過簽章 cursor 取出快照內的頁次。見 `d232fa4`。 |
-| 以應用程序 wall clock 或 collector 收件時間對監控分桶，補送與時鐘偏移可能造成假尖峰。 | 保存 producer boot UUID、interval number 與單調時間，用 Redis stream 接收時間估算偏移並分桶。見 `81b82db`。 |
-| 推送草案設計了 Redis Stream、generation 與 epoch fencing，增加狀態同步成本。 | 範圍決策將座位序號、歷史與回補集中到 PostgreSQL，API 以程序內 ring 派送 SSE。見 `4235115`。[範圍決策](docs/development/workstreams.md#4-範圍決策相對-plan-v12) |
+### 例 2：nginx 在過載時把所有 API 副本判為故障（Claude Code）
+- **錯誤的程式碼**：upstream 寫成 `server api:8000 resolve;`，沿用 nginx 預設的 `max_fails=1`。
+- **問題**：過載時只要一次轉送失敗，副本就被暫時剔除；3 個副本先後被剔除後，nginx 在約 18 秒間對請求直接回 502，完全不轉送。
+- **如何發現**：正式壓測第 1 輪出現 104,136 個瞬間 502；逐秒分析 access log 後發現這些請求的 upstream 欄位只有群組名稱、沒有任何副本位址。
+- **如何修正**：設定 `max_fails=0`（過載由 API 快速回 503 處理，不剔除副本），並讓 nginx 的閒置連線早於 Uvicorn 關閉（60 秒對 75 秒）。第 2 輪壓測 502 為 0（[壓測報告](LOADTEST.md)）。
 
-規劃期原文見 [v1.0 審查](docs/ai-reviews/planning/plan-review-v1.0.md)、[v1.1 複查](docs/ai-reviews/planning/plan-review-v1.1.md) 與 [架構草案審查](docs/ai-reviews/planning/architecture-review.md)。
+### 例 3：SSE 連線在忙碌時被整批關閉，造成重連風暴（Codex）
+- **錯誤的程式碼**：每個 API 每秒重驗所有 SSE 連線的 session，取連線與查詢時限只有 0.2 秒與 0.3 秒，且連續失敗 2 次就關閉該副本全部串流。
+- **問題**：2,000 條連線加上持續寫入時，API 一忙就重驗逾時，所有連線同時被切斷並一起重新抓 1 萬席的座位快照，形成風暴：2,000 個客戶端共嘗試連線 9,673 次，快照中位數 64 秒。
+- **如何發現**：正式壓測第 1 輪的情境 B，加上本機 smoke 中只有 27／50 條連線同時在線；從 API 日誌的 `seat_stream.recheck_failed` 追到這段程式。
+- **如何修正**：時限放寬為 1 秒與 1 秒，連續失敗 5 次才整批關閉（撤銷仍由 Pub/Sub 立即生效），並同步更新 DESIGN Q5 的失效時間說明。第 2 輪 2,000／2,000 個客戶端最終與資料庫一致，快照中位數 0.98 秒。
+- **附帶的第二個錯誤**：修正時 Claude 為歸還連線加了逾時並在逾時後呼叫 `terminate()`，但 asyncpg 此時已自行終止並交還連線，導致 `InterfaceError`；由 Codex 第二輪審查與 smoke 發現，已移除。
+
+### 例 4：資料庫逾時被回成 500（Claude Code）
+- **錯誤的程式碼**：資料庫的鎖逾時與查詢逾時只在交易包裝層轉成 503；在包裝層之外（例如驗證 session 時）發生的逾時落入通用例外處理器。
+- **問題**：過載時使用者收到 `500 internal-error`（看似系統故障），而不是可重試的 `503 server-busy`。
+- **如何發現**：從全新 clone 跑壓測 smoke，1,018 個請求中有 13 個 500；API 日誌顯示為 `QueryCanceledError`。
+- **如何修正**：在應用程式層的例外處理器（`api/problems.py`）把鎖逾時、查詢逾時、死鎖統一轉成 503 並附 `Retry-After`，加上單元測試；另外在資料庫連線層把持有連線時的客戶端逾時也轉成 503，並以整合測試讓資料庫實際卡住驗證。
+
+### 例 5：前端畫面一片空白（Claude Code）
+- **錯誤的程式碼**：nginx 設定沒有 `include mime.types`。
+- **問題**：建置後的 JS 與 CSS 以 `text/plain` 回傳，瀏覽器依嚴格 MIME 規則拒絕執行，整個介面空白；用 `curl` 檢查首頁只看到 HTML 回 200，所以沒有發現。
+- **如何發現**：用真實瀏覽器截圖時頁面空白，主控台顯示 MIME 錯誤。
+- **如何修正**：加入 `include mime.types` 與 `default_type`；之後的瀏覽器截圖與經 nginx 執行的 Playwright 測試都會涵蓋這一點。
+
+### 例 6：新增 migration 卻沒有更新程式要求的資料庫版本（Codex）
+- **錯誤的程式碼**：為日誌面板新增了 `0006_recent_logs` migration，但程式中記錄所需版本的 `SCHEMA_HEAD` 仍是 `0005_monitoring`。
+- **問題**：migration 執行後，seed 與健康檢查會判定版本不符，整套服務無法啟動。
+- **如何發現**：合併時 Claude 審查 diff 發現；Codex 審查時另指出 OpenAPI 文件中的版本範例也未更新。
+- **如何修正**：更新版本並新增單元測試，自動比對 `SCHEMA_HEAD` 與 Alembic 的最新版本；之後再漏改會直接讓測試失敗。實際重建整套服務確認 migration 與 seed 正常。
+
+## 4. 心得
+
+- AI 生成的程式碼在**單元測試層級多半正確**，錯誤集中在「元件之間的預設值與邊界條件」：nginx 預設值、SQL 的 NULL 語意、逾時與重試的交互。這類問題要靠**另一個模型審查**加上**實際執行**（瀏覽器、smoke、壓測）才會現形。
+- 兩個 AI 交叉審查能找到單一模型的盲點，但也會不斷提出邊際問題；最後仍需要人依風險決定哪些要修、哪些接受並記錄。
