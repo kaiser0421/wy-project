@@ -9,6 +9,7 @@ from uuid import UUID
 from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
 
+from ticketing.core.errors import ProblemError
 from ticketing.core.logging import get_logger
 from ticketing.realtime.client_model import SequenceGap
 from ticketing.realtime.frames import encode
@@ -18,6 +19,7 @@ from ticketing.realtime.revocation import Revocations
 log = get_logger(__name__)
 
 WRITE_TIMEOUT_S = 5.0
+TERMINAL_WRITE_TIMEOUT_S = 0.1
 HEARTBEAT_S = 15.0
 REPLAY_TIMEOUT_S = 5.0
 _HEARTBEAT = b": heartbeat\n\n"
@@ -41,21 +43,23 @@ async def _disconnect(receive: Receive) -> None:
 
 
 async def _catch_up(reader: EventReader, cursor: int, limit: int, send: Send) -> int:
-    """Replay only through the captured head so ring writes cannot interleave with replay."""
-    replay_deadline: float | None = None
-    loop = asyncio.get_running_loop()
+    """On a ring miss, replay through the captured head before trying live delivery again."""
     while cursor < limit:
         if reader.broken:
             raise SequenceGap("Reader lost sequence continuity")
         frame = reader.ring.after(cursor)
-        if frame is not None and frame.end <= limit:
-            await _write(send, frame.body)
-            cursor = frame.end
-            continue
-        if replay_deadline is None:
-            replay_deadline = loop.time() + REPLAY_TIMEOUT_S
-        async with asyncio.timeout_at(replay_deadline):
-            frames = await reader.replay(cursor, limit)
+        if frame is None or frame.end > limit:
+            break
+        await _write(send, frame.body)
+        cursor = frame.end
+
+    if cursor >= limit:
+        return cursor
+    async with asyncio.timeout(REPLAY_TIMEOUT_S):
+        while cursor < limit:
+            if reader.broken:
+                raise SequenceGap("Reader lost sequence continuity")
+            frames = await reader.replays.read(reader.event_id, cursor, limit)
             for frame in frames:
                 await _write(send, frame.body)
                 cursor = frame.end
@@ -81,9 +85,10 @@ async def _stream(reader: EventReader, resume: int | None, send: Send) -> None:
         changed = reader.changed
         if reader.broken:
             raise SequenceGap("Reader lost sequence continuity")
-        assert reader.head is not None
-        if cursor < reader.head:
-            cursor = await _catch_up(reader, cursor, reader.head, send)
+        live_head = reader.head
+        assert live_head is not None
+        if cursor < live_head:
+            cursor = await _catch_up(reader, cursor, live_head, send)
         progress = reader.progress
         if progress is not None and progress is not previous_progress:
             await _write(send, progress)
@@ -92,6 +97,9 @@ async def _stream(reader: EventReader, resume: int | None, send: Send) -> None:
         if now >= heartbeat_at:
             await _write(send, _HEARTBEAT)
             heartbeat_at = now + HEARTBEAT_S
+        # The reader may advance and evict frames while replay or a write is pending.
+        if changed.is_set():
+            continue
         with suppress(TimeoutError):
             async with asyncio.timeout_at(heartbeat_at):
                 await changed.wait()
@@ -119,6 +127,11 @@ class SeatStream(Response):
         self.resume = resume
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        # Admission must succeed before sending SSE headers so capacity errors remain HTTP 503s.
+        with self.readers.subscribe(self.event_id) as reader:
+            await self._serve(reader, receive, send)
+
+    async def _serve(self, reader: EventReader, receive: Receive, send: Send) -> None:
         started = False
 
         async def run() -> None:
@@ -132,8 +145,7 @@ class SeatStream(Response):
                     }
                 )
             started = True
-            with self.readers.subscribe(self.event_id) as reader:
-                await _stream(reader, self.resume, send)
+            await _stream(reader, self.resume, send)
 
         writer = asyncio.create_task(run())
         disconnect = asyncio.create_task(_disconnect(receive))
@@ -147,7 +159,7 @@ class SeatStream(Response):
                     writer.result()
             except WriteTimeout:
                 terminal = encode("resync", {"reason": "write-timeout"})
-            except (SequenceGap, TimeoutError):
+            except (SequenceGap, TimeoutError, ProblemError):
                 terminal = encode("resync", {"reason": "replay-unavailable"})
             except OSError:
                 return
@@ -161,7 +173,7 @@ class SeatStream(Response):
             if started:
                 # A stalled transport may reject even this last frame. Cancel and close promptly.
                 with suppress(TimeoutError, OSError):
-                    async with asyncio.timeout(0.1):
+                    async with asyncio.timeout(TERMINAL_WRITE_TIMEOUT_S):
                         await send(
                             {"type": "http.response.body", "body": terminal, "more_body": False}
                         )

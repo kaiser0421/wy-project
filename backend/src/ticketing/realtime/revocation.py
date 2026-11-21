@@ -18,6 +18,9 @@ from ticketing.core.logging import get_logger
 
 log = get_logger(__name__)
 
+RECHECK_ACQUIRE_TIMEOUT_S = 0.2
+RECHECK_QUERY_TIMEOUT_MS = 300
+
 _LIVE_SESSIONS = """
 WITH clock AS MATERIALIZED (SELECT app_now() AS sampled_at)
 SELECT s.id
@@ -83,7 +86,10 @@ class Revocations:
                     self.revoke(sid)
 
     async def _live_sessions(self, session_ids: list[UUID]) -> set[UUID]:
-        async with acquire(self.pool, 0.2) as conn, asyncio.timeout(0.3):
+        async with (
+            acquire(self.pool, RECHECK_ACQUIRE_TIMEOUT_S) as conn,
+            asyncio.timeout(RECHECK_QUERY_TIMEOUT_MS / 1000),
+        ):
             rows = await conn.fetch(_LIVE_SESSIONS, session_ids)
         return {row["id"] for row in rows}
 

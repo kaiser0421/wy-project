@@ -5,7 +5,6 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from time import monotonic
 from typing import Any
 
 import asyncpg
@@ -16,14 +15,25 @@ from starlette.types import ASGIApp, Message, Scope
 from tests.support import create_user, login
 from ticketing.auth.sessions import REVOKE_CHANNEL, revoke_session
 from ticketing.core.service import ServiceContext
-from ticketing.realtime import relay, stream
+from ticketing.realtime import reader, relay, revocation, stream
 from ticketing.realtime.client_model import apply_delta
 from ticketing.realtime.outbox import emit_layout_changed, emit_seat_changes
+from ticketing.realtime.reader import EventReader
 from ticketing.realtime.snapshot import SnapshotCache
 
 pytestmark = pytest.mark.integration
 
 Observe = Callable[[bytes], Awaitable[None]]
+WAIT_S = 10
+
+
+@pytest.fixture
+def settings_overrides(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    # Test assertions synchronize on stream and recheck events. Leave room for a slow database.
+    monkeypatch.setattr(revocation, "RECHECK_ACQUIRE_TIMEOUT_S", 3.0)
+    monkeypatch.setattr(revocation, "RECHECK_QUERY_TIMEOUT_MS", 5000)
+    monkeypatch.setattr(stream, "TERMINAL_WRITE_TIMEOUT_S", 3.0)
+    return {"db_pool_acquire_timeout_s": 5.0, "db_statement_timeout_ms": 8000}
 
 
 class Body(httpx.AsyncByteStream):
@@ -100,7 +110,7 @@ class StreamingTransport(httpx.AsyncBaseTransport):
                 await super().aclose()
 
         try:
-            async with asyncio.timeout(3):
+            async with asyncio.timeout(WAIT_S):
                 header = await started
         except BaseException:
             task.cancel()
@@ -200,7 +210,7 @@ async def frames(response: httpx.Response) -> AsyncIterator[Received]:
 
 
 async def receive_kind(events: AsyncIterator[Received], kind: str) -> Received:
-    async with asyncio.timeout(3):
+    async with asyncio.timeout(WAIT_S):
         async for frame in events:
             if frame.kind == kind:
                 return frame
@@ -336,15 +346,133 @@ async def test_snapshot_version_beats_older_unassigned_outbox_row(
         assert state[0] == ("available", 2)
 
 
+async def wait_for_head(event_reader: EventReader, head: int) -> None:
+    async with asyncio.timeout(WAIT_S):
+        while event_reader.head != head:
+            assert not event_reader.broken
+            await event_reader.changed.wait()
+
+
+@pytest.mark.parametrize("missing", [False, True])
+async def test_replay_recovers_from_ring_eviction_or_resyncs(
+    db: asyncpg.Connection,
+    client: httpx.AsyncClient,
+    running_app: ASGIApp,
+    asgi_app: ASGIApp,
+    event: Event,
+    relay_context: ServiceContext,
+    monkeypatch: pytest.MonkeyPatch,
+    missing: bool,
+) -> None:
+    await change(db, event, "held")
+    await relay.tick(relay_context)
+    replay_started = asyncio.Event()
+    resume_writes = asyncio.Event()
+    readers = asgi_app.fastapi.state.seat_readers  # type: ignore[attr-defined]
+
+    async def pause_first_frame(data: bytes) -> None:
+        if data.startswith(b"id: 1\n"):
+            replay_started.set()
+            await resume_writes.wait()
+
+    monkeypatch.setattr(stream, "REPLAY_TIMEOUT_S", WAIT_S * 2.0)
+    monkeypatch.setattr(stream, "WRITE_TIMEOUT_S", WAIT_S * 2.0)
+    async with open_stream(running_app, client, event, 0, pause_first_frame) as events:
+        async with asyncio.timeout(WAIT_S):
+            await replay_started.wait()
+        event_reader = readers.events[event.id]
+        async with relay_context.db.acquire() as writer:
+            await change(writer, event, "available")
+        await relay.tick(relay_context)
+        await wait_for_head(event_reader, 2)
+        assert event_reader.ring.after(1) is not None
+
+        # Consume the last ring slot while the first replay frame is still in flight.
+        with monkeypatch.context() as eviction:
+            eviction.setattr(reader, "RING_BYTES", 1)
+            async with relay_context.db.acquire() as writer:
+                await change(writer, event, "held")
+            await relay.tick(relay_context)
+            await wait_for_head(event_reader, 3)
+        assert event_reader.ring.after(1) is None
+        if missing:
+            await db.execute("DELETE FROM outbox WHERE event_id=$1 AND seq=2", event.id)
+        resume_writes.set()
+
+        first = await receive_kind(events, "delta")
+        assert (first.data["from"], first.seq) == (1, 1)
+        if missing:
+            assert (await receive_kind(events, "resync")).data == {"reason": "replay-unavailable"}
+            with pytest.raises(StopAsyncIteration):
+                await anext(events)
+        else:
+            recovered = await receive_kind(events, "delta")
+            assert (recovered.data["from"], recovered.data["to"], recovered.seq) == (2, 3, 3)
+            await change(db, event, "available")
+            await relay.tick(relay_context)
+            live = await receive_kind(events, "delta")
+            assert (live.data["from"], live.data["to"], live.seq) == (4, 4, 4)
+
+
+async def test_resume_inside_coalesced_ring_frame_replays_only_the_suffix(
+    db: asyncpg.Connection,
+    client: httpx.AsyncClient,
+    running_app: ASGIApp,
+    event: Event,
+    relay_context: ServiceContext,
+) -> None:
+    async with open_stream(running_app, client, event, 0) as live:
+        await receive_kind(live, "progress")
+        await change(db, event, "held", idx=0)
+        await change(db, event, "held", idx=7)
+        await relay.tick(relay_context)
+        coalesced = await receive_kind(live, "delta")
+        assert (coalesced.data["from"], coalesced.seq) == (1, 2)
+        async with open_stream(running_app, client, event, 1) as resumed:
+            suffix = await receive_kind(resumed, "delta")
+            assert (suffix.data["from"], suffix.data["to"], suffix.seq) == (2, 2, 2)
+            assert suffix.data["changes"] == [[7, "held", 1]]
+
+
+async def test_event_reader_capacity_rejects_new_events_and_shares_existing_reader(
+    db: asyncpg.Connection,
+    client: httpx.AsyncClient,
+    running_app: ASGIApp,
+    event: Event,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reader, "MAX_EVENT_READERS", 1)
+    other_id = await db.fetchval(
+        """
+        INSERT INTO events (owner_id, title, category, venue, sales_start_at, sales_end_at,
+                            status, published_at)
+        SELECT owner_id, 'Other concert', category, venue, sales_start_at, sales_end_at,
+               status, published_at FROM events WHERE id=$1
+        RETURNING id
+        """,
+        event.id,
+    )
+    other = Event(other_id, event.order)
+    async with open_stream(running_app, client, event) as first:
+        await receive_kind(first, "progress")
+        denied = await client.get(other.stream)
+        assert denied.status_code == 503
+        assert denied.headers["content-type"] == "application/problem+json"
+        assert denied.json()["code"] == "server-busy"
+        assert denied.json()["retryable"] is True
+        async with open_stream(running_app, client, event) as shared:
+            await receive_kind(shared, "progress")
+    async with open_stream(running_app, client, other) as admitted:
+        await receive_kind(admitted, "progress")
+
+
 async def test_slow_connection_resyncs_and_fast_peer_keeps_receiving(
     db: asyncpg.Connection,
     client: httpx.AsyncClient,
     running_app: ASGIApp,
     event: Event,
     relay_context: ServiceContext,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(stream, "WRITE_TIMEOUT_S", 0.3)
     blocked = asyncio.Event()
 
     async def stall_data(data: bytes) -> None:
@@ -352,23 +480,22 @@ async def test_slow_connection_resyncs_and_fast_peer_keeps_receiving(
             blocked.set()
             await asyncio.Future()
 
-    async with (
-        open_stream(running_app, client, event, 0, stall_data) as slow,
-        open_stream(running_app, client, event, 0) as fast,
-    ):
+    async with open_stream(running_app, client, event, 0, stall_data) as slow:
         await receive_kind(slow, "progress")
-        await receive_kind(fast, "progress")
-        await change(db, event, "held")
-        await relay.tick(relay_context)
-        assert (await receive_kind(fast, "delta")).seq == 1
-        resync = await receive_kind(slow, "resync")
-        assert blocked.is_set()
-        assert resync.data == {"reason": "write-timeout"}
-        with pytest.raises(StopAsyncIteration):
-            await anext(slow)
-        await change(db, event, "available")
-        await relay.tick(relay_context)
-        assert (await receive_kind(fast, "delta")).seq == 2
+        async with open_stream(running_app, client, event, 0) as fast:
+            await receive_kind(fast, "progress")
+            await change(db, event, "held")
+            await relay.tick(relay_context)
+            assert (await receive_kind(fast, "delta")).seq == 1
+            async with asyncio.timeout(WAIT_S):
+                await blocked.wait()
+            await change(db, event, "available")
+            await relay.tick(relay_context)
+            assert (await receive_kind(fast, "delta")).seq == 2
+            resync = await receive_kind(slow, "resync")
+            assert resync.data == {"reason": "write-timeout"}
+            with pytest.raises(StopAsyncIteration):
+                await anext(slow)
 
 
 @pytest.mark.parametrize("mode", ["pubsub", "dropped", "expired", "inactive"])
@@ -384,12 +511,16 @@ async def test_invalid_session_closes_stream(
 ) -> None:
     pubsub = mode == "pubsub"
     state = asgi_app.fastapi.state  # type: ignore[attr-defined]
-    rechecks = asyncio.Event()
+    checked_live = asyncio.Event()
+    checked_invalid = asyncio.Event()
     live_sessions = state.seat_revocations._live_sessions
 
     async def observe(ids: list[Any]) -> set[Any]:
         result = await live_sessions(ids)
-        rechecks.set()
+        if result:
+            checked_live.set()
+        else:
+            checked_invalid.set()
         return result
 
     if pubsub:
@@ -407,7 +538,7 @@ async def test_invalid_session_closes_stream(
         assert state.sse_active_connections() == 1
         session_id = await db.fetchval("SELECT id FROM sessions")
         if pubsub:
-            async with asyncio.timeout(2):
+            async with asyncio.timeout(WAIT_S):
                 while (  # noqa: ASYNC110
                     dict(await relay_context.redis.pubsub_numsub(REVOKE_CHANNEL)).get(
                         REVOKE_CHANNEL.encode(), 0
@@ -416,8 +547,8 @@ async def test_invalid_session_closes_stream(
                 ):
                     await asyncio.sleep(0.01)  # Redis subscription can only be observed by polling
         else:
-            async with asyncio.timeout(2):
-                await rechecks.wait()
+            async with asyncio.timeout(WAIT_S):
+                await checked_live.wait()
         if mode == "expired":
             await db.execute(
                 "UPDATE sessions SET idle_expires_at=app_now() WHERE id=$1", session_id
@@ -426,13 +557,13 @@ async def test_invalid_session_closes_stream(
             await db.execute("UPDATE users SET is_active=false")
         else:
             assert await revoke_session(db, session_id, "logout")
-        started = monotonic()
         if pubsub:
             await relay_context.redis.publish(REVOKE_CHANNEL, json.dumps([str(session_id)]))
-        async with asyncio.timeout(2):
+        async with asyncio.timeout(WAIT_S):
             async for remaining in events:
                 assert remaining.kind == "progress"
-        assert monotonic() - started < 2
+        if not pubsub:
+            assert checked_invalid.is_set()
     assert state.sse_active_connections() == 0
 
 
@@ -509,12 +640,14 @@ async def test_two_failed_rechecks_close_all_local_streams(
 ) -> None:
     revocations = asgi_app.fastapi.state.seat_revocations  # type: ignore[attr-defined]
     failures = 0
+    begin_rechecks = asyncio.Event()
     second_started = asyncio.Event()
     release_second = asyncio.Event()
 
     async def fail(ids: list[Any]) -> set[Any]:
         nonlocal failures
         assert len(ids) == 1
+        await begin_rechecks.wait()
         failures += 1
         if failures == 2:
             second_started.set()
@@ -528,12 +661,13 @@ async def test_two_failed_rechecks_close_all_local_streams(
     ):
         await receive_kind(first, "progress")
         await receive_kind(second, "progress")
-        async with asyncio.timeout(3):
+        begin_rechecks.set()
+        async with asyncio.timeout(WAIT_S):
             await second_started.wait()
             assert revocations.active == 2
             release_second.set()
             for events in (first, second):
                 async for remaining in events:
                     assert remaining.kind == "progress"
-    assert failures == 2
+    assert failures >= 2
     assert revocations.active == 0

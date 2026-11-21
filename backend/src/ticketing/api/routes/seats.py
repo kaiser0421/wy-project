@@ -118,7 +118,9 @@ async def get_seats(
         "The read-only SSE stream accepts the last **applied** sequence in `Last-Event-ID`. "
         "Start with a snapshot and send its `last_seq`. Omitting the header tails the live head. "
         "Registration captures a live head and replays through it before following new frames. "
-        "Reconnects may receive overlapping intervals. Apply only newer seat versions.\n\n"
+        "Delivery resumes at the next sequence and uses PostgreSQL when a ring frame is missing "
+        "or overlaps the cursor. Apply only newer seat versions. At process capacity, new event "
+        "IDs receive a retryable `503 server-busy`.\n\n"
         "- `delta`, with `id: <to>` and payload "
         '`{"from": 10, "to": 12, "changes": [[0, "held", 2]], "ts": "2026-11-21T00:00:00Z"}`. '
         "The inclusive range covers all coalesced outbox rows and `ts` is their earliest outbox "
@@ -129,7 +131,8 @@ async def get_seats(
         "If progress advances beyond the applied cursor for more than three seconds or the oldest "
         "unassigned change exceeds two seconds, show the state as stale.\n"
         '- `resync`, followed by EOF: `{"reason": "replay-unavailable"}`. '
-        "Fetch a new snapshot and reconnect. A stalled socket may close before the frame arrives.\n"
+        "This includes missing replay rows and replay capacity exhaustion. Fetch a new snapshot "
+        "and reconnect. A stalled socket may close before the frame arrives.\n"
         "- A heartbeat comment is sent every 15 seconds. Revoked sessions are disconnected. "
         "Bytes already handed to the transport can still arrive."
     ),
@@ -138,6 +141,10 @@ async def get_seats(
     response_model=None,
     responses={
         **_ERRORS,
+        503: {
+            **_ERRORS[503],
+            "description": "`server-busy` — database or event reader capacity. Retry shortly.",
+        },
         200: {
             "description": "Server-Sent Events with the frame formats described above.",
             "content": {"text/event-stream": {"schema": {"type": "string"}}},
