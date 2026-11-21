@@ -9,6 +9,8 @@ import math
 import multiprocessing
 import os
 import random
+import subprocess
+import sys
 from array import array
 from collections import Counter
 from collections.abc import AsyncIterator
@@ -28,16 +30,22 @@ import orjson
 from ticketing.realtime.client_model import SeatState, SequenceGap
 from ticketing.realtime.snapshot import STATUS_CHAR
 
-_CHAR_STATUS = {value: key for key, value in STATUS_CHAR.items()}
+_STATUS_CODE = {status: ord(char) for status, char in STATUS_CHAR.items()}
+_CHAR_CODE = {char: ord(char) for char in STATUS_CHAR.values()}
 
 
 @dataclass(slots=True)
 class Probe:
     applied: int
     layout_ver: int
-    seats: SeatState
+    layout: dict[int, int]
+    statuses: array[int]
+    versions: array[int]
     opened: bool = False
     last_progress_at: float | None = None
+
+    def fork(self) -> Probe:
+        return Probe(self.applied, self.layout_ver, self.layout, self.statuses[:], self.versions[:])
 
 
 @dataclass(slots=True)
@@ -114,10 +122,10 @@ async def events(
 
 
 @lru_cache(maxsize=128)
-def decode_delta(raw: str) -> tuple[int, int, float, list[tuple[int, tuple[str, int]]]]:
+def decode_delta(raw: str) -> tuple[int, int, float, list[tuple[int, int, int]]]:
     data = orjson.loads(raw)
     # Subscribers often receive the same frame. Reuse its immutable seat values.
-    changes = [(idx, (status, version)) for idx, status, version in data["changes"]]
+    changes = [(idx, _STATUS_CODE[status], version) for idx, status, version in data["changes"]]
     return data["from"], data["to"], datetime.fromisoformat(data["ts"]).timestamp(), changes
 
 
@@ -129,25 +137,34 @@ def apply_delta(probe: Probe, seq: int | None, raw: str) -> float | None:
         return None
     if first > probe.applied + 1:
         raise SequenceGap("Delta starts after the next expected sequence")
-    seats = probe.seats
-    for idx, value in changes:
-        previous = seats.get(idx)
-        if previous is None or value[1] > previous[1]:
-            seats[idx] = value
+    for idx, status, version in changes:
+        offset = probe.layout[idx]
+        if version > probe.versions[offset]:
+            probe.versions[offset] = version
+            probe.statuses[offset] = status
     probe.applied = last
     return created
 
 
-@lru_cache(maxsize=2)
-def decode_snapshot(raw: bytes) -> tuple[int, int, SeatState]:
+def decode_snapshot(raw: bytes, layouts: dict[int, dict[int, int]]) -> Probe:
     data = orjson.loads(raw)
-    seats = {
-        seat["idx"]: (_CHAR_STATUS[status], version)
-        for seat, status, version in zip(
-            data["seats"], data["status"], data["versions"], strict=True
-        )
-    }
-    return data["last_seq"], data["layout_ver"], seats
+    layout_ver = data["layout_ver"]
+    layout = layouts.get(layout_ver)
+    if layout is None:
+        layout = {seat["idx"]: offset for offset, seat in enumerate(data["seats"])}
+    if len(layout) != len(data["seats"]):
+        raise ValueError("Snapshot seat indices disagree with the layout")
+    statuses = array("b", [0]) * len(layout)
+    # Seat versions are PostgreSQL int columns.
+    versions = array("i", [0]) * len(layout)
+    for seat, status, version in zip(data["seats"], data["status"], data["versions"], strict=True):
+        offset = layout[seat["idx"]]
+        if statuses[offset]:
+            raise ValueError("Snapshot repeats a seat index")
+        statuses[offset] = _CHAR_CODE[status]
+        versions[offset] = version
+    layouts[layout_ver] = layout
+    return Probe(data["last_seq"], layout_ver, layout, statuses, versions)
 
 
 class Scenario:
@@ -157,6 +174,8 @@ class Scenario:
         self.slow_delay = args.slow_delay
         self.active = active
         self.metrics = Metrics()
+        self.layouts: dict[int, dict[int, int]] = {}
+        self.cached_snapshot: tuple[bytes, Probe] | None = None
 
     async def snapshot(self, client: httpx.AsyncClient, cookie: str, min_layout: int) -> Probe:
         loop = asyncio.get_running_loop()
@@ -167,12 +186,13 @@ class Scenario:
             params={"format": "compact", "min_layout_ver": min_layout},
         )
         response.raise_for_status()
-        head, version, seats = decode_snapshot(response.content)
-        if version < min_layout:
+        if self.cached_snapshot is None or self.cached_snapshot[0] != response.content:
+            self.cached_snapshot = response.content, decode_snapshot(response.content, self.layouts)
+        template = self.cached_snapshot[1]
+        if template.layout_ver < min_layout:
             raise SequenceGap("Layout snapshot is behind the requested version")
-        probe = Probe(head, version, seats.copy())
         record_latency(self.metrics.snapshot, loop.time() - started)
-        return probe
+        return template.fork()
 
     async def subscribe(
         self, client: httpx.AsyncClient, cookie: str, probe: Probe, delay: float
@@ -191,6 +211,8 @@ class Scenario:
             with self.active.get_lock():
                 self.active[0] += 1
                 self.active[1] = max(self.active[1], self.active[0])
+                if self.active[2] >= 0:
+                    self.active[2] = max(self.active[2], self.active[0])
             try:
                 async for kind, seq, raw in events(response, self.metrics):
                     if kind == "resync":
@@ -240,14 +262,16 @@ class Scenario:
                     snapshot = await self.snapshot(client, cookie, minimum)
                     probe.applied = snapshot.applied
                     probe.layout_ver = snapshot.layout_ver
-                    probe.seats = snapshot.seats
+                    probe.layout = snapshot.layout
+                    probe.statuses = snapshot.statuses
+                    probe.versions = snapshot.versions
                     minimum = None
                 minimum = await self.subscribe(
                     client, cookie, probe, self.slow_delay if slow else 0
                 )
             except SequenceGap:
                 self.metrics.total["gaps"] += 1
-            except (KeyError, ValueError):
+            except (KeyError, OverflowError, ValueError):
                 self.metrics.total["invalid_frames"] += 1
                 minimum = 0
             except httpx.HTTPStatusError as error:
@@ -275,6 +299,19 @@ class DatabaseState:
     layout_ver: int
     seats: SeatState
     archive_mismatches: int
+
+    def packed_seats(self, layout: dict[int, int]) -> tuple[array[int], array[int]] | None:
+        if len(self.seats) != len(layout):
+            return None
+        statuses = array("b", [0]) * len(layout)
+        versions = array("i", [0]) * len(layout)
+        for idx, (status, version) in self.seats.items():
+            offset = layout.get(idx)
+            if offset is None:
+                return None
+            statuses[offset] = _STATUS_CODE[status]
+            versions[offset] = version
+        return statuses, versions
 
     def digest(self) -> str:
         # Keep the report fingerprint compatible with previous runs.
@@ -368,7 +405,7 @@ async def measure_shard(
             index = shard + local_index * args.processes
             offset = args.ramp_seconds * index / args.connections
             await asyncio.sleep(max(0, started + offset - monotonic()))
-            probe = Probe(initial.applied, initial.layout_ver, initial.seats.copy())
+            probe = initial.fork()
             probes.append(probe)
             await scenario.run(clients[local_index // 64], token, probe, index % 10 == 0)
 
@@ -382,10 +419,12 @@ async def measure_shard(
             for task in tasks:
                 task.cancel()
 
+    layout = scenario.layouts.get(final.layout_ver)
+    expected = final.packed_seats(layout) if layout is not None else None
     matched = sum(
         probe.applied == final.head
         and probe.layout_ver == final.layout_ver
-        and probe.seats == final.seats
+        and (probe.statuses, probe.versions) == expected
         for probe in probes
     )
     return scenario.metrics, matched
@@ -427,9 +466,59 @@ async def drain(
         await conn.close()
 
 
+def run_writer(
+    args: argparse.Namespace, active: Any, channels: list[Connection], deadline: float
+) -> tuple[bool, int]:
+    with args.writer_log.open("w") as log:
+        while True:
+            with active.get_lock():
+                if active[0] == args.connections:
+                    break
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                print(
+                    f"Writer skipped: fewer than {args.connections} concurrent SSE connections",
+                    file=log,
+                )
+                return False, 0
+            if wait(channels, timeout=min(0.1, remaining)):
+                raise SystemExit("An SSE worker exited while waiting for connections")
+
+        command = [
+            sys.executable,
+            str(Path(__file__).with_name("scenario_b_writer.py")),
+            "write",
+            "--event-id",
+            str(args.event_id),
+            "--workers",
+            "4",
+            "--rate",
+            str(args.write_rate),
+            "--start-delay",
+            "0",
+            "--duration",
+            str(args.write_duration),
+        ]
+        with subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT) as writer:  # noqa: S603
+            with active.get_lock():
+                active[2] = active[0]
+            try:
+                while (status := writer.poll()) is None:
+                    if wait(channels, timeout=0.1):
+                        raise SystemExit("An SSE worker exited while the writer was running")
+            finally:
+                if writer.poll() is None:
+                    writer.kill()
+                with active.get_lock():
+                    peak = active[2]
+                    active[2] = -1
+    return status == 0, peak
+
+
 def run_scenario(args: argparse.Namespace, tokens: list[str]) -> bool:
     ctx = multiprocessing.get_context("spawn")
-    active = ctx.Array("i", [0, 0])  # Current and peak simultaneous connections across workers.
+    # Current, overall peak, and writer-window peak (-1 when the writer is inactive).
+    active = ctx.Array("i", [0, 0, -1])
     progress = ctx.Array("q", [-1] * args.processes)
     channels: list[Connection] = []
     processes = []
@@ -454,7 +543,11 @@ def run_scenario(args: argparse.Namespace, tokens: list[str]) -> bool:
         started = monotonic()
         for channel in channels:
             channel.send(started)
-        if wait(channels, timeout=max(0, started + args.duration - monotonic())):
+        deadline = started + args.duration
+        writer_ok, write_peak = True, None
+        if args.writer_log is not None:
+            writer_ok, write_peak = run_writer(args, active, channels, deadline)
+        if wait(channels, timeout=max(0, deadline - monotonic())):
             raise SystemExit("An SSE worker exited during the load phase")
         final = asyncio.run(drain(args, progress, channels))
         elapsed = monotonic() - started
@@ -478,6 +571,8 @@ def run_scenario(args: argparse.Namespace, tokens: list[str]) -> bool:
 
         peak = active[1]
         report = metrics.summary(elapsed, peak)
+        if write_peak is not None:
+            report["peak_active_during_writes"] = write_peak
         report.update(
             {
                 "target_connections": len(tokens),
@@ -491,7 +586,8 @@ def run_scenario(args: argparse.Namespace, tokens: list[str]) -> bool:
         )
         print(orjson.dumps(report, option=orjson.OPT_SORT_KEYS).decode())
         return (
-            matched == len(tokens)
+            writer_ok
+            and matched == len(tokens)
             and peak == len(tokens)
             and final.pending == final.archive_mismatches == 0
             and report["delta_apply_samples"] > 0
@@ -528,15 +624,22 @@ def main() -> None:
     parser.add_argument("--drain-timeout", type=float, default=10)
     parser.add_argument("--slow-delay", type=float, default=0.25)
     parser.add_argument("--cookie-name", choices=["sid", "__Host-sid"], default="sid")
+    parser.add_argument(
+        "--writer-log", type=Path, help="run the writer after all streams connect and log here"
+    )
+    parser.add_argument("--write-rate", type=float, default=100)
+    parser.add_argument("--write-duration", type=float, default=55)
     args = parser.parse_args()
     if (
         args.connections <= 0
         or args.processes <= 0
         or args.duration <= 0
+        or min(args.write_rate, args.write_duration) <= 0
         or min(args.drain_timeout, args.slow_delay, args.ramp_seconds) < 0
     ):
         parser.error(
-            "connections, processes and duration must be positive; delays must be nonnegative"
+            "connections, processes, durations and write rate must be positive;"
+            " delays must be nonnegative"
         )
     if "DATABASE_URL" not in os.environ:
         parser.error("Set DATABASE_URL for the final PostgreSQL audit")

@@ -6,7 +6,8 @@
 #   loadtest/run.sh b              # Scenario B only (2,000 SSE subscribers on one event)
 #   loadtest/run.sh smoke          # tiny version of both, to check the kit works (~3 minutes)
 #
-# Tunables: VUS, DURATION, SEATS, CONNECTIONS, B_DURATION, B_RATE, SSE_PROCESSES, SSE_RAMP, K6_CPUS, OUT
+# Tunables: API_REPLICAS, VUS, DURATION, SEATS, CONNECTIONS, B_DURATION, B_RATE,
+# SSE_PROCESSES, SSE_RAMP, K6_CPUS, OUT
 # B_RATE=300 runs the Scenario B stress variant.
 # Results are written to loadtest/out/<timestamp>/ and packed into loadtest/out/<timestamp>.tar.gz
 set -euo pipefail
@@ -28,6 +29,10 @@ VUS=${VUS:-3000}; DURATION=${DURATION:-60s}; SEATS=${SEATS:-10000}
 CONNECTIONS=${CONNECTIONS:-2000}; B_DURATION=${B_DURATION:-80}; B_RATE=${B_RATE:-100}
 SSE_PROCESSES=${SSE_PROCESSES:-}; SSE_RAMP=${SSE_RAMP:-10}
 K6_CPUS=${K6_CPUS:-}                   # e.g. K6_CPUS=2 to cap the generator
+if [[ -n ${API_REPLICAS:-} && ! $API_REPLICAS =~ ^[1-9][0-9]*$ ]]; then
+  echo "API_REPLICAS must be a positive integer" >&2
+  exit 2
+fi
 
 log() { printf '\n==> %s\n' "$*" | tee -a "$OUT/run.log"; }
 
@@ -57,9 +62,14 @@ environment() {
     if [[ -r /proc/cpuinfo ]]; then grep -m1 'model name' /proc/cpuinfo; grep MemTotal /proc/meminfo; fi
     docker info --format 'docker: {{.ServerVersion}} cpus={{.NCPU}} mem={{.MemTotal}} os={{.OperatingSystem}}'
     docker compose version
+    echo "API_REPLICAS=${API_REPLICAS:-unset} API_REPLICAS_RUNNING=$1"
     echo "VUS=$VUS DURATION=$DURATION SEATS=$SEATS CONNECTIONS=$CONNECTIONS B_DURATION=$B_DURATION B_RATE=$B_RATE"
     echo "SSE_PROCESSES=${SSE_PROCESSES:-auto} SSE_RAMP=$SSE_RAMP"
   } > "$OUT/environment.txt"
+}
+
+running_api_replicas() {
+  docker compose ps --status running -q api | awk 'NF {count++} END {print count+0}'
 }
 
 ready() { curl -fsS "http://127.0.0.1:${HTTP_PORT:-8080}/healthz/live" >/dev/null 2>&1; }
@@ -126,18 +136,17 @@ scenario_b() {
   local event_id
   event_id=$(grep -Eo '[Ee]vent[^0-9]*[0-9]+' "$OUT/b/seed.txt" | grep -Eo '[0-9]+' | tail -1)
   log "Scenario B: $CONNECTIONS subscribers for ${B_DURATION}s, writer at ${B_RATE} changes/s (event $event_id)"
-  py scenario_b_writer.py write --event-id "$event_id" --workers 4 --rate "$B_RATE" \
-    --start-delay 15 --duration $((B_DURATION - 25)) > "$OUT/b/writer.txt" 2>&1 &
-  local writer=$!
+  : > "$OUT/b/writer.txt"
   local -a sse_options=(--ramp-seconds "$SSE_RAMP")
   if [[ -n $SSE_PROCESSES ]]; then
     sse_options+=(--processes "$SSE_PROCESSES")
   fi
   py sse_client.py --base-url http://nginx:8080 --event-id "$event_id" \
     --sessions-file "$OUT_IN/b/sessions.json" --connections "$CONNECTIONS" \
-    --duration "$B_DURATION" --drain-timeout 20 "${sse_options[@]}" > "$OUT/b/sse-client.txt" 2>&1 \
-    || record_failure "Scenario B SSE client or audit failed (exit $?)"
-  wait "$writer" || record_failure "Scenario B writer failed (exit $?)"
+    --duration "$B_DURATION" --drain-timeout 20 --writer-log "$OUT_IN/b/writer.txt" \
+    --write-rate "$B_RATE" --write-duration "$((B_DURATION - 25))" \
+    "${sse_options[@]}" > "$OUT/b/sse-client.txt" 2>&1 \
+    || record_failure "Scenario B writer, SSE client or audit failed (exit $?)"
   tail -40 "$OUT/b/sse-client.txt" | tee -a "$OUT/run.log"
   tail -10 "$OUT/b/writer.txt" | tee -a "$OUT/run.log"
 }
@@ -148,8 +157,19 @@ bundle() {
   log "Results archive: $OUT.tar.gz"
 }
 
-environment
 ensure_stack
+running=$(running_api_replicas)
+if [[ -n ${API_REPLICAS:-} && $running != "$API_REPLICAS" ]]; then
+  log "Scaling API from $running to $API_REPLICAS replicas"
+  docker compose up -d --scale "api=$API_REPLICAS" --no-recreate --no-deps --wait api \
+    >> "$OUT/run.log" 2>&1
+  running=$(running_api_replicas)
+fi
+environment "$running"
+if [[ -n ${API_REPLICAS:-} && $running != "$API_REPLICAS" ]]; then
+  echo "Expected $API_REPLICAS running API replicas, found $running" >&2
+  exit 1
+fi
 case $MODE in
   a) scenario_a ;;
   b) scenario_b ;;
