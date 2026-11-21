@@ -9,6 +9,7 @@
 - [5. Excel 匯出](#5-excel-匯出)
 - [6. 一致性檢查](#6-一致性檢查)
 - [7. 瓶頸分析](#7-瓶頸分析)
+- [第 1 輪 → 發現 → 修正 → 第 2 輪](#第-1-輪--發現--修正--第-2-輪)
 - [8. 重現指令與產物](#8-重現指令與產物)
 
 ## 1. 測試機器與方法
@@ -16,40 +17,69 @@
 | 筆電試跑 | 桌機正式跑 |
 |---|---|
 | **CPU**　Intel MacBook，2 核心／4 執行緒。 | **CPU**　AMD Ryzen 5 5600，6 核心／12 執行緒。 |
-| **RAM／容器配額**　8 GB。Docker Desktop VM 4 CPU／5 GB（Excel 匯出紀錄）。 | **RAM／容器配額**　24 GB。Windows + WSL2 + Docker Desktop，WSL 實際可用的 CPU 與記憶體見 `environment.txt`。 |
-| **OS／版本**　macOS（Intel）。Excel 匯出日期為 2026-11-21（台北）。 | **OS／版本／日期／commit**　（待桌機壓測結果，填入 `environment.txt`） |
-| **拓樸**　筆電壓測的產壓程式、nginx、API、PostgreSQL 和其他服務共用宿主機。先前的 Scenario B 開發試跑使用單一 Uvicorn 和測試用 DB／Redis 容器，見 §3。 | **拓樸**　在另一台桌機執行 `loadtest/run.sh`。預設產壓端與整個 Compose stack 仍共用該機器。實際 CPU 限額與服務配置（待桌機壓測結果）。 |
+| **RAM／容器配額**　8 GB。Docker Desktop VM 4 CPU／5 GB（Excel 匯出紀錄）。 | **WSL2 配額**　12 個邏輯 CPU、約 16 GB RAM。 |
+| **OS／版本**　macOS（Intel）。Excel 匯出日期為 2026-11-21（台北）。 | **OS／版本**　Windows + WSL2、Docker Desktop（Engine 29.9.3、Compose v5.7.0）。 |
+| **拓樸**　筆電壓測的產壓程式、nginx、API、PostgreSQL 和其他服務共用宿主機。先前的 Scenario B 開發試跑使用單一 Uvicorn 和測試用 DB／Redis 容器，見 §3。 | **拓樸**　k6 0.57.0 與 Python SSE client 和服務共用桌機。3 個 API 副本，各跑 1 個 Uvicorn 程序，DB pool 上限各 10 條連線。見 `compose.yaml:23`、`compose.yaml:114`、`compose.yaml:120`、`backend/src/ticketing/api/main.py:39`、`loadtest/run.sh:116`。 |
+
+| 正式輪次 | 日期（台北） | 測試版本 | B 寫入目標 | 證據 |
+|---|---|---|---:|---|
+| 第 1 輪 | 2026-11-21 | `91b2345` | 300 changes/s | [環境](docs/evidence/loadtest-run1-20261121/environment.txt) · [原始輸出](docs/evidence/loadtest-run1-20261121/) |
+| 第 2 輪 | 2026-11-21 | `31d87c1` | 100 changes/s | [環境與映像 digest](docs/evidence/loadtest-run2-20261121/environment.txt) · [原始輸出](docs/evidence/loadtest-run2-20261121/) |
 
 `compose.yaml` 預設啟動三個 API 副本（各 512 MiB）與 PostgreSQL 16。宿主機 nginx 預設 `127.0.0.1:8080`，產壓容器走 Compose network 的 `http://nginx:8080`。A 使用 `grafana/k6:0.57.0`，B 的 writer 與 SSE probe 使用專案 API image 中的 Python。兩個情境各自建立活動。見 `compose.yaml:55`、`compose.yaml:120`、`compose.yaml:122`、`compose.yaml:227`、`loadtest/run.sh`。
 
 ## 2. Scenario A
 
-**參數與流量**　單一開賣活動 10,000 席、3,000 個 `constant-vus`，持續 60 秒。準備腳本以 `POST /api/v1/auth/login` 登入主辦人，透過 API 建立活動、匯入座位並發布，並直接在 PostgreSQL 建立每位買家的獨立 session。初始 idle 與 absolute deadline 均為 12 小時。正常登入的預設分別為 30 分鐘與 12 小時。每次購買抽 1–4 張，約 70% 指定席、30% 區域配位。成功後約 80% 模擬付款並輪詢訂單、10% 取消、10% 保留至期限，另抽約 2% 用原請求內容及 Idempotency-Key 驗證重放。重放遇 502／504 或 `503 server-busy` 時依 `Retry-After`（預設 1 秒）重送，合計最多 10 次嘗試。每筆有回覆的重放須符合原訂單，發起重放時至少一筆須驗證成功。觸及個人配額後，確認已有 4 張的 VU 切到查訂單。請求 timeout 5 秒，指定的可重試 409 最多重送兩次。見 `loadtest/prepare_a.py:56`、`loadtest/prepare_a.py:72`、`loadtest/prepare_a.py:110`、`backend/src/ticketing/core/settings.py:46`、`loadtest/scenario_a.js`。
+**參數與流量（第 2 輪腳本）**　單一開賣活動 10,000 席、3,000 個 `constant-vus`，持續 60 秒。準備腳本以 `POST /api/v1/auth/login` 登入主辦人，透過 API 建立活動、匯入座位並發布，並直接在 PostgreSQL 建立每位買家的獨立 session。初始 idle 與 absolute deadline 均為 12 小時。正常登入的預設分別為 30 分鐘與 12 小時。每次購買抽 1–4 張，約 70% 指定席、30% 區域配位。成功後約 80% 模擬付款並輪詢訂單、10% 取消、10% 保留至期限，另抽約 2% 用原請求內容及 Idempotency-Key 驗證重放。重放遇 502／504 或 `503 server-busy` 時依 `Retry-After`（預設 1 秒）重送，合計最多 10 次嘗試。每筆發起的重放均須收到回應並驗證為原訂單。觸及個人配額後，確認已有 4 張的 VU 切到查訂單。請求 timeout 5 秒，指定的可重試 409 最多重送兩次。見 `loadtest/prepare_a.py:56`、`loadtest/prepare_a.py:72`、`loadtest/prepare_a.py:110`、`backend/src/ticketing/core/settings.py:46`、`loadtest/scenario_a.js`。
 
-| 正式結果 | 數值 | 來源／口徑 |
+| 正式結果 | 第 1 輪 | 第 2 輪 |
 |---|---|---|
-| k6 總 RPS | （待桌機壓測結果） | `a/k6-summary.json` 的 `metrics.http_reqs.rate`。包含重試、付款與查詢。 |
-| k6 HTTP p50／p95／p99（ms） | （待桌機壓測結果） | `a/k6-summary.json` 的 `metrics.http_req_duration`，欄位為 `med`、`p(95)`、`p(99)`。 |
-| nginx HTTP p50／p95／p99（ms） | （待桌機壓測結果） | `a/nginx-access.json` 中帶本輪 run ID 的 `req_ms` 實為秒，乘 1,000 後對整輪樣本計算百分位數。nginx 與 k6 各有自己的樣本口徑。 |
-| 非預期錯誤率 | （待桌機壓測結果） | k6 `unexpected_errors`，例如逾時、未列入業務清單的 409、回應碼並非 `server-busy` 的 503。`http_req_failed` 將 409 視為預期回應，並計入 503。 |
-| 成功鎖位、業務衝突、過載 | （待桌機壓測結果） | k6 的 `successful_holds` 計新建鎖位，`business_conflicts` 計已知業務 409 和 `503 server-busy`，後者另由 `server_busy` 計數。用同輪 nginx 狀態碼交叉核對，分別記錄客戶端逾時與 nginx 在客戶端斷線時記錄的 499。 |
-| 訂單／座位最終狀態、SQL 違規列 | （待桌機壓測結果） | `a/final-state.txt`、`a/consistency.txt`，排空後重驗見 §6。 |
+| k6 HTTP 請求數／吞吐（含重試、付款、查詢） | 218,032／3,362 req/s | 134,801／2,098 req/s，全輪約 64 秒 |
+| k6 HTTP p50／p95／p99 | 157 ms／1.94 s／2.28 s | 1,043／2,036／2,263 ms |
+| k6 HTTP p90／max | — | 1,964／5,001 ms |
+| nginx HTTP p50／p95／p99 | — | 1.042／2.035／2.256 s |
+| k6 `server_busy`（全路徑） | 93,772 | 113,642（約 84%） |
+| nginx 建單路徑 503／409／201 | — | 99,864／12,494／4,610 |
+| 閘道與客戶端異常 | 104,136 筆立即回 502，access log 的 upstream 欄位只有群組名 `api`（沒有可用副本） | 502、500 各 0。k6 逾時 6 筆，nginx 均記為付款請求 499 |
+| k6 `unexpected_errors` | 106,186 筆（48.70%） | 6 筆（約 0.00445%） |
+| 成功鎖位 | k6 新建 4,228 筆，另有 8 筆成功重放，合計 4,236 筆建單 201 | k6 新建 4,538 筆。nginx 建單 201 共 4,610 筆，含 72 筆重放驗證回應 |
+| 冪等重放 | 68 筆中 60 筆遭拒（53 筆 503、7 筆 502），其餘 8 筆均回原訂單 | 發起 89 筆，72 筆收到回應且驗證正確（72/72）。17 筆用完 10 次嘗試仍遭拒 |
+| 正式判定 | **FAILED**。k6 非預期錯誤率與重放查核未達門檻，SQL 回報付款待辦滯留 | **FAILED**。`replay_unverified` 與 `unexpected_errors` 未達門檻。失敗項為過載拒絕與逾時，已收到的重放均正確 |
 
-**筆電壓測**　3,000 VUs 在 2 核心／4 執行緒機器上把 CPU 壓滿，產壓端與服務互相爭用。大多數請求快速收到 `503 server-busy`，或在客戶端 timeout。總吞吐約 **86–95 req/s**，SQL mean 約 **35–170 ms**，同機 CPU 競爭明顯。一致性檢查未發現超賣。筆電試跑僅有摘要。完整 k6 percentile、錯誤率與 SQL 輸出待桌機正式量測。
+吞吐與 k6 延遲取自 `http_reqs`、`http_req_duration`。nginx 延遲以 access log 的請求時間計算。第 1 輪 502 與重放拒絕的細項見 Git 紀錄 `b117cbb`、`d651c32`。[第 1 輪 k6](docs/evidence/loadtest-run1-20261121/a/k6-summary.json) · [第 2 輪 k6](docs/evidence/loadtest-run2-20261121/a/k6-summary.json) · [第 2 輪 nginx](docs/evidence/loadtest-run2-20261121/a/nginx-summary.txt)
+
+| 排空後狀態 | 第 1 輪 | 第 2 輪 |
+|---|---:|---:|
+| `pending_payment`（訂單／票） | 3,842／7,928 | 4,194／8,509 |
+| `paid`（訂單／票） | 320／584 | 263／488 |
+| `cancelled`（訂單／票） | 66／134 | 81／156 |
+| 座位 `available`／`held`／`sold` | 1,488／7,928／584 | 1,003／8,509／488 |
+| 占席（`held + sold`） | 8,512／10,000 | 8,997／10,000 |
+
+[第 1 輪最終狀態](docs/evidence/loadtest-run1-20261121/a/final-state.txt) · [第 2 輪最終狀態](docs/evidence/loadtest-run2-20261121/a/final-state.txt) · [一致性檢查](#6-一致性檢查)
+
+**筆電壓測**　3,000 VUs 在 2 核心／4 執行緒機器上把 CPU 壓滿，產壓端與服務互相爭用。大多數請求快速收到 `503 server-busy`，或在客戶端 timeout。總吞吐約 **86–95 req/s**，SQL mean 約 **35–170 ms**，同機 CPU 競爭明顯。一致性檢查未發現超賣。筆電試跑僅有摘要。
 
 ## 3. Scenario B
 
-**參數與流量**　對同一活動預建 2,000 個獨立 session。SSE client 依可見 CPU 數啟動最多 8 個程序，各自先取得一份起始快照，所有連線在前 10 秒均勻啟動，並維持每第十條為慢速讀取。Runner 最多等 80 秒達成 2,000 條同時連線，達標後由 4 個 writer worker 以總目標 100 seat changes/s 寫入 55 秒。至少量測 80 秒，並於 writer 結束後最多再等 20 秒排空。第 1 輪使用 `B_RATE=300`。各 writer worker 在不重疊的範圍切換座位狀態與版本，走正式 transactional outbox。累積量、速度、連線及最終比對都從工具實際輸出擷取。見 `loadtest/run.sh`、`loadtest/scenario_b_writer.py`、`loadtest/sse_client.py`。
+**參數與流量（第 2 輪腳本）**　對同一活動預建 2,000 個獨立 session。SSE client 依可見 CPU 數啟動最多 8 個程序，各自先取得一份起始快照，所有連線在前 10 秒均勻啟動，並維持每第十條為慢速讀取。Runner 最多等 80 秒達成 2,000 條同時連線，達標後由 4 個 writer worker 以總目標 100 seat changes/s 寫入 55 秒。至少量測 80 秒，並於 writer 結束後最多再等 20 秒排空。第 1 輪使用 `B_RATE=300`。各 writer worker 在不重疊的範圍切換座位狀態與版本，走正式 transactional outbox。累積量、速度、連線及最終比對都從工具實際輸出擷取。見 `loadtest/run.sh`、`loadtest/scenario_b_writer.py`、`loadtest/sse_client.py`。
 
-| 正式結果 | 數值 | 來源／口徑 |
-|---|---|---|
-| 全程／寫入期間同時 SSE 峰值及目標 | （待桌機壓測結果）／2,000 | `peak_active`、`peak_active_during_writes`、`target_connections`。寫入期間以 writer 程序的執行時間為準。 |
-| SSE 嘗試數／errors／錯誤率 | （待桌機壓測結果） | `stream_attempts`、`stream_request_errors`、`stream_error_rate`。分母為 SSE 嘗試數，含重連。 |
-| SSE 建連／快照 p50／p95／p99（ms） | （待桌機壓測結果） | 合併各程序的延遲分桶後計算 `connect_ms`、`snapshot_ms`，建連計時自發出 SSE 請求起算。 |
-| Delta 套用樣本數及 p50／p95／p99（ms） | （待桌機壓測結果） | `delta_apply_samples` 與 `delta_apply_ms`。延遲從合併 frame 內最早的 outbox `created_at` 計至 probe 套用，包含提交前剩餘時間。 |
-| Writer 變更數／changes/s；SSE bytes/s | （待桌機壓測結果） | `b/writer.txt` 的 `changes`、`changes_per_sec`，以及 `sse_body_bytes_per_second`。長連線持續流量用變更速率與 bytes/s 表示。 |
-| 斷層／resync／EOF | （待桌機壓測結果） | `b/sse-client.txt` 的 probe 計數。 |
-| 最終對上 DB 的 probe／outbox 待編序／archive 差異 | （待桌機壓測結果） | `matching_clients`、`outbox_pending`、`archive_mismatches`。 |
+| 正式結果 | 第 1 輪 | 第 2 輪 |
+|---|---:|---:|
+| SSE client 程序數 | 1 | 8 |
+| 同時 SSE 峰值（全程／寫入期間） | 2,000／— | 2,000／2,000 |
+| SSE 嘗試次數（含重連）／HTTP 錯誤數／錯誤率 | 9,673／937／9.69% | 14,800／32／0.22% |
+| 建連 p50／p95／p99（ms） | 7,474／26,176／54,324 | 784／4,830／11,100 |
+| 快照 p50／p95／p99（ms） | 63,995／73,733／75,981 | 978／7,540／7,810 |
+| Delta 套用 p50／p95／p99（ms） | 3,614／38,833／79,780 | 266／8,060／16,600 |
+| Delta 套用樣本 | 248,001 | 524,637 |
+| Writer 寫入變更數／實得 changes/s | 16,512／299.8 | 5,504／99.7 |
+| SSE payload 流量（MB/s） | 約 3.0 | 約 2.8 |
+| 進度停滯／斷層／resync | 6,064／6,064／1,111 | 12,540／12,540／228 |
+| 最終對上 DB 的 client | 1,326／2,000 | 2,000／2,000 |
+| `outbox_pending`／`archive_mismatches` | 0／0 | 0／0 |
+
+Delta 套用延遲從 frame 內最早的 outbox `created_at` 計至 client 套用，含提交前剩餘時間。SSE 錯誤率以含重連的嘗試數為分母。第 2 輪 client 偵測到進度停滯後主動重連，所有 client 最終收斂，尾端延遲仍高。見 `loadtest/sse_client.py:241`。[第 1 輪 SSE client](docs/evidence/loadtest-run1-20261121/b/sse-client.txt) · [第 1 輪 writer](docs/evidence/loadtest-run1-20261121/b/writer.txt) · [第 2 輪 SSE client](docs/evidence/loadtest-run2-20261121/b/sse-client.txt) · [第 2 輪 writer](docs/evidence/loadtest-run2-20261121/b/writer.txt)
 
 **開發試跑（macOS x86_64、單一 Uvicorn）**
 
@@ -58,7 +88,7 @@
 | 2,000 條同時發起、目標 300 changes/s | 86 | 13.5 | 無 delta 樣本 | 0/2,000 probes 相符。outbox 待編序 0、archive 差異 0。 |
 | 24 條、3 秒 ramp、目標 50 changes/s | 24 | 48.7 | 180／2,909／3,817 | 24/24 probes 相符。outbox 待編序 0、archive 差異 0。 |
 
-Burst 的 8,337 次串流嘗試包含 6,110 次 HTTP request errors，並出現 DB session 重驗 timeout。Paced run 的 115 次嘗試包含 10 次 request errors、81 次 EOF，無 gap／resync，全部 probe 最後收斂。兩輪都尚未驗證 2,000 條目標達成。見 [Scenario B 本機量測](loadtest/scenario_b.md#local-measurements)。
+Burst 的 8,337 次串流嘗試包含 6,110 次 HTTP request errors，並出現 DB session 重驗 timeout。Paced run 的 115 次嘗試包含 10 次 request errors、81 次 EOF，無 gap／resync，全部 probe 最後收斂。這兩次開發試跑都未達 2,000 條；正式桌機結果見上表。見 [Scenario B 本機量測](loadtest/scenario_b.md#local-measurements)。
 
 ## 4. 座位匯入
 
@@ -87,7 +117,7 @@ Burst 的 8,337 次串流嘗試包含 6,110 次 HTTP request errors，並出現 
 
 ## 6. 一致性檢查
 
-Scenario A 結束後腳本先等 90 秒，針對該活動執行 `loadtest/consistency.sql`，再列出訂單及座位狀態。預設 hold TTL 為 600 秒，90 秒時仍可能有有效的未付款鎖位。正式紀錄保留腳本原輸出，並於該活動的 hold 到期、worker 處理完付款待辦且 relay 排空後再執行一次。以執行成功且回傳零違規列為準。見 `loadtest/run.sh`、`compose.yaml:22`、`loadtest/consistency.sql:1`。
+Scenario A 結束後腳本先等 90 秒，針對該活動執行 `loadtest/consistency.sql`，再列出訂單及座位狀態。預設 hold TTL 為 600 秒，90 秒時仍可能有有效的未付款鎖位。正式紀錄保留腳本輸出。需要檢查 hold 到期後的狀態時，可在 worker 與 relay 處理完待辦後重驗。以執行成功且回傳零違規列為準。見 `loadtest/run.sh:125`、`compose.yaml:22`、`loadtest/consistency.sql:1`。
 
 | SQL 回報項 | 查核 |
 |---|---|
@@ -105,21 +135,38 @@ Scenario A 結束後腳本先等 90 秒，針對該活動執行 `loadtest/consis
 A 排空後重驗指令。將 `EVENT_ID` 設為 `a/event.json` 的活動 ID，`SEATS` 設為該輪預期庫存。
 
 ```bash
-docker compose exec -T postgres psql -U ticketing -d ticketing \
+docker compose exec -T postgres psql -XAt -U ticketing -d ticketing \
   -v event_id="${EVENT_ID:?set EVENT_ID}" -v expected_seats="${SEATS:-10000}" \
   -f - < loadtest/consistency.sql
 ```
 
-**正式 SQL 輸出（含活動 ID 與檢查時間）**　（待桌機壓測結果）
+| 正式輪次 | 活動 ID | 等待 90 秒後的 `consistency.sql` 原始輸出 |
+|---|---:|---|
+| 第 1 輪 | [3](docs/evidence/loadtest-run1-20261121/a/event.json) | [205 列](docs/evidence/loadtest-run1-20261121/a/consistency.txt)，全為 `attempt_stalled`。該輪查核未發現超賣、配額、金額或帳本違規。 |
+| 第 2 輪 | [5](docs/evidence/loadtest-run2-20261121/a/event.json) | [空檔（0 列）](docs/evidence/loadtest-run2-20261121/a/consistency.txt)，含 `attempt_stalled` 在內的查核均未回報違規。 |
+
+兩輪均守住庫存、配額、金額與帳本約束。
 
 ## 7. 瓶頸分析
 
 | 情境 | 觀察與正式量測判讀 |
 |---|---|
 | A 筆電壓測 | 筆電 CPU 飽和，k6 與 nginx、API、PostgreSQL 等服務共享 CPU。SQL mean 上升，503 和 timeout 主導結果。程式在 pool acquire、鎖及查詢逾時時會提早回可重試 503。試跑的總 RPS 反映這台機器上的混合結果。見 `backend/src/ticketing/core/db.py:39`、`backend/src/ticketing/booking/database.py:15`。 |
-| A 桌機待驗證 | 預期受 CPU、DB pool 等待、熱座位及同使用者配額鎖、付款回呼和 DB I/O 影響。比對同一時段的 k6、nginx、App／業務每秒資料、每容器 CPU 與 PostgreSQL wait。將成功 hold、業務 409 與 503 分開看。 |
-| B 開發試跑與待驗證 | Burst 已出現 session DB 重驗 timeout。正式跑應對照連線建立、各副本連線分布、DB pool、relay backlog、重連、delta apply 與最終 probe 數。共享 reader 把 PG polling 按活動攤銷，SSE fan-out、連線傳輸及重新驗證仍需資源。見 `backend/src/ticketing/realtime/reader.py:161`、`backend/src/ticketing/realtime/revocation.py:88`。 |
+| A 桌機 | 第 2 輪 p50 約 1 秒，與連線池取用上限相符。滿載請求等待 DB pool，取用逾時即回可重試的 503。壓測期間 `docker stats` 顯示 3 個單程序 API 副本各約 105% CPU（各用滿 1 核心），PostgreSQL 約 155%、k6 約 125%（主機 12 執行緒），API 程序 CPU 是主要瓶頸，PostgreSQL 仍有餘裕。管理後台截圖可見 HTTP 流量、延遲、錯誤率與連線數。見 `backend/src/ticketing/core/settings.py:34`、`backend/src/ticketing/core/db.py:48`。[第 2 輪秒級監控](docs/evidence/loadtest-run2-20261121/a/metrics_1s.csv) · [壓測中監控畫面](docs/screenshots/11-monitoring-under-load.png) |
+| B 桌機 | 第 1 輪單程序 client 飽和，服務端 session 重驗失敗也造成整批斷線。第 2 輪仍有進度停滯觸發重連，但最終全部對上 DB，outbox 待編序與 archive 差異均為 0。見 `backend/src/ticketing/realtime/reader.py:161`、`backend/src/ticketing/realtime/revocation.py:101`。[第 1 輪 SSE client](docs/evidence/loadtest-run1-20261121/b/sse-client.txt) · [第 2 輪 SSE client](docs/evidence/loadtest-run2-20261121/b/sse-client.txt) |
 | 座位匯入／Excel 匯出 | 匯入計時含背景作業與回報。Excel 在同機實測已完成，`memory.current` 的峰值接近上限，同時可見大量可回收 page cache。更高磁碟 I/O 或與其他流量共用資源時的影響尚待量測。 |
+
+擴容可調高 Compose 的 `API_REPLICAS`、調整 API 啟動方式以增加每副本的 Uvicorn worker 數，或將產壓端移到另一台機器。增加 API 程序時需一併核算各程序的連線池。見 `compose.yaml:23`、`compose.yaml:120`、`backend/src/ticketing/api/main.py:39`、`loadtest/run.sh:222`。
+
+## 第 1 輪 → 發現 → 修正 → 第 2 輪
+
+| 第 1 輪發現 | 修正（Git commit） | 第 2 輪觀察 |
+|---|---|---|
+| A 過載期間，nginx 預設 `max_fails` 將 3 個 API 副本全部暫時移出 upstream，回出大量立即 502。 | `b117cbb` 設 `max_fails=0`，nginx upstream keepalive 縮至 60 秒，早於 API 的 Uvicorn 75 秒。`654e775` 對齊 paymock 的 Uvicorn 設定。 | 502 為 0，過載主要回 503。 |
+| A 的付款 reconciler 來不及輪詢，SQL 回報 `attempt_stalled`。 | `b117cbb`、`a6fc12d`、`654e775` 重設各階段預算與領取批次。`b159b0e` 在逾時或關停時交還未完成的工作。 | `attempt_stalled` 為 0。 |
+| A 的重放受過載拒絕，收到回應的重放均正確。 | `d651c32` 依 `Retry-After` 重試，`593316c` 加入重放驗證與進度計數，`b159b0e` 要求每筆重放均須驗證。 | 仍有重放在重試後遭拒，k6 判定 **FAILED**。 |
+| B 單程序 client 飽和，副本的 session 重驗在 0.2 秒取連線／0.3 秒查詢預算下連續失敗 2 次即關閉串流。 | `8276c17`、`0c5c3a7` 分流及精簡 client 狀態，第 2 輪實際用 8 程序、10 秒爬升。`ea3f0cc` 將重驗取連線與查詢預算各調為 1 秒，連續失敗 5 次才關閉。`9a6deb3` 記錄寫入目標由 300 調至 100 changes/s。 | 峰值及最終 DB 比對均達 2,000。兩輪寫入速率不同。 |
+| 冷啟動試跑曾出現 DB timeout 造成的 500，服務映像及資源設定也需更新。 | `a31d86a`、`654e775` 將 DB timeout 映射為可重試 503，`b159b0e`、`ea3f0cc` 調整連線釋放。`2b3c0d1`、`b159b0e` 更新映像，`73221cd` 設容器記憶體上限及日誌輪替，`7ff3b9a` 記錄運行映像 digest。 | A 的 500 為 0，運行映像可由 [環境紀錄](docs/evidence/loadtest-run2-20261121/environment.txt) 追溯。 |
 
 ## 8. 重現指令與產物
 

@@ -131,7 +131,16 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 
 **驗證**　`test_concurrent_writers_preserve_per_seat_order`、`test_two_relays_only_one_active`、`test_snapshot_and_delta_resume_end_to_end`、`test_replay_recovers_from_ring_eviction_or_resyncs`、`test_slow_connection_resyncs_and_fast_peer_keeps_receiving`。見 `backend/tests/realtime/test_relay.py:15`、`backend/tests/realtime/test_relay.py:103`、`backend/tests/realtime/test_api.py:248`、`backend/tests/realtime/test_api.py:362`、`backend/tests/realtime/test_api.py:474`。
 
-**證據**　正式 Scenario B（待桌機壓測結果）。先前 macOS x86_64 本機單一 Uvicorn 的 2,000 連線 burst 峰值 86 條，writer 達 13.5 changes/s，沒有 delta latency 樣本，0/2,000 probe 對上 DB。24 條連線的 paced run 全部對上 DB，實得 48.7 changes/s，apply p50/p95/p99 為 180/2,909/3,817 ms。見 [本機 Scenario B 紀錄](loadtest/scenario_b.md#local-measurements)與 [LOADTEST.md](LOADTEST.md)。
+**正式 Scenario B 實測**
+
+| 指標 | 第 1 輪（目標 300 changes/s） | 第 2 輪（目標 100 changes/s） |
+|---|---:|---:|
+| 同時 SSE 峰值 | 2,000 | 2,000，寫入期間峰值亦為 2,000 |
+| 最終與 PostgreSQL 相符 | 1,326／2,000 | 2,000／2,000 |
+| Delta 套用 p50／p95／p99（ms） | 3,614／38,833／79,780 | 266／8,060／16,600 |
+| outbox 待編序／archive 差異 | 0／0 | 0／0 |
+
+第 2 輪 writer 實得 99.7 changes/s。client 偵測進度停滯後重連，最終全部追上 DB。[第 1 輪 SSE client](docs/evidence/loadtest-run1-20261121/b/sse-client.txt) · [第 2 輪 SSE client](docs/evidence/loadtest-run2-20261121/b/sse-client.txt) · [第 2 輪 writer](docs/evidence/loadtest-run2-20261121/b/writer.txt) · [完整結果](LOADTEST.md#3-scenario-b)
 
 ## Q5 權限與憑證失效
 
@@ -140,7 +149,8 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 **機制與流程**
 
 - **撤銷**　登出寫 `revoked_at` 再清 cookie。Admin 修改角色或啟用狀態時在同一交易更新 user、撤銷其現有 sessions。訂票交易依 `users → sessions` 順序取 `FOR SHARE` 並重驗。撤銷提交後的 Redis pub/sub 用於關閉座位 SSE。若通知遺失，座位 SSE 每個副本約每秒批次檢查已連線的 distinct session IDs，被撤銷者在下一輪（約 1 秒）關閉。檢查本身連續失敗 5 次才關閉該副本全部座位串流：健康時每輪約 1 秒；DB 劣化時每輪可能耗到取連線與查詢各 1 秒的上限，5 次約 10–15 秒。原本 2 次（0.2 s／0.3 s）在 2,000 條 SSE 的壓測下造成整批斷線與重連風暴，因此放寬。Pub/Sub 正常時撤銷仍立即生效；事件迴圈停頓時無固定上限。Admin 監控與匯入進度串流每輪另讀 session。見 `backend/src/ticketing/api/routes/auth.py:265`、`backend/src/ticketing/api/routes/admin_users.py:221`、`backend/src/ticketing/api/routes/admin_users.py:240`、`backend/src/ticketing/auth/sessions.py:111`、`backend/src/ticketing/realtime/revocation.py:96`、`backend/src/ticketing/api/routes/monitoring.py:362`、`backend/src/ticketing/api/routes/imports.py:169`。
-- **每請求成本**　一次 token hash、一次 DB pool acquire 與一次按唯一 `sessions.token_hash` 查 session、JOIN user，判斷撤銷、啟用、角色及有效期。idle 續期合併後批次更新，SQL 不會復活撤銷或過期的 session。訂票另有交易內兩次鎖定查詢。以有效 cookie 重放 `GET /api/v1/auth/me`，在 API 量測 `resolve_principal` 中 acquire wait 與 `authenticate` 單獨的 latency p50/p95/p99，分低負載與 A 負載時段並記錄錯誤數。可用 `EXPLAIN (ANALYZE, BUFFERS)` 驗證查詢 plan，SQL 時間與端到端時間分開報告。閒置堆疊實測：經 nginx 依序各 1,000 次，`GET /api/v1/auth/me` p50/p95/p99 為 10.89/25.38/35.78 ms，不查 session 的 `GET /healthz/live` 為 7.03/18.85/34.07 ms，中位數差約 3.9 ms，0 錯誤；`EXPLAIN ANALYZE` 顯示走 `sessions_token_hash_key`，索引查詢約 0.17 ms。高負載時的主要成本是等待連線池，於正式 A 結果中觀察。見 [session 驗證成本紀錄](docs/evidence/session-auth-cost.md)。見 `backend/src/ticketing/api/security.py:99`、`backend/src/ticketing/auth/sessions.py:38`、`backend/src/ticketing/auth/sessions.py:50`、`backend/src/ticketing/auth/sessions.py:190`、`backend/migrations/versions/0001_baseline.py:69`。
+- **每請求成本**　一次 token hash、一次 DB pool acquire 與一次按唯一 `sessions.token_hash` 查 session、JOIN user，判斷撤銷、啟用、角色及有效期。idle 續期合併後批次更新，SQL 不會復活撤銷或過期的 session。訂票另有交易內兩次鎖定查詢。以有效 cookie 重放 `GET /api/v1/auth/me`，在 API 量測 `resolve_principal` 中 acquire wait 與 `authenticate` 單獨的 latency p50/p95/p99，分低負載與 A 負載時段並記錄錯誤數。可用 `EXPLAIN (ANALYZE, BUFFERS)` 驗證查詢 plan，SQL 時間與端到端時間分開報告。閒置堆疊實測：經 nginx 依序各 1,000 次，`GET /api/v1/auth/me` p50/p95/p99 為 10.89/25.38/35.78 ms，不查 session 的 `GET /healthz/live` 為 7.03/18.85/34.07 ms，中位數差約 3.9 ms，0 錯誤；`EXPLAIN ANALYZE` 顯示走 `sessions_token_hash_key`，索引查詢約 0.17 ms。見 `backend/src/ticketing/api/security.py:104`、`backend/src/ticketing/auth/sessions.py:38`、`backend/src/ticketing/auth/sessions.py:50`、`backend/src/ticketing/auth/sessions.py:190`、`backend/migrations/versions/0001_baseline.py:69`。[session 驗證成本紀錄](docs/evidence/session-auth-cost.md)
+- **高負載連線池等待**　第 2 輪 Scenario A 的整輪 HTTP p50 為 1,043 ms，並收到 113,642 筆 `server-busy`。延遲與 1 秒的連線池取用上限相符。受保護請求在驗證 session 前也須取用連線，取用逾時即回可重試的 503。此處量測涵蓋整輪混合流量，供判讀過載時的等待成本。見 `backend/src/ticketing/api/security.py:104`、`backend/src/ticketing/core/settings.py:34`、`backend/src/ticketing/core/db.py:48`。[第 2 輪 k6](docs/evidence/loadtest-run2-20261121/a/k6-summary.json) · [瓶頸分析](LOADTEST.md#7-瓶頸分析)
 - **匯入中停用建立者**　worker 每批檢查 `is_active`。finalize 在 DB 交易鎖住 creator、event 並驗證 fence 後，依當下角色、所有權與活動狀態決定能否套用。若停用已先提交，job 結束為 `cancelled`、原因 `creator_disabled`，只清理 staging。若 finalize 先鎖住並提交，之後的停用不回滾已匯入資料。這使正式座位的寫入與當時的有效權限一致。見 `backend/src/ticketing/imports/runner.py:125`、`backend/src/ticketing/imports/runner.py:170`、`backend/src/ticketing/imports/runner.py:279`。
 
 **驗證**　route introspection 巡覽所有已註冊的 API route，檢查 endpoint 宣告的 policy metadata，依 HTTP method 與完整路徑比對 public allowlist。另驗證缺少 policy 或繞過 SecureRouter 註冊的行為會遭拒。OpenAPI 測試逐 operation 核對 security 與錯誤契約，並比對匯出的 JSON。Runtime 整合測試驗證指定路由的角色與物件權限，其中匯入測試涵蓋上傳、查詢、進度串流與錯誤檔下載。最容易漏掉的是 `GET /api/v1/seat-imports/{job_id}/errors.csv`。URL 只有 job UUID，下載內容有原始欄位與錯誤資訊，因此先 JOIN parent event，以 Admin 或活動 owner 身分完成授權，才讀取錯誤列與建立下載檔。見 `backend/tests/authz/test_route_policies.py:52`、`backend/tests/authz/test_route_policies.py:75`、`backend/tests/authz/test_route_policies.py:93`、`backend/tests/authz/test_route_policies.py:102`、`backend/tests/authz/test_openapi.py:22`、`backend/tests/authz/test_openapi.py:76`、`backend/tests/imports/test_imports.py:70`、`backend/src/ticketing/api/routes/imports.py:256`、`backend/src/ticketing/imports/jobs.py:64`。
@@ -189,7 +199,7 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 | 主張 | 入口 |
 |---|---|
 | Q1–Q3 座位、期限、付款、配額與冪等不變式 | PostgreSQL 整合與併發測試（`backend/tests/booking/`、`backend/tests/payments/`）、[破壞驗證](docs/evidence/break-it.txt)、[壓測後 SQL](loadtest/consistency.sql)。 |
-| Q4 跨 reader 序列一致、斷線可補送、慢客戶端隔離 | `backend/tests/realtime/`、[Scenario B 本機紀錄](loadtest/scenario_b.md#local-measurements)、[正式結果欄位](LOADTEST.md#3-scenario-b)。 |
+| Q4 跨 reader 序列一致、斷線可補送、慢客戶端隔離 | `backend/tests/realtime/`、[Scenario B 本機紀錄](loadtest/scenario_b.md#local-measurements)、[正式 Scenario B 結果](LOADTEST.md#3-scenario-b)。 |
 | Q5 授權、cookie 撤銷、匯入取消 | `backend/tests/authz/`、`backend/tests/integration/test_auth.py`、`backend/tests/integration/test_admin_users.py`、`backend/tests/imports/test_imports.py`。 |
 | Q6 分桶、去重、延遲與告警 | `backend/tests/telemetry/`、`backend/tests/realtime/test_api.py:681`。 |
 | 完整測試與端到端驗證 | `make test` 經 `compose.test.yaml` 跑 PostgreSQL 整合與前端測試（`Makefile:22`、`compose.test.yaml:6`）。`scripts/e2e_flow.py` 走匯入、發布、鎖位與模擬付款（`scripts/e2e_flow.py:91`、`scripts/e2e_flow.py:140`）。 |

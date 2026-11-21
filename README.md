@@ -116,6 +116,8 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 併發測試包含指定座位、區域配位與同一使用者的限購競爭。破壞驗證會抓到同一座位有多筆 active claim。見 `backend/tests/booking/test_booking.py:46`、`backend/tests/booking/test_booking.py:67`、`backend/tests/booking/test_booking.py:91`、`backend/tests/booking/test_booking.py:106`、[破壞驗證輸出](docs/evidence/break-it.txt)。
 
 - 壓測以 `loadtest/run.sh smoke` 試跑，以 `loadtest/run.sh all` 執行情境 A（10,000 席、3,000 VUs、60 秒及一致性檢查）與 B（2,000 條 SSE）。見 `loadtest/run.sh:21`。參數與輸出格式見 [壓測工具包](loadtest/README.md)，報告見 [LOADTEST.md](LOADTEST.md)。
+- **正式 Scenario A**。第 2 輪共 134,801 次 HTTP 請求、2,098 req/s，k6 p50／p95 為 1,043／2,036 ms，排空後占席 8,997／10,000。兩輪均未超賣，第 2 輪一致性 SQL 回傳 0 列。[第 1 輪證據](docs/evidence/loadtest-run1-20261121/) · [第 2 輪證據](docs/evidence/loadtest-run2-20261121/) · [一致性檢查](LOADTEST.md#6-一致性檢查)
+- **正式 Scenario B**。第 2 輪目標 100 changes/s，寫入期間同時 SSE 峰值 2,000，最終 2,000／2,000 個 client 與 DB 相符。[SSE 原始輸出](docs/evidence/loadtest-run2-20261121/b/sse-client.txt) · [壓測中管理後台監控](docs/screenshots/11-monitoring-under-load.png)
 - 匯入 10,000 列的 API 實測為 3.3 秒。100,000 列從上傳到完成，CSV 11.38 秒、JSON 13.46 秒（開發筆電，門檻 60 秒，`test_import_100k_under_60s`）。見 [10 萬列匯入實測](docs/evidence/import-100k.md)、`backend/tests/imports/test_import_perf.py:16`。
 - 在 512 MiB 上限的 API 容器匯出 500,000 筆訂單，首次下載完成為 217.3 秒，`anon` 取樣峰值約 108 MiB，三個副本均無 OOM。見 [Excel 匯出實測紀錄](docs/evidence/cp4-excel-500k.md)。
 
@@ -159,7 +161,8 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 
 ## 已知問題與未完成項目
 
-- **正式情境 A／B（待桌機壓測結果）**。待以 `loadtest/run.sh all` 補齊正式 RPS、p50／p95／p99、錯誤率、SSE 套用延遲與壓測後一致性結果。
+- **正式 Scenario A 過載**。第 2 輪 k6 正式判定 **FAILED**，17 筆重放重試後仍遭拒，另有 6 筆付款請求逾時。收到回應的 72 筆重放均正確，約 84% 的 HTTP 請求回 `503 server-busy`。[k6 原始輸出](docs/evidence/loadtest-run2-20261121/a/k6-summary.json) · [nginx 狀態摘要](docs/evidence/loadtest-run2-20261121/a/nginx-summary.txt)
+- **正式 Scenario B 重連與尾端延遲**。第 2 輪所有 client 最終與 DB 相符，壓測 client 仍頻繁因進度停滯而重連，delta 套用 p99 為 16,600 ms。[正式結果](LOADTEST.md#3-scenario-b)
 - **筆電壓測**。在 2 核心／4 執行緒的 MacBook 上，3,000 VUs 與服務同機造成 CPU 飽和。多數請求收到快速的 `503 server-busy` 或 client timeout，約 86–95 req/s，SQL 平均耗時受競爭影響約 35–170 ms。該次一致性檢查未發現超賣。
 - **大型 Excel 匯出耗時**。兩次下載約 217–237 秒，nginx 報表路徑的讀取逾時為 300 秒。見 `infra/nginx/nginx.conf:151`、[Excel 匯出實測紀錄](docs/evidence/cp4-excel-500k.md)。
 - **固定 Docker 子網**。Compose 網路使用 `172.28.0.0/24`，nginx 固定在 `172.28.0.200`，讓 API 只信任 nginx 轉送的 client IP。若本機已有網路使用同一段位址，`docker compose up` 會回報 `Pool overlaps with other one on this address space`，需先移除該網路（例如舊的堆疊執行 `docker compose down`）。見 `compose.yaml:10`、`compose.yaml:224`、`compose.yaml:244`。
