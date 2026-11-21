@@ -13,6 +13,7 @@ def _prod(**overrides: object) -> Settings:
         "app_env": "production",
         "secret_key": STRONG,
         "payment_webhook_secret": STRONG,
+        "payment_provider_token": SecretStr("y" * 48),
         "seed_admin_password": SecretStr("A-strong-admin-password-1"),
         "seed_user_password": SecretStr("A-strong-user-password-1"),
         "seed_viewer_password": SecretStr("A-strong-viewer-password-1"),
@@ -37,6 +38,13 @@ def test_production_with_safe_values_is_accepted() -> None:
     [
         ("secret_key", SecretStr("dev-insecure-change-me"), "SECRET_KEY"),
         ("payment_webhook_secret", SecretStr(""), "PAYMENT_WEBHOOK_SECRET"),
+        (
+            "payment_provider_token",
+            SecretStr("dev-provider-token-change-me"),
+            "PAYMENT_PROVIDER_TOKEN",
+        ),
+        ("payment_provider_token", SecretStr(""), "PAYMENT_PROVIDER_TOKEN"),
+        ("payment_provider_token", STRONG, "PAYMENT_PROVIDER_TOKEN"),
         ("seed_admin_password", SecretStr("Admin#Dev2026!"), "SEED_ADMIN_PASSWORD"),
         ("enable_test_hooks", True, "ENABLE_TEST_HOOKS"),
         ("cookie_secure", False, "COOKIE_SECURE"),

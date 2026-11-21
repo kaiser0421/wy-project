@@ -9,6 +9,7 @@ from fastapi import Depends, Header, Path, Query, Request, Response
 
 from ticketing.api.security import Authenticated, Principal, SecureRouter, current_principal
 from ticketing.core.errors import PROBLEM_CONTENT_TYPE, ProblemError, server_busy
+from ticketing.events.access import EventActor
 from ticketing.realtime.snapshot import (
     CompactSnapshot,
     FullSnapshot,
@@ -41,7 +42,7 @@ _ERRORS = {
     )
 }
 _VISIBILITY = (
-    "Any authenticated role may read a published event. Drafts are visible to the owner "
+    "Any authenticated role may read a published event. Drafts are visible to User-role owners "
     "and administrators. Missing and hidden events return 404."
 )
 _DB_UNAVAILABLE = (
@@ -94,8 +95,7 @@ async def get_seats(
             state.db,
             state.settings.db_pool_acquire_timeout_s,
             event_id,
-            principal.user_id,
-            principal.is_admin,
+            EventActor(principal.user_id, principal.role),
         )
         snapshot = await cache.get(event_id, min_layout_ver)
     except _DB_UNAVAILABLE as exc:
@@ -174,8 +174,7 @@ async def seat_stream(
             state.db,
             state.settings.db_pool_acquire_timeout_s,
             event_id,
-            principal.user_id,
-            principal.is_admin,
+            EventActor(principal.user_id, principal.role),
         )
     except _DB_UNAVAILABLE as exc:
         raise server_busy() from exc

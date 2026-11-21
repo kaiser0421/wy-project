@@ -16,16 +16,6 @@ class ProviderUnavailable(Exception):
     """The provider outcome is unknown. Recovery must reuse the merchant identifier."""
 
 
-def _intent_key_reused(response: httpx.Response) -> bool:
-    if response.status_code != 409:
-        return False
-    try:
-        problem = response.json()
-    except ValueError:
-        return False
-    return isinstance(problem, dict) and problem.get("code") == "intent-key-reused"
-
-
 class Intent(BaseModel):
     intent_id: UUID | None
     merchant_payment_id: UUID
@@ -50,10 +40,16 @@ class Provider:
         self.settings = settings
 
     async def _request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+        token = self.settings.payment_provider_token.get_secret_value()
         try:
             # A total deadline also bounds slow streaming reads, which httpx times individually.
             async with asyncio.timeout(5):
-                response = await self.http.request(method, path, json=kwargs or None)
+                response = await self.http.request(
+                    method,
+                    path,
+                    json=kwargs or None,
+                    headers={"X-Payment-Provider-Token": token},
+                )
             response.raise_for_status()
         except (httpx.HTTPError, TimeoutError) as exc:
             raise ProviderUnavailable from exc
@@ -92,13 +88,9 @@ class Provider:
                 amount_twd=amount,
                 currency="TWD",
                 expires_at=expires_at.isoformat(),
-                callback_url=self.settings.payment_callback_url,
             )
         except ProviderUnavailable as exc:
             cause = exc.__cause__
-            if isinstance(cause, httpx.HTTPStatusError) and _intent_key_reused(cause.response):
-                # A lost create response can predate a callback URL configuration change.
-                return await self.poll(merchant_id)
             if isinstance(cause, httpx.HTTPStatusError) and cause.response.status_code == 402:
                 # A definitive create rejection can safely free the chargeable slot.
                 return Intent(

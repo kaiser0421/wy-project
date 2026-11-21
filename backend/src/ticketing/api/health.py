@@ -3,30 +3,59 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Literal
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from ticketing.api.security import Public, SecureRouter
+from ticketing.core.db import acquire
 from ticketing.core.schema import SCHEMA_HEAD
 
 router = SecureRouter(prefix="/healthz", tags=["health"])
 
 
-@router.get("/live", policy=Public("health"), summary="Liveness probe")
-async def live() -> dict[str, str]:
-    return {"status": "ok"}
+class LiveResult(BaseModel):
+    status: Literal["ok"] = Field(default="ok", description="API is running.", examples=["ok"])
+
+
+class ReadyResult(BaseModel):
+    status: Literal["ready", "not-ready"] = Field(
+        description="Machine-readable readiness result.", examples=["ready"]
+    )
+    checks: dict[str, str | bool | None] = Field(
+        description="Dependency check outcomes, deployed schema revision and any drain flag.",
+        examples=[{"postgres": "ok", "schema": SCHEMA_HEAD, "redis": "ok"}],
+    )
+
+
+@router.get(
+    "/live",
+    policy=Public("health"),
+    summary="Liveness probe",
+    description="Anyone can safely retry this process liveness check.",
+    response_model=LiveResult,
+    responses={},
+)
+async def live() -> LiveResult:
+    return LiveResult()
 
 
 @router.get(
     "/ready",
     policy=Public("health"),
-    summary="Readiness probe (PostgreSQL, Redis, schema revision, draining)",
+    summary="Readiness probe",
+    description=(
+        "Anyone on the service network can safely retry this probe of PostgreSQL, Redis, the "
+        "schema revision and drain status. Each check has a bounded wait."
+    ),
+    response_model=ReadyResult,
+    responses={503: {"model": ReadyResult, "description": "not-ready"}},
 )
 async def ready(request: Request) -> JSONResponse:
     state = request.app.state
-    checks: dict[str, Any] = {}
+    checks: dict[str, str | bool | None] = {}
     ok = True
 
     if getattr(state, "draining", False):
@@ -35,7 +64,8 @@ async def ready(request: Request) -> JSONResponse:
 
     try:
         async with asyncio.timeout(1.0):
-            version = await state.db.fetchval("SELECT version_num FROM alembic_version")
+            async with acquire(state.db, state.settings.db_pool_acquire_timeout_s) as conn:
+                version = await conn.fetchval("SELECT version_num FROM alembic_version")
         checks["postgres"] = "ok"
         checks["schema"] = version
         if version != SCHEMA_HEAD:

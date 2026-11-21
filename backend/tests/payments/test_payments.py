@@ -1,7 +1,6 @@
 import asyncio
 import time
 from contextlib import contextmanager
-from dataclasses import replace
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
@@ -48,6 +47,8 @@ def settings_overrides():
 @pytest.fixture
 async def provider_app(settings, tmp_path, monkeypatch):
     monkeypatch.setenv("PAYMENT_WEBHOOK_SECRET", settings.payment_webhook_secret.get_secret_value())
+    monkeypatch.setenv("PAYMENT_PROVIDER_TOKEN", settings.payment_provider_token.get_secret_value())
+    monkeypatch.setenv("PAYMOCK_CALLBACK_URL", "http://api:8000/api/v1/payments/callbacks")
     monkeypatch.setenv("PAYMOCK_STORE_PATH", str(tmp_path / "provider.sqlite3"))
     monkeypatch.setenv("PAYMOCK_DROP_CALLBACKS", "1")
     app = create_app()
@@ -76,6 +77,10 @@ async def world(db, settings, asgi_app, running_app, provider_app, monkeypatch):
                 yield buyers[0], buyers[1], provider, ctx
             finally:
                 await asyncio.gather(*(buyer.client.aclose() for buyer in buyers))
+
+
+def merchant_headers(ctx):
+    return {"X-Payment-Provider-Token": ctx.settings.payment_provider_token.get_secret_value()}
 
 
 async def start(buyer, order, key):
@@ -264,7 +269,9 @@ async def test_lost_create_response_and_paid_cancel(db, settings, test_clock, wo
     changed = await start(buyer, uuid4(), "payment-key")
     assert changed.status_code == 422
     assert changed.json()["code"] == "idempotency-key-reused"
-    provider_intent = (await provider.get(f"/v1/intents/{attempt}")).json()
+    provider_intent = (
+        await provider.get(f"/v1/intents/{attempt}", headers=merchant_headers(ctx))
+    ).json()
 
     checkout = await start(buyer, public, "payment-key")
     assert checkout.status_code == 201
@@ -330,7 +337,9 @@ async def test_definitive_decline_and_provider_cancellation(db, asgi_app, world)
     assert (await cancel(buyer, public, "cancel-key")).status_code == 200
     await reconciler.tick(ctx)
     attempt = next_attempt.json()["attempt_id"]
-    assert (await provider.get(f"/v1/intents/{attempt}")).json()["status"] == "cancelled"
+    assert (await provider.get(f"/v1/intents/{attempt}", headers=merchant_headers(ctx))).json()[
+        "status"
+    ] == "cancelled"
     assert await db.fetchval("SELECT status FROM provider_cancellations") == "succeeded"
     assert await db.fetchval("SELECT count(*) FROM refunds") == 0
     await assert_invariants(db)
@@ -408,7 +417,7 @@ async def test_open_response_after_hold_expires(db, test_clock, world, monkeypat
     await assert_invariants(db)
 
 
-async def test_reconciler_polls_when_callback_url_changes(db, test_clock, world, monkeypatch):
+async def test_reconciler_rejects_mismatched_create_replays(db, test_clock, world, monkeypatch):
     buyer, _, provider, ctx = world
     _, _, order = await place(db, buyer)
     public = order["public_id"]
@@ -422,33 +431,18 @@ async def test_reconciler_polls_when_callback_url_changes(db, test_clock, world,
         patch.setattr(Provider, "create", lose_response)
         assert (await start(buyer, public, "payment-key")).status_code == 503
     attempt_id = await db.fetchval("SELECT id FROM payment_attempts")
-    original = (await provider.get(f"/v1/intents/{attempt_id}")).json()
-    changed_url = "http://api-new/api/v1/payments/callbacks"
-    ctx = replace(
-        ctx, settings=ctx.settings.model_copy(update={"payment_callback_url": changed_url})
-    )
-    conflict = await provider.post(
-        "/v1/intents",
-        json={
-            "merchant_payment_id": str(attempt_id),
-            "amount_twd": original["amount_twd"],
-            "currency": "TWD",
-            "expires_at": original["expires_at"],
-            "callback_url": changed_url,
-        },
-    )
-    assert conflict.status_code == 409
-    assert conflict.json()["code"] == "intent-key-reused"
+    original = (
+        await provider.get(f"/v1/intents/{attempt_id}", headers=merchant_headers(ctx))
+    ).json()
 
-    original_poll = Provider.poll
     for field, change in (("amount_twd", 1), ("expires_at", timedelta(seconds=1))):
 
-        async def mismatched_intent(self, merchant_id, field=field, change=change):
-            intent = await original_poll(self, merchant_id)
+        async def mismatched_intent(self, *args, field=field, change=change):
+            intent = await original_create(self, *args)
             return intent.model_copy(update={field: getattr(intent, field) + change})
 
         with monkeypatch.context() as patch:
-            patch.setattr(Provider, "poll", mismatched_intent)
+            patch.setattr(Provider, "create", mismatched_intent)
             await test_clock.advance(timedelta(seconds=16))
             await reconciler.tick(ctx)
         assert await db.fetchval("SELECT status FROM payment_attempts") == "creating"
@@ -553,5 +547,56 @@ async def test_cancellation_lock_timeout_does_not_skip_refunds(
             "SELECT attempts FROM provider_cancellations WHERE attempt_id=$1", blocked_attempt
         )
         == 2
+    )
+    await assert_invariants(db)
+
+
+@pytest.mark.parametrize("mode", ["claim-error", "row-error", "timeout"])
+async def test_reconciler_poll_budget_does_not_block_cancellation_or_refund(
+    db, settings, test_clock, world, monkeypatch, mode
+):
+    buyer, _, provider, ctx = world
+    await test_clock.advance(timedelta())
+    event, seats = await inventory(db, buyer.user_id, 3)
+    payments = []
+    for index, seat in enumerate(seats):
+        hold = await book(buyer, event, f"phase-hold-{index}", seat_ids=[seat])
+        assert hold.status_code == 201
+        order_id = hold.json()["public_id"]
+        payment = await start(buyer, order_id, f"phase-pay-{index}")
+        assert payment.status_code == 201
+        payments.append((order_id, payment.json()))
+
+    refund_order, paid = payments[2]
+    capture = await confirm(provider, paid)
+    assert (await callback(buyer, settings, capture)).json() == {"disposition": "accepted"}
+    assert (await cancel(buyer, payments[1][0], "phase-cancel")).status_code == 200
+    assert (await cancel(buyer, refund_order, "phase-refund")).status_code == 200
+    await test_clock.advance(timedelta(seconds=16))
+    stalled = asyncio.Event()
+
+    async def fail(*_):
+        if mode == "timeout":
+            stalled.set()
+            await asyncio.Future()
+        raise RuntimeError("Injected polling failure")
+
+    with monkeypatch.context() as patch:
+        if mode != "row-error":
+            patch.setattr(reconciler, "_due_attempts", fail)
+        else:
+            patch.setattr(Provider, "poll", fail)
+        if mode == "timeout":
+            patch.setattr(reconciler, "_PHASE_TIMEOUT_S", 2)
+        async with asyncio.timeout(8):
+            await reconciler.tick(ctx)
+
+    if mode == "timeout":
+        assert stalled.is_set()
+    assert await db.fetchval("SELECT status FROM provider_cancellations") == "succeeded"
+    assert await db.fetchval("SELECT status FROM refunds") == "succeeded"
+    assert (
+        await db.fetchval("SELECT status FROM orders WHERE public_id=$1", UUID(refund_order))
+        == "refunded"
     )
     await assert_invariants(db)

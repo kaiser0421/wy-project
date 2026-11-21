@@ -75,6 +75,7 @@ async def test_admin_request_trace_returns_linked_entries_in_timestamp_sequence_
     path = BASE + "/requests/request-1/logs"
     response = await client.get(path)
     assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "private, no-store"
     trace = response.json()
     assert trace["linked_request_ids"] == ["request-linked"]
     assert trace["access_log"]["req_ms"] == 100
@@ -84,6 +85,7 @@ async def test_admin_request_trace_returns_linked_entries_in_timestamp_sequence_
     assert [row["service"] for row in primary.json()["service_logs"]] == ["api", "paymock"]
     missing = await client.get(BASE + "/requests/missing/logs")
     assert (missing.status_code, missing.json()["code"]) == (404, "not-found")
+    assert missing.headers["cache-control"] == "private, no-store"
 
 
 async def test_concurrent_ack_keeps_first_admin_and_single_audit_entry(
@@ -181,6 +183,7 @@ async def test_admin_metric_history_streams_and_openapi(
         },
     )
     assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "private, no-store"
     (item,) = response.json()["items"]
     assert item["req_total"] == 10
     assert item["error_rate"] == 0.1  # 5xx only; 4xx are client/business outcomes
@@ -188,6 +191,7 @@ async def test_admin_metric_history_streams_and_openapi(
     cookie = f"sid={client.cookies['sid']}"
     headers, frame = await first_frame(running_app, BASE + "/metrics/stream", cookie)
     assert headers["content-type"].startswith("text/event-stream")
+    assert headers["cache-control"] == "private, no-store"
     data = orjson.loads(frame.split(b"\n")[1].removeprefix(b"data: "))
     assert data["edge"]["req_total"] == data["app"]["req_total"] == 10
     assert data["business"][0]["hold_ok"] == 8

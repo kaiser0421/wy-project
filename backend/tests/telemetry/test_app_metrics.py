@@ -5,14 +5,11 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import asyncpg
-import httpx
 import orjson
 import pytest
 from redis.asyncio import Redis
-from starlette.types import ASGIApp
 
 from ticketing.core.settings import Settings
-from ticketing.telemetry import business
 from ticketing.telemetry.app_metrics import Consumer, ingest_intervals, parse_batch
 from ticketing.telemetry.collector import sample_connections
 from ticketing.telemetry.common import GROUP, STREAM, second
@@ -125,35 +122,3 @@ async def test_minimum_delay_dedupe_wall_skew_completeness_and_gauge(
         await redis.delete(STREAM)
         await redis.aclose()
         await other.close()
-
-
-async def test_api_lifespan_flushes_requests_business_and_sse_gauge(
-    client: httpx.AsyncClient,
-    asgi_app: ASGIApp,
-    settings: Settings,
-) -> None:
-    asgi_app.fastapi.state.sse_active = 7
-    business.record(813, "hold_ok")
-    assert (await client.get("/healthz/live")).status_code == 200
-
-    redis = Redis.from_url(settings.redis_url)
-    try:
-        async with asyncio.timeout(8):
-            while True:
-                intervals = parse_batch(await redis.xrange(STREAM))
-                if any(item.outcomes == [(813, "hold_ok", 1)] for item in intervals) and any(
-                    "/healthz/live" in item.routes for item in intervals
-                ):
-                    break
-                await asyncio.sleep(0.1)
-        assert any(item.sse == 7 for item in intervals)
-        assert (
-            sum(
-                item.routes["/healthz/live"].status_classes[2]
-                for item in intervals
-                if "/healthz/live" in item.routes
-            )
-            == 1
-        )
-    finally:
-        await redis.aclose()

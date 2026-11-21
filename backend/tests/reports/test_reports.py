@@ -104,6 +104,7 @@ async def test_excel_reconciles_and_respects_dst(db, client, make_client, settin
     response = await client.get(report(event), params={"tz": "America/New_York"})
     assert response.status_code == 200, response.text[:300]
     assert "attachment" in response.headers["content-disposition"]
+    assert response.headers["cache-control"] == "private, no-store"
     workbook = load_workbook(BytesIO(response.content), read_only=True)
     try:
         assert workbook.sheetnames == ["Summary", "Zones", "Orders"]

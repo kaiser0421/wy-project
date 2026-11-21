@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 ID = "58d20683-a297-4ca4-a009-42452bbfb212"
 UTC = "2026-12-01T12:10:00Z"
@@ -22,10 +22,6 @@ class IntentInput(BaseModel):
     currency: Literal["TWD"] = Field(description="Payment currency.", examples=["TWD"])
     expires_at: AwareDatetime = Field(
         description="Latest time when checkout can charge.", examples=[UTC]
-    )
-    callback_url: HttpUrl = Field(
-        description="Merchant endpoint for signed outcomes.",
-        examples=["http://api:8000/api/v1/payments/callbacks"],
     )
 
 

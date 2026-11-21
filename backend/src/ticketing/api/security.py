@@ -17,6 +17,7 @@ from fastapi.params import Depends as DependsParam
 
 from ticketing.auth.sessions import authenticate
 from ticketing.auth.tokens import csrf_matches
+from ticketing.core.db import acquire
 from ticketing.core.errors import ProblemError
 
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -100,7 +101,8 @@ async def resolve_principal(request: Request) -> Principal | None:
     if not token or len(token) > 128:
         return None
     state = request.app.state
-    found = await authenticate(state.db, token)
+    async with acquire(state.db, state.settings.db_pool_acquire_timeout_s) as conn:
+        found = await authenticate(conn, token)
     if found is None:
         return None
     if found.needs_refresh:

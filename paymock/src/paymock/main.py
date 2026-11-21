@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
 import re
 import sqlite3
@@ -13,10 +14,12 @@ from typing import Annotated, Any
 from uuid import UUID
 
 import uvicorn
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, Security
 from fastapi import Path as PathParam
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security import APIKeyHeader
+from pydantic import HttpUrl, ValidationError
 from starlette.requests import Request
 
 from paymock.delivery import run
@@ -25,6 +28,13 @@ from paymock.store import Problem, Store
 
 MerchantId = Annotated[UUID, PathParam(description="Merchant attempt ID.", examples=[ID])]
 CheckoutId = Annotated[UUID, PathParam(description="Provider checkout ID.", examples=[ID])]
+_DEV_PROVIDER_TOKEN = "dev-provider-token-change-me"  # noqa: S105 - development sentinel
+_DEV_WEBHOOK_SECRET = "dev-insecure-change-me"  # noqa: S105 - development sentinel
+_MERCHANT_TOKEN = APIKeyHeader(
+    name="X-Payment-Provider-Token",
+    description="Shared credential for merchant intent and refund operations.",
+    auto_error=False,
+)
 _REQUEST_ID = re.compile(r"[A-Za-z0-9-]{8,64}")
 
 
@@ -39,6 +49,7 @@ def problem(status: int, code: str, title: str) -> JSONResponse:
         },
         status_code=status,
         media_type="application/problem+json",
+        headers={"WWW-Authenticate": "ServiceToken"} if status == 401 else None,
     )
 
 
@@ -61,11 +72,33 @@ def responses(**codes: str) -> dict[int | str, dict[str, Any]]:
     }
 
 
+def _callback_url() -> str:
+    configured = os.environ["PAYMOCK_CALLBACK_URL"]
+    try:
+        url = HttpUrl(configured)
+    except ValidationError:
+        raise RuntimeError("PAYMOCK_CALLBACK_URL must be a valid HTTP(S) URL") from None
+    if url.username or url.password or url.fragment:
+        raise RuntimeError("PAYMOCK_CALLBACK_URL must omit credentials and fragments")
+    return str(url)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     path = Path(os.getenv("PAYMOCK_STORE_PATH", "/tmp/ticketing-paymock.sqlite3"))  # noqa: S108
     secret = os.environ["PAYMENT_WEBHOOK_SECRET"]
-    store = Store(path, max(0, float(os.getenv("PAYMOCK_DELAY_CALLBACK_S", "0"))))
+    token = os.environ["PAYMENT_PROVIDER_TOKEN"]
+    if not token.strip() or token == secret:
+        raise RuntimeError(
+            "PAYMENT_PROVIDER_TOKEN must be nonempty and distinct from PAYMENT_WEBHOOK_SECRET"
+        )
+    if os.getenv("APP_ENV") == "production":
+        if token in {_DEV_PROVIDER_TOKEN, _DEV_WEBHOOK_SECRET}:
+            raise RuntimeError("PAYMENT_PROVIDER_TOKEN must be set to a non-default value")
+        if not secret.strip() or secret == _DEV_WEBHOOK_SECRET:
+            raise RuntimeError("PAYMENT_WEBHOOK_SECRET must be set to a non-default value")
+    app.state.merchant_token = token.encode()
+    store = Store(path, max(0, float(os.getenv("PAYMOCK_DELAY_CALLBACK_S", "0"))), _callback_url())
     await asyncio.to_thread(store.initialize)
     app.state.store = store
     if os.getenv("PAYMOCK_DROP_CALLBACKS") == "1":
@@ -114,7 +147,15 @@ def _request_id(request: Request) -> str | None:
     return value if _REQUEST_ID.fullmatch(value) else None
 
 
+def require_merchant(
+    request: Request, token: Annotated[str | None, Security(_MERCHANT_TOKEN)]
+) -> None:
+    if token is None or not hmac.compare_digest(token.encode(), request.app.state.merchant_token):
+        raise Problem(401, "invalid-service-token", "Merchant authentication required")
+
+
 router = APIRouter()
+_MERCHANT_AUTH = [Depends(require_merchant)]
 
 
 @router.get(
@@ -130,10 +171,14 @@ async def live() -> Health:
 
 @router.post(
     "/v1/intents",
+    dependencies=_MERCHANT_AUTH,
     response_model=Intent,
     summary="Create or retrieve an intent",
-    description="Internal merchants can reuse a merchant payment ID with the same inputs.",
-    responses=responses(e409="intent-key-reused"),
+    description=(
+        "Authenticated merchants can reuse a merchant payment ID with the same inputs. "
+        "Signed callbacks go to the configured simulator callback endpoint."
+    ),
+    responses=responses(e401="invalid-service-token", e409="intent-key-reused"),
 )
 async def create_intent(body: IntentInput, request: Request) -> Intent:
     return await asyncio.to_thread(_store(request).create, body, _request_id(request))
@@ -141,10 +186,11 @@ async def create_intent(body: IntentInput, request: Request) -> Intent:
 
 @router.get(
     "/v1/intents/{merchant_id}",
+    dependencies=_MERCHANT_AUTH,
     response_model=Intent,
     summary="Get an intent by merchant ID",
-    description="Internal merchants can poll for the current outcome and its stable event ID.",
-    responses=responses(e404="intent-not-found"),
+    description="Authenticated merchants can poll for the current outcome and its stable event ID.",
+    responses=responses(e401="invalid-service-token", e404="intent-not-found"),
 )
 async def lookup_intent(merchant_id: MerchantId, request: Request) -> Intent:
     return await asyncio.to_thread(_store(request).lookup, merchant_id, _request_id(request))
@@ -152,13 +198,14 @@ async def lookup_intent(merchant_id: MerchantId, request: Request) -> Intent:
 
 @router.post(
     "/v1/intents/{merchant_id}/cancel",
+    dependencies=_MERCHANT_AUTH,
     response_model=Intent | None,
     summary="Close a merchant intent",
     description=(
-        "The merchant can idempotently close checkout. If creation is still in flight, "
-        "its future checkout is also closed. A completed capture is returned as recorded."
+        "Authenticated merchants can idempotently close checkout, including while creation is "
+        "in flight. A completed capture is returned as recorded."
     ),
-    responses=responses(),
+    responses=responses(e401="invalid-service-token"),
 )
 async def cancel_intent(merchant_id: MerchantId, request: Request) -> Intent | None:
     return await asyncio.to_thread(_store(request).cancel, merchant_id, _request_id(request))
@@ -236,13 +283,15 @@ async def decline(intent_id: CheckoutId, request: Request) -> Intent:
 
 @router.post(
     "/v1/refunds",
+    dependencies=_MERCHANT_AUTH,
     response_model=Refund,
     summary="Refund a captured payment",
     description=(
-        "Merchants on the internal network can issue one full refund per capture. "
+        "Authenticated merchants can issue one full refund per capture. "
         "Concurrent retries with the original refund ID and amount return the same refund."
     ),
     responses=responses(
+        e401="invalid-service-token",
         e404="capture-not-found",
         e409="refund-key-reused, capture-already-refunded",
         e422="validation-failed, refund-amount-mismatch",

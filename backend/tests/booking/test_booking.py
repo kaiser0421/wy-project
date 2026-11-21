@@ -298,3 +298,71 @@ async def test_release_rolls_back_when_active_item_points_to_another_seat(db, bu
         assert await release_order(db, order_id, "pending_payment", "expired") is not None
     assert await db.fetchval("SELECT count(*) FROM outbox") == 2
     await assert_invariants(db)
+
+
+async def test_parallel_sweepers_skip_locked_and_bad_orders(
+    db, buyers, settings, test_clock, monkeypatch
+):
+    count = 48
+    await test_clock.advance(timedelta())
+    sessions = await buyers(count)
+    event, seats = await inventory(db, sessions[0].user_id, count)
+    holds = await race(
+        book(session, event, f"expiry-hold-{i}", seat_ids=[seat])
+        for i, (session, seat) in enumerate(zip(sessions, seats, strict=True))
+    )
+    assert all(response.status_code == 201 for response in holds)
+    await test_clock.advance(timedelta(seconds=settings.hold_ttl_seconds))
+    bad, locked = [
+        row["id"] for row in await db.fetch("SELECT id FROM orders ORDER BY expires_at, id LIMIT 2")
+    ]
+    await db.execute(
+        """UPDATE orders SET expires_at=expires_at-CASE WHEN id=$1 THEN interval '2 seconds'
+           ELSE interval '1 second' END WHERE id IN ($1,$2)""",
+        bad,
+        locked,
+    )
+    original = sweeper.release_order
+    entered, let_go = asyncio.Event(), asyncio.Event()
+    bad_attempts = []
+
+    async def release(conn, order_id, expected, status):
+        if order_id == bad:
+            bad_attempts.append(order_id)
+            # Fail after writing to prove the save is rolled back before later orders run.
+            await original(conn, order_id, expected, status)
+            raise RuntimeError("Injected order failure")
+        if order_id == locked:
+            entered.set()
+            await let_go.wait()
+        return await original(conn, order_id, expected, status)
+
+    pool = await create_pool(settings, min_size=2, max_size=2)
+    async with (
+        pool,
+        Redis.from_url(settings.redis_url) as redis,
+    ):
+        ctx = ServiceContext(settings, pool, redis, asyncio.Event())
+        with monkeypatch.context() as patch:
+            patch.setattr(sweeper, "release_order", release)
+            async with asyncio.timeout(10), asyncio.TaskGroup() as work:
+                work.create_task(sweeper.tick(ctx))
+                await entered.wait()
+                try:
+                    await sweeper.tick(ctx)
+                    # The second worker must progress while the first still holds its row lock.
+                    assert (
+                        await db.fetchval("SELECT count(*) FROM orders WHERE status='expired'")
+                        == count - 2
+                    )
+                    await assert_invariants(db)
+                finally:
+                    let_go.set()
+        assert bad_attempts == [bad, bad]
+        assert await db.fetchval("SELECT id FROM orders WHERE status='pending_payment'") == bad
+        assert await db.fetchval("SELECT count(*) FROM outbox") == count * 2 - 1
+        await sweeper.tick(ctx)
+    assert await db.fetchval("SELECT count(*) FROM orders WHERE status='expired'") == count
+    assert await db.fetchval("SELECT count(*) FROM outbox") == count * 2
+    assert await db.fetchval("SELECT sum(reserved) FROM user_event_quota") == 0
+    await assert_invariants(db)

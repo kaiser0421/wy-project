@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from ticketing.core.db import acquire
 from ticketing.core.errors import ProblemError
+from ticketing.events.access import EventActor, can_view
 
 SeatStatus = Literal["available", "held", "sold"]
 SnapshotFormat = Literal["full", "compact"]
@@ -68,20 +69,12 @@ def event_not_found() -> ProblemError:
 
 
 async def require_visible(
-    pool: asyncpg.Pool, acquire_timeout: float, event_id: int, user_id: int, admin: bool
+    pool: asyncpg.Pool, acquire_timeout: float, event_id: int, actor: EventActor
 ) -> None:
     """Authorize each request against PostgreSQL, independently of cache contents."""
     async with acquire(pool, acquire_timeout) as conn:
-        found = await conn.fetchval(
-            """
-            SELECT 1 FROM events
-            WHERE id = $1 AND (status = 'published' OR owner_id = $2 OR $3::bool)
-            """,
-            event_id,
-            user_id,
-            admin,
-        )
-    if found is None:
+        row = await conn.fetchrow("SELECT owner_id, status FROM events WHERE id = $1", event_id)
+    if row is None or not can_view(actor, row["owner_id"], row["status"]):
         raise event_not_found()
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -20,6 +21,8 @@ from ticketing.payments.provider import Provider, ProviderUnavailable
 
 log = get_logger(__name__)
 _BATCH_SIZE = 12
+# Less than the 30-second durable lease so a stalled phase cannot outlive its claim.
+_PHASE_TIMEOUT_S = 12.0
 
 
 async def _due_attempts(ctx: ServiceContext) -> list[asyncpg.Record]:
@@ -222,27 +225,62 @@ async def _clean_completed_keys(ctx: ServiceContext) -> None:
         )
 
 
+async def _run_phase(
+    ctx: ServiceContext,
+    name: str,
+    claim: Callable[[], Awaitable[list[asyncpg.Record]]],
+    process: Callable[[asyncpg.Record], Awaitable[None]],
+) -> None:
+    """Spend each queue's budget independently and let unprocessed leases become due again."""
+    if ctx.stop.is_set():
+        return
+
+    async def run_row(row: asyncpg.Record) -> None:
+        try:
+            await process(row)
+        except Exception as exc:
+            log.warning("payment.reconcile_row_failed", phase=name, error=type(exc).__name__)
+
+    try:
+        async with asyncio.timeout(_PHASE_TIMEOUT_S):
+            rows = await claim()
+            async with asyncio.TaskGroup() as work:
+                for row in rows:
+                    work.create_task(run_row(row))
+    except Exception as exc:
+        log.warning("payment.reconcile_phase_failed", phase=name, error=type(exc).__name__)
+
+
 async def tick(ctx: ServiceContext) -> None:
     if ctx.stop.is_set():
         return
     owner = str(uuid4())
     async with create_http_client(ctx.settings.payment_provider_url) as http:
         provider = Provider(http, ctx.settings)
-        attempts = await _due_attempts(ctx)
-        async with asyncio.TaskGroup() as work:
-            for row in attempts:
-                work.create_task(_recover_attempt(ctx, provider, row))
-        if ctx.stop.is_set():
-            return
-        cancellations = await _claim_cancellations(ctx, owner)
-        async with asyncio.TaskGroup() as work:
-            for row in cancellations:
-                work.create_task(_cancel_provider(ctx, provider, owner, row))
-        if ctx.stop.is_set():
-            return
-        refunds = await _claim_refunds(ctx, owner)
-        async with asyncio.TaskGroup() as work:
-            for row in refunds:
-                work.create_task(_refund(ctx, provider, owner, row))
+        async with asyncio.TaskGroup() as phases:
+            phases.create_task(
+                _run_phase(
+                    ctx,
+                    "poll",
+                    lambda: _due_attempts(ctx),
+                    lambda row: _recover_attempt(ctx, provider, row),
+                )
+            )
+            phases.create_task(
+                _run_phase(
+                    ctx,
+                    "cancel",
+                    lambda: _claim_cancellations(ctx, owner),
+                    lambda row: _cancel_provider(ctx, provider, owner, row),
+                )
+            )
+            phases.create_task(
+                _run_phase(
+                    ctx,
+                    "refund",
+                    lambda: _claim_refunds(ctx, owner),
+                    lambda row: _refund(ctx, provider, owner, row),
+                )
+            )
     if not ctx.stop.is_set():
         await _clean_completed_keys(ctx)

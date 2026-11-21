@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -28,13 +29,29 @@ _HTTP_CODES: dict[int, tuple[str, str]] = {
 }
 
 
+def problem_responses(codes: Mapping[int, tuple[str, ...]]) -> dict[int | str, dict[str, Any]]:
+    return {
+        status: {
+            "description": ", ".join(names),
+            "content": {
+                PROBLEM_CONTENT_TYPE: {
+                    "examples": {
+                        name: {"value": {"status": status, "code": name}} for name in names
+                    },
+                },
+            },
+        }
+        for status, names in codes.items()
+    }
+
+
 def _render(problem: ProblemError, request: Request) -> JSONResponse:
     rid = current_request_id() or getattr(request.state, "request_id", None)
     return JSONResponse(
         status_code=problem.status,
         content=problem.to_body(instance=request.url.path, request_id=rid),
         media_type=PROBLEM_CONTENT_TYPE,
-        headers=problem.headers,
+        headers={"Cache-Control": "private, no-store", **problem.headers},
     )
 
 
