@@ -21,6 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: make smoke
+      # Business flow through nginx on the same stack: import, publish, hold, signed payment
+      # callback, report and request-id log lookup.
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.5.11"
+      - run: uv run scripts/e2e_flow.py --base http://127.0.0.1:8080
       - if: failure()
         run: docker compose logs --no-color --tail=200
       - if: always()
