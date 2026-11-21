@@ -80,6 +80,10 @@ def _csv_rows(path: Path) -> Iterator[Row]:
             raise InvalidLayout("invalid_csv", line) from exc
 
 
+# A seat item is ~100 bytes; anything far larger is rejected as a row error without decoding.
+MAX_JSON_ITEM_BYTES = 4096
+
+
 def _item_end(data: mmap, start: int) -> tuple[int, int]:
     """Frame one JSON value in byte offsets, leaving value decoding to raw_decode."""
     depth = peak = 0
@@ -117,27 +121,12 @@ def _json_rows(data: mmap) -> Iterator[Row]:
         end, depth = _item_end(data, start)
         if end == start or end == len(data):
             raise InvalidLayout("invalid_json", line, index)
-        try:
-            raw = data[start:end].decode("utf-8")
-            value, consumed = _DECODER.raw_decode(raw)
-            if raw[consumed:].strip(" \t\r\n"):
-                raise InvalidLayout("invalid_json", line, index)
-        except (UnicodeError, ValueError, _NonJson) as exc:
-            raise InvalidLayout("invalid_json", line, index) from exc
-        except RecursionError as exc:
-            if depth <= 16:
-                raise InvalidLayout("invalid_json", line, index) from exc
-            value = None
-        error = "nesting_too_deep" if depth > 16 else None
-        if isinstance(value, _Object):
-            if value.duplicate:
-                error = error or "duplicate_fields"
-            if set(value) == set(FIELDS):
-                yield _row(line, index, [value[key] for key in FIELDS], error)
-            else:
-                yield _row(line, index, [], error)
+        if end - start > MAX_JSON_ITEM_BYTES:
+            # Never decode an oversized item: a single huge value inside the 20 MiB upload limit
+            # could expand to gigabytes of Python objects and take down the shared worker.
+            yield _row(line, index, [], "item_too_large")
         else:
-            yield _row(line, index, [], error)
+            yield from _decode_item(data, start, end, depth, line, index)
         if data[end] == ord("]"):
             if _whitespace(data, end + 1) != len(data):
                 raise InvalidLayout("invalid_json", line, index)
@@ -147,6 +136,32 @@ def _json_rows(data: mmap) -> Iterator[Row]:
         start = following
         index += 1
     raise InvalidLayout("invalid_json", line, index)
+
+
+def _decode_item(
+    data: mmap, start: int, end: int, depth: int, line: int, index: int
+) -> Iterator[Row]:
+    try:
+        raw = data[start:end].decode("utf-8")
+        value, consumed = _DECODER.raw_decode(raw)
+        if raw[consumed:].strip(" \t\r\n"):
+            raise InvalidLayout("invalid_json", line, index)
+    except (UnicodeError, ValueError, _NonJson) as exc:
+        raise InvalidLayout("invalid_json", line, index) from exc
+    except RecursionError as exc:
+        if depth <= 16:
+            raise InvalidLayout("invalid_json", line, index) from exc
+        value = None
+    error = "nesting_too_deep" if depth > 16 else None
+    if isinstance(value, _Object):
+        if value.duplicate:
+            error = error or "duplicate_fields"
+        if set(value) == set(FIELDS):
+            yield _row(line, index, [value[key] for key in FIELDS], error)
+        else:
+            yield _row(line, index, [], error)
+    else:
+        yield _row(line, index, [], error)
 
 
 def iter_rows(path: Path, format_: Format) -> Generator[Row, None, None]:

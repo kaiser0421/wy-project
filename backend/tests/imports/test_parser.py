@@ -37,3 +37,21 @@ def test_json_duplicate_fields_and_invalid_structure(tmp_path):
     path.write_text('[{"zone_code":"A"},]')
     with pytest.raises(InvalidLayout, match="invalid_json"):
         list(iter_rows(path, "json"))
+
+
+def test_oversized_json_item_is_a_row_error_without_decoding(tmp_path, monkeypatch):
+    from ticketing.imports import parser
+
+    decoded: list[str] = []
+    real = parser._DECODER.raw_decode
+    monkeypatch.setattr(
+        parser._DECODER, "raw_decode", lambda raw: decoded.append(raw[:20]) or real(raw)
+    )
+    huge = json.dumps({"zone_code": "A", "row_label": "x" * 10_000, "seat_number": 1})
+    normal = json.dumps({"zone_code": "A", "row_label": "R1", "seat_number": 2})
+    path = tmp_path / "seats.json"
+    path.write_text(f"[{huge},\n{normal}]")
+    rows = list(iter_rows(path, "json"))
+    assert rows[0][-1] == "item_too_large"
+    assert rows[1][-1] is None
+    assert len(decoded) == 1  # only the normal item was decoded

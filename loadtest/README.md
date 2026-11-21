@@ -42,7 +42,7 @@ A 以 `POST /api/v1/auth/login` 登入主辦人。買家及其 session 直接寫
 | 產物（相對於 `OUT`） | 內容 |
 |---|---|
 | `environment.txt`、`run.log` | 主機、Docker、commit、主要參數及執行摘要。包含 shell 的 `API_REPLICAS` 與情境開始前實際運行的 `API_REPLICAS_RUNNING`。 |
-| `a/k6.log`、`a/k6-summary.json` | `metrics.http_reqs.rate` 為總 RPS。`metrics.http_req_duration` 直接匯出 `med`、`p(95)`、`p(99)`（毫秒）。`successful_holds` 計新建鎖位，`business_conflicts` 計已知業務 409 和 `503 server-busy`，其中後者也由 `server_busy` 單獨計數。`replay_verified` 計重放驗證成功次數，`replay_unverified` 計最終仍收到 502／503／504 的重放次數。 |
+| `a/k6.log`、`a/k6-summary.json` | `metrics.http_reqs.rate` 為總 RPS。`metrics.http_req_duration` 直接匯出 `med`、`p(95)`、`p(99)`（毫秒）。`successful_holds` 計新建鎖位，`business_conflicts` 計已知業務 409 和 `503 server-busy`，其中後者也由 `server_busy` 單獨計數。`replay_started` 計開始的重放，`replay_verified` 計驗證成功的重放，`replay_unverified` 計重試後仍收到 502／503／504 的重放。`replay_unverified` 必須為 0，且 runner 會比對 `replay_started` 與 `replay_verified`，不相等（例如重放在測試結束時被中斷）即判定失敗。 |
 | `a/nginx-access.json` | 以同輪 run ID 篩選的 nginx 存取日誌。用 `req_ms` 欄位換算成毫秒後計算入口 p99（原值單位為秒）。 |
 | `a/consistency.txt`、`a/final-state.txt` | A 結束 90 秒後的 SQL 查核及訂單、座位狀態統計。 |
 | `a/event.json`、`a/metrics_1s.csv`、`a/business_1s.csv` | 活動 ID、秒級監控及業務指標。 |
