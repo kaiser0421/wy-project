@@ -45,6 +45,7 @@ ledger AS (
     FROM payment_captures c JOIN scoped_orders o ON o.id=c.order_id
     LEFT JOIN refunds r USING (provider_capture_id)
 ),
+-- Maintenance prunes assigned rows from the start of each event's stream.
 event_sequences AS (
     SELECT o.event_id,count(*) AS n,min(seq) AS lo,max(seq) AS hi
     FROM outbox o JOIN scope e ON e.id=o.event_id WHERE o.seq IS NOT NULL
@@ -61,7 +62,9 @@ expanded AS (
 ),
 archived AS (
     SELECT s.event_id,s.seq,s.seat_idx,s.status,s.seat_version
-    FROM seat_events s JOIN scope e ON e.id=s.event_id WHERE :check_realtime
+    FROM seat_events s JOIN event_sequences r ON r.event_id=s.event_id
+        AND s.seq BETWEEN r.lo AND r.hi
+    WHERE :check_realtime
 ),
 missing_archived AS (SELECT * FROM expanded EXCEPT ALL SELECT * FROM archived),
 extra_archived AS (SELECT * FROM archived EXCEPT ALL SELECT * FROM expanded)
@@ -157,7 +160,7 @@ UNION ALL
 SELECT 'event_sequence',s.event_id::text FROM event_sequences s
 LEFT JOIN event_stream_state st USING (event_id)
 WHERE :check_realtime
-  AND (s.lo<>1 OR s.hi<>s.n OR st.last_assigned_seq IS DISTINCT FROM s.hi)
+  AND (s.hi-s.lo+1<>s.n OR st.last_assigned_seq IS DISTINCT FROM s.hi)
 UNION ALL
 SELECT 'seat_event_missing',concat(event_id,'/',seq,'/',seat_idx) FROM missing_archived
 UNION ALL

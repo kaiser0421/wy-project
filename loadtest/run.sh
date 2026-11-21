@@ -29,6 +29,9 @@ K6_CPUS=${K6_CPUS:-}                   # e.g. K6_CPUS=2 to cap the generator
 
 log() { printf '\n==> %s\n' "$*" | tee -a "$OUT/run.log"; }
 
+failures=""
+record_failure() { failures+=$'\n'"  - $*"; }
+
 network() {
   docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' \
     "$(docker compose ps -q nginx)"
@@ -86,15 +89,19 @@ scenario_a() {
     -e RUN_ID="a-$STAMP" -e VUS="$VUS" -e DURATION="$DURATION" \
     -e SESSIONS_FILE="$OUT_IN/a/sessions.json" -e INVENTORY_FILE="$OUT_IN/a/inventory.json" \
     grafana/k6:0.57.0 run --summary-export="$OUT_IN/a/k6-summary.json" scenario_a.js \
-    > "$OUT/a/k6.log" 2>&1 || true
+    > "$OUT/a/k6.log" 2>&1 || record_failure "Scenario A k6 failed (exit $?)"
   tail -40 "$OUT/a/k6.log" | tee -a "$OUT/run.log"
   local ended; ended=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
   log "Scenario A: waiting for holds, payments and outbox to drain (90 s)"
   sleep 90
   log "Scenario A: consistency checks (zero rows = consistent)"
-  psql_q -v event_id="$event_id" -v expected_seats="$SEATS" -f - < loadtest/consistency.sql \
-    > "$OUT/a/consistency.txt" 2>&1 || true
+  if ! psql_q -XAt -v event_id="$event_id" -v expected_seats="$SEATS" -f - \
+    < loadtest/consistency.sql > "$OUT/a/consistency.txt" 2>> "$OUT/run.log"; then
+    record_failure "Scenario A consistency SQL failed to run"
+  elif [[ -s "$OUT/a/consistency.txt" ]]; then
+    record_failure "Scenario A consistency SQL reported violations"
+  fi
   tail -20 "$OUT/a/consistency.txt" | tee -a "$OUT/run.log"
   psql_q -c "SELECT status, count(*) AS orders, sum(quantity) AS tickets FROM orders WHERE event_id=$event_id GROUP BY 1 ORDER BY 1;" \
          -c "SELECT status, count(*) FROM seats WHERE event_id=$event_id GROUP BY 1 ORDER BY 1;" \
@@ -121,8 +128,9 @@ scenario_b() {
   local writer=$!
   py sse_client.py --base-url http://nginx:8080 --event-id "$event_id" \
     --sessions-file "$OUT_IN/b/sessions.json" --connections "$CONNECTIONS" \
-    --duration "$B_DURATION" --drain-timeout 20 > "$OUT/b/sse-client.txt" 2>&1 || true
-  wait "$writer" || true
+    --duration "$B_DURATION" --drain-timeout 20 > "$OUT/b/sse-client.txt" 2>&1 \
+    || record_failure "Scenario B SSE client or audit failed (exit $?)"
+  wait "$writer" || record_failure "Scenario B writer failed (exit $?)"
   tail -40 "$OUT/b/sse-client.txt" | tee -a "$OUT/run.log"
   tail -10 "$OUT/b/writer.txt" | tee -a "$OUT/run.log"
 }
@@ -130,7 +138,7 @@ scenario_b() {
 bundle() {
   find "$OUT" -name 'sessions.json' -delete          # live credentials never leave the machine
   tar -czf "$OUT.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
-  log "Done. Send this file back: $OUT.tar.gz"
+  log "Results archive: $OUT.tar.gz"
 }
 
 environment
@@ -141,4 +149,10 @@ case $MODE in
   all|smoke) scenario_a; scenario_b ;;
   *) echo "usage: loadtest/run.sh [all|a|b|smoke]" >&2; exit 2 ;;
 esac
+if [[ -n $failures ]]; then
+  log "FAILED$failures"
+else
+  log "PASSED"
+fi
 bundle
+[[ -z $failures ]]
