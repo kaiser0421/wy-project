@@ -8761,7 +8761,7 @@
               {
                 "postgres": "ok",
                 "redis": "ok",
-                "schema": "0005_monitoring"
+                "schema": "0006_recent_logs"
               }
             ]
           }

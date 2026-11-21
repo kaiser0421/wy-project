@@ -1,0 +1,7 @@
+ id |   rule_id    | scope  |  state   | value | threshold | ts_taipei 
+----+--------------+--------+----------+-------+-----------+-----------
+ 27 | SERVICE_DOWN | worker | resolved |  0.00 |         5 | 21:24:00
+ 28 | SERVICE_DOWN | relay  | resolved |  0.00 |         5 | 21:25:10
+ 29 | SERVICE_DOWN | outbox | resolved |  5.36 |         5 | 21:25:14
+(3 rows)
+

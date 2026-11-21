@@ -191,4 +191,5 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 - **筆電壓測**。在 2 核心／4 執行緒的 MacBook 上，3,000 VUs 與服務同機造成 CPU 飽和。多數請求收到快速的 `503 server-busy` 或 client timeout，約 86–95 req/s，SQL 平均耗時受競爭影響約 35–170 ms。該次一致性檢查未發現超賣。
 - **大型 Excel 匯出耗時**。兩次下載約 217–237 秒，nginx 報表路徑的讀取逾時為 300 秒。見 `infra/nginx/nginx.conf:151`、[Excel 匯出實測紀錄](docs/evidence/cp4-excel-500k.md)。
 - **固定 Docker 子網**。Compose 網路使用 `172.28.0.0/24`，nginx 固定在 `172.28.0.200`，讓 API 只信任 nginx 轉送的 client IP。若本機已有網路使用同一段位址，`docker compose up` 會回報 `Pool overlaps with other one on this address space`，需先移除該網路（例如舊的堆疊執行 `docker compose down`）。見 `compose.yaml:10`、`compose.yaml:224`、`compose.yaml:244`。
+- **告警演練**。停掉 relay 後 5 秒內觸發服務中斷告警並在 Admin 監控頁即時顯示，恢復後自動 resolved。見 [告警演練紀錄](docs/evidence/alert-drill-20261121/README.md)。
 - **監控可見性**。極晚到達的 nginx 日誌仍可依 `request_id` 查到，但可能超出每秒指標的回填窗口。Collector 也從共用目錄收集 paymock 的請求處理與回呼傳送日誌，供管理後台依 `request_id` 查詢。見 `backend/src/ticketing/telemetry/logs.py:76`、`compose.yaml:180`、`compose.yaml:203`、[監控資料契約](backend/src/ticketing/telemetry/README.md)。
