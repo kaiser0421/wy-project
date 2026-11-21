@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncpg
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -25,6 +26,10 @@ def _app(outbound: list[httpx.Request]) -> RequestContextMiddleware:
     @app.get("/problem")
     async def problem() -> None:
         raise ProblemError(409, "seat-unavailable", "Seat unavailable", retryable=False)
+
+    @app.get("/db-timeout")
+    async def db_timeout() -> None:
+        raise asyncpg.QueryCanceledError("canceling statement due to statement timeout")
 
     @app.get("/boom")
     async def boom() -> None:
@@ -94,6 +99,16 @@ async def test_unhandled_error_keeps_request_id(app_client: httpx.AsyncClient) -
     assert body["code"] == "internal-error"
     assert body["request_id"] == "e" * 32
     assert "secret-internal-detail" not in response.text  # no internal details leak
+
+
+async def test_database_back_pressure_is_retryable_503(app_client: httpx.AsyncClient) -> None:
+    response = await app_client.get("/db-timeout")
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    body = response.json()
+    assert body["code"] == "server-busy"
+    assert body["retryable"] is True
+    assert "statement timeout" not in response.text
 
 
 async def test_not_found_is_problem_json(app_client: httpx.AsyncClient) -> None:

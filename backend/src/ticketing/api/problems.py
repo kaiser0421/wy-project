@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import asyncpg
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ticketing.core.context import current_request_id
-from ticketing.core.errors import PROBLEM_CONTENT_TYPE, ProblemError
+from ticketing.core.errors import PROBLEM_CONTENT_TYPE, ProblemError, server_busy
 from ticketing.core.logging import get_logger
 
 log = get_logger(__name__)
@@ -91,7 +92,23 @@ async def _unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
     return _render(problem, request)
 
 
+# Database back-pressure (lock_timeout, statement_timeout, deadlock victim) is an overload
+# signal, not a server bug: callers get the same retryable 503 as pool exhaustion.
+_OVERLOAD_ERRORS = (
+    asyncpg.LockNotAvailableError,
+    asyncpg.QueryCanceledError,
+    asyncpg.DeadlockDetectedError,
+)
+
+
+async def _overload_handler(request: Request, exc: Exception) -> JSONResponse:
+    log.warning("request.db_overload", error_type=type(exc).__name__, path=request.url.path)
+    return _render(server_busy(), request)
+
+
 def install_problem_handlers(app: FastAPI) -> None:
+    for error in _OVERLOAD_ERRORS:
+        app.add_exception_handler(error, _overload_handler)
     app.add_exception_handler(ProblemError, _problem_handler)
     app.add_exception_handler(StarletteHTTPException, _http_handler)
     app.add_exception_handler(RequestValidationError, _validation_handler)
