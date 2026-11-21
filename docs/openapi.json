@@ -3680,6 +3680,306 @@
         ]
       }
     },
+    "/api/v1/admin/orders": {
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "List all orders",
+        "description": "Admins can list orders across all buyers, filtered by event, current status, literal case-insensitive buyer email prefix, and inclusive creation times. Results are sorted by creation time and then internal ID, both descending. Use the signed cursor with the same account and filters. Orders inserted with higher IDs start appearing when the list is restarted. Statuses and filter matches are evaluated on each request.",
+        "operationId": "list_all_orders_api_v1_admin_orders_get",
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 9223372036854775807,
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Booked event ID.",
+              "title": "Event Id"
+            },
+            "description": "Booked event ID."
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pending_payment",
+                    "paid",
+                    "expired",
+                    "cancelled",
+                    "refund_pending",
+                    "refunded"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current order status.",
+              "title": "Status"
+            },
+            "description": "Current order status."
+          },
+          {
+            "name": "buyer_email",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 254
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Literal, case-insensitive buyer email prefix.",
+              "examples": [
+                "buyer@"
+              ],
+              "title": "Buyer Email"
+            },
+            "description": "Literal, case-insensitive buyer email prefix."
+          },
+          {
+            "name": "created_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Earliest creation time, inclusive.",
+              "title": "Created From"
+            },
+            "description": "Earliest creation time, inclusive."
+          },
+          {
+            "name": "created_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Latest creation time, inclusive.",
+              "title": "Created To"
+            },
+            "description": "Latest creation time, inclusive."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Signed cursor from the preceding page.",
+              "title": "Cursor"
+            },
+            "description": "Signed cursor from the preceding page."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Maximum page size.",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Maximum page size."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOrderPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "headers": {},
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "unauthenticated": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/unauthenticated",
+                      "title": "Unauthenticated",
+                      "status": 401,
+                      "code": "unauthenticated",
+                      "retryable": false
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation-failed",
+            "headers": {},
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "validation-failed": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/validation-failed",
+                      "title": "Validation failed",
+                      "status": 422,
+                      "code": "validation-failed",
+                      "retryable": false
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "server-busy",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying this problem.",
+                "schema": {
+                  "type": "integer",
+                  "example": 1
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "server-busy": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/server-busy",
+                      "title": "Server busy",
+                      "status": 503,
+                      "code": "server-busy",
+                      "retryable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "forbidden",
+            "headers": {},
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "forbidden": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/forbidden",
+                      "title": "Forbidden",
+                      "status": 403,
+                      "code": "forbidden",
+                      "retryable": false
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "cursor-invalidated",
+            "headers": {},
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "examples": {
+                  "cursor-invalidated": {
+                    "value": {
+                      "type": "https://ticketing.example/problems/cursor-invalidated",
+                      "title": "Cursor invalidated",
+                      "status": 409,
+                      "code": "cursor-invalidated",
+                      "retryable": false
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "internal-error"
+          }
+        },
+        "x-allowed-roles": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/orders/{order_id}": {
       "get": {
         "tags": [
@@ -6788,6 +7088,116 @@
         ],
         "title": "AccessLog"
       },
+      "AdminOrderPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminOrderSummary"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor",
+            "description": "Cursor for the next page, if any."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "AdminOrderPage"
+      },
+      "AdminOrderSummary": {
+        "properties": {
+          "public_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Public Id",
+            "description": "Public order ID."
+          },
+          "event_id": {
+            "type": "integer",
+            "title": "Event Id"
+          },
+          "event_title": {
+            "type": "string",
+            "title": "Event Title"
+          },
+          "buyer_email": {
+            "type": "string",
+            "title": "Buyer Email"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending_payment",
+              "paid",
+              "expired",
+              "cancelled",
+              "refund_pending",
+              "refunded"
+            ],
+            "title": "Status"
+          },
+          "quantity": {
+            "type": "integer",
+            "title": "Quantity"
+          },
+          "total_twd": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Twd",
+            "description": "Amount due including fees, in whole TWD."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At",
+            "description": "Payment deadline, if recorded."
+          }
+        },
+        "type": "object",
+        "required": [
+          "public_id",
+          "event_id",
+          "event_title",
+          "buyer_email",
+          "status",
+          "quantity",
+          "total_twd",
+          "created_at",
+          "expires_at"
+        ],
+        "title": "AdminOrderSummary"
+      },
       "AdminUserOut": {
         "properties": {
           "id": {
@@ -8761,7 +9171,7 @@
               {
                 "postgres": "ok",
                 "redis": "ok",
-                "schema": "0006_recent_logs"
+                "schema": "0007_admin_orders"
               }
             ]
           }

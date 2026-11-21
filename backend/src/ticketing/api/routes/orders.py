@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Path, Query, Request
+from fastapi import Depends, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from ticketing.api.security import (
@@ -13,6 +13,7 @@ from ticketing.api.security import (
     current_principal,
     problem_forbidden,
 )
+from ticketing.booking.admin_orders import AdminOrderPage, AdminOrderQuery, admin_order_page
 from ticketing.booking.api_docs import READ_ERRORS, REPLAY_HEADER, WRITE_ERRORS, problem_responses
 from ticketing.booking.create import create_order
 from ticketing.booking.database import connection, fence, transaction
@@ -29,6 +30,7 @@ from ticketing.telemetry import business
 
 router = SecureRouter(prefix="/api/v1", tags=["orders"])
 CUSTOMER = Roles("admin", "user")
+ADMIN = Roles("admin")
 Caller = Annotated[Principal, Depends(current_principal)]
 OrderId = Annotated[
     UUID, Path(description="Public order ID.", examples=["58d20683-a297-4ca4-a009-42452bbfb212"])
@@ -130,6 +132,34 @@ async def list_orders(
     state = request.app.state
     async with connection(state.db, state.settings) as conn:
         return await order_page(conn, user_id or principal.user_id, cursor, limit)
+
+
+@router.get(
+    "/admin/orders",
+    policy=ADMIN,
+    response_model=AdminOrderPage,
+    summary="List all orders",
+    description=(
+        "Admins can list orders across all buyers, filtered by event, current status, literal "
+        "case-insensitive buyer email prefix, and inclusive creation times. Results are sorted "
+        "by creation time and then internal ID, both descending. Use the signed cursor with "
+        "the same account and filters. Orders inserted with higher IDs start appearing when "
+        "the list is restarted. Statuses and filter matches are evaluated on each request."
+    ),
+    responses=problem_responses({**READ_ERRORS, 403: ("forbidden",), 409: ("cursor-invalidated",)}),
+)
+async def list_all_orders(
+    request: Request,
+    response: Response,
+    principal: Caller,
+    query: Annotated[AdminOrderQuery, Query()],
+) -> AdminOrderPage:
+    response.headers["Cache-Control"] = "private, no-store"
+    state = request.app.state
+    async with connection(state.db, state.settings) as conn:
+        return await admin_order_page(
+            conn, query, principal.user_id, state.settings.secret_key.get_secret_value()
+        )
 
 
 @router.get(
