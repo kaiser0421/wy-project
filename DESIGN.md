@@ -1,5 +1,14 @@
 # 設計問答
 
+## TL;DR
+
+- **Q1 座位不超賣**：指定席以 PostgreSQL 列鎖保護至交易結束，partial unique index 持續限制每席只有一筆有效占用，逾期扣款則安排退款。
+- **Q2 部分失敗後的狀態收斂**：回呼與付款 reconciler 共用分類邏輯，依資料庫時鐘和鎖定後的訂單狀態決定接受扣款或退款，背景工作可重試收斂。
+- **Q3 重試、冪等與限購**：同一使用者的冪等鍵以交易序列化並保存原回應，跨鍵購買以原子更新守住配額，區域配位由 PostgreSQL 以 `SKIP LOCKED` 選取並鎖定座位。
+- **Q4 即時推送**：座位異動與 outbox 同交易提交，由單一 active relay 按活動編序，各 API 副本經 SSE 送出，同一座位依版本更新，斷線後可重放或重新取快照。
+- **Q5 權限與憑證失效**：受保護的 HTTP 請求逐次查 PostgreSQL，撤銷提交後舊 cookie 在下次驗證即失效，敏感寫入另在交易內重驗，座位 SSE 由 Redis 通知與定期查核關閉。
+- **Q6 監控數據**：Edge 與 App 各自保留秒級指標，錯誤率採 `err_5xx / req_total`，App 樣本經對時與去重，回報涵蓋率揭露缺口，業務告警補捉 HTTP 成功時仍可能發生的異常。
+
 ## 目錄
 
 - [設計假設](#設計假設)
@@ -116,7 +125,7 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 
 **驗證**　`test_idempotency_contention_and_canonical_replay` 檢查鎖衝突、原回應重放與 body 變更。 `test_quota_race` 用兩把 key 並行各買 3 張。 `test_zone_converges` 用 500 位買家爭取 300 席，每筆配 2 張，最後斷言恰為 150 筆訂單、300 張 held。 `test_allocation_distinguishes_locked_inventory_from_sold_out` 驗證兩類短缺。見 `backend/tests/booking/test_booking.py:131`、`backend/tests/booking/test_booking.py:91`、`backend/tests/booking/test_booking.py:67`、`backend/tests/booking/test_booking.py:255`。
 
-**證據**　可從測試中的狀態碼、配額與座位不變式斷言核對，對外回應契約見 [OpenAPI](docs/openapi.json)（`docs/openapi.json:2978`）。
+**證據**　可從測試中的狀態碼、配額與座位不變式斷言核對，對外回應契約見 [OpenAPI](docs/openapi.json)（`docs/openapi.json:3143`）。
 
 ## Q4 即時推送
 
@@ -155,7 +164,7 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 
 **驗證**　route introspection 巡覽所有已註冊的 API route，檢查 endpoint 宣告的 policy metadata，依 HTTP method 與完整路徑比對 public allowlist。另驗證缺少 policy 或繞過 SecureRouter 註冊的行為會遭拒。OpenAPI 測試逐 operation 核對 security 與錯誤契約，並比對匯出的 JSON。Runtime 整合測試驗證指定路由的角色與物件權限，其中匯入測試涵蓋上傳、查詢、進度串流與錯誤檔下載。最容易漏掉的是 `GET /api/v1/seat-imports/{job_id}/errors.csv`。URL 只有 job UUID，下載內容有原始欄位與錯誤資訊，因此先 JOIN parent event，以 Admin 或活動 owner 身分完成授權，才讀取錯誤列與建立下載檔。見 `backend/tests/authz/test_route_policies.py:52`、`backend/tests/authz/test_route_policies.py:75`、`backend/tests/authz/test_route_policies.py:93`、`backend/tests/authz/test_route_policies.py:102`、`backend/tests/authz/test_openapi.py:22`、`backend/tests/authz/test_openapi.py:76`、`backend/tests/imports/test_imports.py:70`、`backend/src/ticketing/api/routes/imports.py:256`、`backend/src/ticketing/imports/jobs.py:64`。
 
-**證據**　`test_logout_invalidates_the_cookie_immediately`、`test_role_change_revokes_target_sessions_and_is_audited`、`test_disable_revokes_sessions`、`test_invalid_session_closes_stream`、`test_disable_creator_after_staging_cancels_finalize`、`test_import_authorization_matrix` 的斷言與 [OpenAPI](docs/openapi.json) 可交叉核對。見 `backend/tests/integration/test_auth.py:82`、`backend/tests/integration/test_admin_users.py:24`、`backend/tests/integration/test_admin_users.py:47`、`backend/tests/realtime/test_api.py:507`、`backend/tests/imports/test_imports.py:200`、`backend/tests/imports/test_imports.py:70`、`docs/openapi.json:2701`。
+**證據**　`test_logout_invalidates_the_cookie_immediately`、`test_role_change_revokes_target_sessions_and_is_audited`、`test_disable_revokes_sessions`、`test_invalid_session_closes_stream`、`test_disable_creator_after_staging_cancels_finalize`、`test_import_authorization_matrix` 的斷言與 [OpenAPI](docs/openapi.json) 可交叉核對。見 `backend/tests/integration/test_auth.py:82`、`backend/tests/integration/test_admin_users.py:24`、`backend/tests/integration/test_admin_users.py:47`、`backend/tests/realtime/test_api.py:507`、`backend/tests/imports/test_imports.py:200`、`backend/tests/imports/test_imports.py:70`、`docs/openapi.json:819`。
 
 ## Q6 監控數據
 
@@ -179,9 +188,9 @@ FAILED backend/tests/booking/test_booking.py::test_break_it[naive] - Assertio...
 - **一個副本牆鐘慢 20 秒**　以 Redis Stream ID 的接收時間減 producer 單調時鐘，取 60 秒樣本的最小偏移來分桶。只慢 API 的 wall clock 時，該副本的量仍落在校正後的秒，圖表的 `clock_skew_ms` 約為 20,000，nginx 的秒不受它影響。網路抖動、首次校正資料不足和秒邊界仍可能使樣本落到相鄰桶。見 `backend/src/ticketing/telemetry/app_metrics.py:96`、`backend/src/ticketing/telemetry/app_metrics.py:164`、`backend/src/ticketing/telemetry/app_metrics.py:190`、`backend/src/ticketing/telemetry/app_metrics.py:235`、`backend/src/ticketing/telemetry/collector.py:60`。
 - **來源衝突**　入口 HTTP 結果與耗時以 nginx 存取日誌為準。該日誌可觀察 proxy 逾時及排隊影響，並以 Edge log status 499 記錄 client disconnect。查特定 API handler 或 hold 結果使用 App 路由與業務資料，先看 completeness。訂單成交與座位歸屬以 PostgreSQL 交易為準。對客戶端連線或畫面體感用 k6／SSE probe 的樣本，口徑見 [LOADTEST.md](LOADTEST.md)。
 
-**驗證**　`test_edge_event_time_grace_sse_exclusion_and_connection_sample`、`test_minimum_delay_dedupe_wall_skew_completeness_and_gauge`、`test_rule_fires_and_resolves`、`test_admin_metric_history_streams_and_openapi`。見 `backend/tests/telemetry/test_logs.py:104`、`backend/tests/telemetry/test_app_metrics.py:39`、`backend/tests/telemetry/test_alerts.py:30`、`backend/tests/telemetry/test_admin.py:154`。
+**驗證**　`test_edge_event_time_grace_sse_exclusion_and_connection_sample`、`test_minimum_delay_dedupe_wall_skew_completeness_and_gauge`、`test_rule_fires_and_resolves`、`test_admin_metric_history_streams_and_openapi`。見 `backend/tests/telemetry/test_logs.py:104`、`backend/tests/telemetry/test_app_metrics.py:39`、`backend/tests/telemetry/test_alerts.py:30`、`backend/tests/telemetry/test_admin.py:242`。
 
-**證據**　時鐘測試注入慢 20 秒的 producer wall timestamp，驗證校正分桶及 `20_000` ms skew。監控合約另見 [OpenAPI](docs/openapi.json)（`docs/openapi.json:5054`）與 [telemetry README](backend/src/ticketing/telemetry/README.md)。本文件的 error rate 採目前監控查詢的 5xx 定義。
+**證據**　時鐘測試注入慢 20 秒的 producer wall timestamp，驗證校正分桶及 `20_000` ms skew。監控合約另見 [OpenAPI](docs/openapi.json)（`docs/openapi.json:5241`）與 [telemetry README](backend/src/ticketing/telemetry/README.md)。本文件的 error rate 採目前監控查詢的 5xx 定義。
 
 ## 替代方案與取捨
 

@@ -299,3 +299,31 @@ async def test_admin_metric_history_streams_and_openapi(
         for status in ("401", "403", "503"):
             assert operation["responses"][status]["content"]["application/problem+json"]["examples"]
     assert "MetricFrame" in schema["components"]["schemas"]
+
+
+async def test_metric_error_rate_excludes_4xx(
+    client: httpx.AsyncClient,
+    db: asyncpg.Connection,
+) -> None:
+    await create_user(db, "admin@example.com", role="admin")
+    await login(client, "admin@example.com")
+    start = second(datetime.now(UTC)) - timedelta(seconds=10)
+    await db.execute(
+        """INSERT INTO metrics_1s (ts, source, req_total, err_4xx, err_5xx) VALUES
+           ($1::timestamptz, 'edge', 10, 0, 1),
+           ($1::timestamptz + interval '1 second', 'edge', 10, 4, 1),
+           ($1::timestamptz + interval '2 seconds', 'edge', 10, 4, 0)""",
+        start,
+    )
+    response = await client.get(
+        BASE + "/metrics",
+        params={
+            "from": start.isoformat(),
+            "to": (start + timedelta(seconds=3)).isoformat(),
+            "source": "edge",
+        },
+    )
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert [item["err_4xx"] for item in items] == [0, 4, 4]
+    assert [item["error_rate"] for item in items] == [0.1, 0.1, 0.0]

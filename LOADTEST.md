@@ -1,5 +1,25 @@
 # 壓測與資源驗證
 
+## 結論摘要
+
+| 需求指標 | 第 2 輪（3 個 API 副本） | 6 個 API 副本 | 來源 |
+|---|---|---|---|
+| 情境 A · 吞吐（k6 全路徑） | 2,098 req/s（134,801 筆） | 1,919 req/s（120,426 筆） | [第 2 輪 k6](docs/evidence/loadtest-run2-20261121/a/k6-summary.json) · [6 副本 k6](docs/evidence/loadtest-run3-6replicas-20261121/a/k6-summary.json) |
+| 情境 A · HTTP p50／p95／p99（k6） | 1,043／2,036／2,263 ms | 1,038／1,973／2,399 ms | 同上 |
+| 情境 A · 主動卸載 `503 server-busy` | 113,642 筆（約 84%） | 48,049 筆（約 40%） | 同上 |
+| 情境 A · 建單業務 409（占全路徑請求） | 12,494 筆（約 9.27%） | 29,278 筆（約 24.31%） | [第 2 輪 nginx](docs/evidence/loadtest-run2-20261121/a/nginx-summary.txt) · [6 副本 nginx](docs/evidence/loadtest-run3-6replicas-20261121/a/nginx-summary.txt) |
+| 情境 A · k6 非預期錯誤 | 6 筆（約 0.00445%） | 51 筆（約 0.04235%） | [第 2 輪 k6](docs/evidence/loadtest-run2-20261121/a/k6-summary.json) · [6 副本 k6](docs/evidence/loadtest-run3-6replicas-20261121/a/k6-summary.json) |
+| 情境 A · 排空後一致性 SQL | 0 列 | 0 列 | [第 2 輪 SQL 輸出](docs/evidence/loadtest-run2-20261121/a/consistency.txt) · [6 副本 SQL 輸出](docs/evidence/loadtest-run3-6replicas-20261121/a/consistency.txt) |
+| 情境 B · SSE 峰值／最終與 DB 相符 | 2,000 條（寫入期間亦達峰值）／2,000 個 | 未執行 | [第 2 輪 SSE client](docs/evidence/loadtest-run2-20261121/b/sse-client.txt) |
+| 情境 B · Delta 套用 p50／p95／p99 | 266／8,060／16,600 ms | 未執行 | 同上 |
+| 100,000 列座位匯入 | 獨立量測：CSV 11.38 秒、JSON 13.46 秒，均在 60 秒內 | 未重測 | [匯入實測](docs/evidence/import-100k.md) |
+| 500,000 筆訂單 Excel | 獨立量測（3 副本，各限 512 MiB），下載 217.3／236.5 秒，`anon` 峰值約 108 MiB，驗證 500,000 筆明細，無 OOM 或重啟 | 未重測 | [Excel 實測](docs/evidence/cp4-excel-500k.md) |
+
+- 情境 A 各輪均未發現超賣。[一致性檢查](#6-一致性檢查) · [6 副本結果](#7-瓶頸分析)
+- k6 的 `FAILED` 源於專案的嚴格門檻。第 2 輪有重放因過載未能驗證，兩輪均未達零非預期錯誤門檻。已驗證的重放全數正確，兩輪排空後的一致性查核均通過。[第 2 輪執行紀錄](docs/evidence/loadtest-run2-20261121/run-log.txt) · [6 副本執行紀錄](docs/evidence/loadtest-run3-6replicas-20261121/run-log.txt)
+- 第 2 輪的 CPU 擷取與擴容後的結果顯示 API 程序 CPU 可能是主要瓶頸，擴容後瓶頸可能轉向 PostgreSQL 與付款路徑。[瓶頸分析](#7-瓶頸分析)
+- 在 repo 根目錄執行 `API_REPLICAS=3 loadtest/run.sh all` 重跑第 2 輪情境，再用 `API_REPLICAS=6 loadtest/run.sh a` 重跑擴容對照。[重現指令](#8-重現指令與產物)
+
 ## 目錄
 
 - [1. 測試機器與方法](#1-測試機器與方法)

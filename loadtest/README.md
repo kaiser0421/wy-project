@@ -37,6 +37,26 @@ loadtest/run.sh all
 
 A 以 `POST /api/v1/auth/login` 登入主辦人。買家及其 session 直接寫入 PostgreSQL，避開登入限流。合成 session 的初始 idle 與 absolute deadline 皆為 12 小時，正常登入預設分別為 30 分鐘與 12 小時。直接執行 `prepare_a.py` 時，可透過 `LOADTEST_DATABASE_URL` 或 `--database-url` 指定寫入 fixture 的 DSN，未設定時依序使用 `DATABASE_URL` 或本機預設 DSN。Runner 使用 Compose 注入的 `DATABASE_URL`，不會從 shell 轉傳 `LOADTEST_DATABASE_URL`。見 `loadtest/prepare_a.py:44`、`loadtest/prepare_a.py:54`、`loadtest/prepare_a.py:97`、`backend/src/ticketing/core/settings.py:46`、`loadtest/run.sh`、`compose.yaml:7`。
 
+## 座位匯入資料
+
+在 repo 根目錄用 [`scripts/gen_seats.py`](../scripts/gen_seats.py#L28) 各產生一份 100,000 列 CSV 與 JSON。輸出格式由副檔名決定，`--zone` 預設為 `A`。
+
+```bash
+uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.csv --zone A
+uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.json --zone A
+```
+
+每個範例檔案與模式各用一個尚無座位、只含區域 `A` 的草稿活動驗證。
+
+| 檔案 | `all_or_nothing` | `skip_invalid` |
+|---|---|---|
+| [seats_sample.csv](../samples/seats_sample.csv) | `succeeded`，新增 3 席 | `succeeded`，新增 3 席 |
+| [seats_sample.json](../samples/seats_sample.json) | `succeeded`，新增 3 席 | `succeeded`，新增 3 席 |
+| [seats_invalid.csv](../samples/seats_invalid.csv) | `validation_failed`，新增 0 席，6 列錯誤 | `partially_succeeded`，新增 `A/R1/1`，6 列錯誤 |
+| [seats_duplicates.json](../samples/seats_duplicates.json) | `validation_failed`，新增 0 席，2 列錯誤 | `partially_succeeded`，新增 `A/R1/2`，2 列錯誤 |
+
+重複座位以區域和排號的大寫值及去除前導零的座號比對，同組每列均標記為錯誤。見 `backend/src/ticketing/imports/validation.py:11`、`backend/src/ticketing/imports/runner.py:225`。
+
 ## 輸出與結果核對
 
 | 產物（相對於 `OUT`） | 內容 |

@@ -91,7 +91,29 @@ npm ci
 TICKETING_ORIGIN=http://127.0.0.1:8081 npm run dev -- --port 8080 --strictPort
 ```
 
+### 座位匯入範例
+
+在 repo 根目錄用 [`scripts/gen_seats.py`](scripts/gen_seats.py#L28) 各產生一份 100,000 列 CSV 與 JSON。輸出格式由副檔名決定，`--zone` 預設為 `A`。
+
+```bash
+uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.csv --zone A
+uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.json --zone A
+```
+
+每個檔案與模式各用一個尚無座位、只含區域 `A` 的草稿活動驗證。上傳後查看匯入作業狀態與錯誤報告。
+
+| 檔案 | `all_or_nothing` | `skip_invalid` |
+|---|---|---|
+| [seats_sample.csv](samples/seats_sample.csv) | `succeeded`，新增 3 席 | `succeeded`，新增 3 席 |
+| [seats_sample.json](samples/seats_sample.json) | `succeeded`，新增 3 席 | `succeeded`，新增 3 席 |
+| [seats_invalid.csv](samples/seats_invalid.csv) | `validation_failed`，新增 0 席，6 列錯誤 | `partially_succeeded`，新增 `A/R1/1`，6 列錯誤 |
+| [seats_duplicates.json](samples/seats_duplicates.json) | `validation_failed`，新增 0 席，2 列錯誤 | `partially_succeeded`，新增 `A/R1/2`，2 列錯誤 |
+
+重複座位以區域和排號的大寫值及去除前導零的座號比對，同組每列均標記為錯誤。見 `backend/src/ticketing/imports/validation.py:11`、`backend/src/ticketing/imports/runner.py:225`。
+
 ## 測試與實測
+
+正式量測與擴容對照見 [壓測結論摘要](LOADTEST.md#結論摘要)。
 
 | 指令 | 驗證範圍 |
 | --- | --- |
@@ -153,7 +175,7 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 | 二.1 完整程式與歷史 | [GitHub repository 與 commit 歷史](https://github.com/kaiser0421/wy-project) |
 | 二.2 啟動、技術棧、帳號、限制 | 本 README |
 | 二.3 環境參數 | [`.env.example`](.env.example) |
-| 二.4 座位匯入範例 | [CSV](samples/seats_sample.csv) · [JSON](samples/seats_sample.json)。在含區域 `A` 且尚未匯入座位的草稿活動，任選一份匯入，預期新增 3 席。 |
+| 二.4 座位匯入範例 | [座位匯入範例](#座位匯入範例)列出樣本、兩種模式的預期結果及 100,000 列產檔指令。 |
 | 二.5 系統架構圖 | [Markdown](docs/architecture.md) · [HTML](docs/architecture.html)（透過 jsDelivr 載入 Mermaid） |
 | 二.6 壓測腳本與報告 | [執行說明](loadtest/README.md) · [LOADTEST.md](LOADTEST.md) |
 | 二.7 AI 工具與實作缺陷 | [AI_USAGE.md](AI_USAGE.md) |
