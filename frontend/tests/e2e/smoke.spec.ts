@@ -1,5 +1,33 @@
 import { expect, test } from "@playwright/test";
 
+test("the seat map follows the system and saved theme choices", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/?mock=1");
+  const theme = page.getByRole("combobox", { name: "Theme" });
+  const map = page.locator(".map-viewport canvas");
+  const background = () => map.evaluate((canvas: HTMLCanvasElement) => {
+    const pixel = canvas.getContext("2d")!.getImageData(0, 0, 1, 1).data;
+    return Array.from(pixel);
+  });
+
+  await expect(theme).toHaveValue("system");
+  await expect.poll(background).toEqual([242, 246, 249, 255]);
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect.poll(background).toEqual([18, 28, 42, 255]);
+
+  await theme.selectOption("light");
+  await expect.poll(background).toEqual([242, 246, 249, 255]);
+  await page.reload();
+  await expect(theme).toHaveValue("light");
+  await expect.poll(background).toEqual([242, 246, 249, 255]);
+
+  await theme.selectOption("dark");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect.poll(background).toEqual([18, 28, 42, 255]);
+  await theme.selectOption("system");
+  await expect.poll(background).toEqual([242, 246, 249, 255]);
+});
+
 test("buyer can choose a seat by keyboard, create a hold, and see payment settle", async ({ page }) => {
   await page.goto("/?mock=1");
   await expect(page.getByRole("heading", { name: "Harbor Lights Festival" })).toBeVisible();
@@ -56,11 +84,19 @@ test("viewer can browse and the seat page fits a 400px viewport", async ({ page 
 test("admin can view graphs, acknowledge an alert, look up a trace, and edit access", async ({ page }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", error => pageErrors.push(error.message));
+  await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/?mock=1#/login");
   await page.getByRole("button", { name: "Admin", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Monitoring" })).toBeVisible();
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
   await expect(page.locator(".uplot canvas")).toHaveCount(4);
+  await page.getByRole("combobox", { name: "Theme" }).selectOption("dark");
+  await expect.poll(() => page.locator(".uplot canvas").first().evaluate((canvas: HTMLCanvasElement) => {
+    const pixels = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
+    // Incomplete-data shading uses the dark --chart-incomplete token (#26374c).
+    return pixels.some((red, index) => index % 4 === 0 && red === 38 &&
+      pixels[index + 1] === 55 && pixels[index + 2] === 76 && pixels[index + 3] === 255);
+  })).toBe(true);
   await page.getByRole("button", { name: "Acknowledge" }).click();
   await expect(page.getByText("Acknowledged", { exact: true })).toBeVisible();
   await page.getByLabel("Request ID").fill("demo-request");

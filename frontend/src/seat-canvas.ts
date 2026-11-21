@@ -1,9 +1,23 @@
 import type { SeatModel } from "./seat-model";
 import { AVAILABLE, CELL, HELD, SeatGrid, statusName } from "./seat-model";
+import { onThemeChange } from "./theme";
 import { el } from "./view";
 
-const palette = ["#2a8b7b", "#9c661a", "#687a92"];
 const size = 14;
+
+function seatColors() {
+  const styles = getComputedStyle(document.documentElement);
+  const color = (token: string) => styles.getPropertyValue(token).trim();
+  return {
+    background: color("--seat-background"),
+    zone: color("--seat-zone"),
+    row: color("--muted"),
+    states: [color("--seat-available"), color("--seat-held"), color("--seat-sold")],
+    selected: color("--seat-selected"),
+    symbol: color("--seat-symbol"),
+    outline: color("--seat-outline"),
+  };
+}
 
 export class SeatCanvas {
   readonly viewport: HTMLDivElement;
@@ -19,6 +33,8 @@ export class SeatCanvas {
   private active: number;
   private highlighted = false;
   private readonly resize: ResizeObserver;
+  private readonly theme = new AbortController();
+  private colors = seatColors();
 
   constructor(private readonly model: SeatModel, private readonly toggle: (position: number) => void,
     selectable: boolean) {
@@ -66,6 +82,10 @@ export class SeatCanvas {
     };
     this.resize = new ResizeObserver(this.redraw);
     this.resize.observe(this.viewport);
+    onThemeChange(() => {
+      this.colors = seatColors();
+      this.redraw();
+    }, this.theme.signal);
     this.schedule();
   }
 
@@ -92,6 +112,7 @@ export class SeatCanvas {
   }
 
   destroy(): void {
+    this.theme.abort();
     this.resize.disconnect();
     this.viewport.removeEventListener("scroll", this.redraw);
     cancelAnimationFrame(this.frame);
@@ -123,7 +144,7 @@ export class SeatCanvas {
 
   private draw = () => {
     this.frame = 0;
-    const { canvas, context, viewport, grid } = this;
+    const { canvas, context, viewport, grid, colors } = this;
     const width = Math.min(viewport.clientWidth, grid.width);
     const height = Math.min(viewport.clientHeight, grid.height);
     if (!width || !height) return;
@@ -138,14 +159,14 @@ export class SeatCanvas {
     }
     context.setTransform(dpr, 0, 0, dpr, -left * dpr, -top * dpr);
     if (this.full) {
-      context.fillStyle = "#f2f6f9";
+      context.fillStyle = colors.background;
       context.fillRect(left, top, width, height);
       grid.visible(left, top, width, height, zone => {
-        context.fillStyle = "#263b53";
+        context.fillStyle = colors.zone;
         context.font = "bold 13px system-ui";
         context.fillText(`ZONE ${zone.code}`, 16, zone.y + 20);
       }, (label, y) => {
-        context.fillStyle = "#50647b";
+        context.fillStyle = colors.row;
         context.font = "11px system-ui";
         context.textAlign = "right";
         context.fillText(label, 42, y + 11, 34);
@@ -157,7 +178,7 @@ export class SeatCanvas {
         const x = grid.x[position]!;
         const y = grid.y[position]!;
         if (x + CELL < left || y + CELL < top || x > left + width || y > top + height) continue;
-        context.fillStyle = "#f2f6f9";
+        context.fillStyle = colors.background;
         context.fillRect(x - 2, y - 2, CELL, CELL);
         this.drawSeat(position);
       }
@@ -167,22 +188,22 @@ export class SeatCanvas {
   };
 
   private drawSeat = (position: number) => {
-    const { context: ctx, grid } = this;
+    const { context: ctx, grid, colors } = this;
     const x = grid.x[position]!;
     const y = grid.y[position]!;
     const state = this.model.states[position]!;
     const chosen = this.selected.has(position);
-    ctx.fillStyle = chosen ? "#204ea8" : palette[state]!;
+    ctx.fillStyle = chosen ? colors.selected : colors.states[state]!;
     ctx.fillRect(x, y, size, size);
     if (chosen) {
-      ctx.strokeStyle = "#fff";
+      ctx.strokeStyle = colors.symbol;
       ctx.beginPath();
       ctx.moveTo(x + 3, y + 7);
       ctx.lineTo(x + 6, y + 10);
       ctx.lineTo(x + 11, y + 4);
       ctx.stroke();
     } else if (state !== AVAILABLE) {
-      ctx.strokeStyle = "#fff";
+      ctx.strokeStyle = colors.symbol;
       ctx.beginPath();
       ctx.moveTo(x + 3, y + 11);
       ctx.lineTo(x + 11, y + 3);
@@ -193,7 +214,7 @@ export class SeatCanvas {
       ctx.stroke();
     }
     if (this.highlighted && position === this.active) {
-      ctx.strokeStyle = "#101b2b";
+      ctx.strokeStyle = colors.outline;
       ctx.strokeRect(x - 1, y - 1, size + 2, size + 2);
     }
   };
