@@ -170,6 +170,8 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 - 匯入 10,000 列的 API 實測為 3.3 秒。100,000 列從上傳到完成，CSV 11.38 秒、JSON 13.46 秒（開發筆電，門檻 60 秒，`test_import_100k_under_60s`）。見 [10 萬列匯入實測](docs/evidence/import-100k.md)、`backend/tests/imports/test_import_perf.py:16`。
 - 在 512 MiB 上限的 API 容器匯出 500,000 筆訂單，首次下載完成為 217.3 秒，`anon` 取樣峰值約 108 MiB，三個副本均無 OOM。見 [Excel 匯出實測紀錄](docs/evidence/cp4-excel-500k.md)。
 
+在已啟動、可拋棄的 Compose 測試堆疊執行 `./scripts/export_500k.sh`，即可新增一個含 500,000 筆合成訂單的活動，以 Admin 經 nginx 下載報表，並用 openpyxl 唯讀模式驗證筆數。腳本會留下 `sales-500k-<活動 ID>.xlsx`，並列出下載耗時及各 API 容器的記憶體峰值。需安裝 uv，且 Docker 主機須支援 cgroup v2。若 nginx 使用自訂網址，可設定 `EXPORT_ORIGIN`。
+
 ## API 與架構
 
 - API 文件可查 [Swagger UI](http://localhost:8080/api/docs)、[執行中 OpenAPI JSON](http://localhost:8080/api/openapi.json) 或 [repo 內的 OpenAPI JSON](docs/openapi.json)。見 `backend/src/ticketing/api/app.py:328`。
