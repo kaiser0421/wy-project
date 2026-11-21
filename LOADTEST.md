@@ -5,8 +5,8 @@
 - [1. 測試機器與方法](#1-測試機器與方法)
 - [2. Scenario A](#2-scenario-a)
 - [3. Scenario B](#3-scenario-b)
-- [4. CP3 座位匯入](#4-cp3-座位匯入)
-- [5. CP4 Excel 匯出](#5-cp4-excel-匯出)
+- [4. 座位匯入](#4-座位匯入)
+- [5. Excel 匯出](#5-excel-匯出)
 - [6. 一致性檢查](#6-一致性檢查)
 - [7. 瓶頸分析](#7-瓶頸分析)
 - [8. 重現指令與產物](#8-重現指令與產物)
@@ -16,26 +16,26 @@
 | 筆電試跑 | 桌機正式跑 |
 |---|---|
 | **CPU**　Intel MacBook，2 核心／4 執行緒。 | **CPU**　（待桌機壓測結果） |
-| **RAM／容器配額**　8 GB。Docker Desktop VM 4 CPU／5 GB（CP4 紀錄）。 | **RAM／容器配額**　（待桌機壓測結果） |
-| **OS／版本**　macOS（Intel）。CP4 日期為 2026-11-21（台北）。 | **OS／版本／日期／commit**　（待桌機壓測結果，填入 `environment.txt`） |
-| **拓樸**　CP1 的產壓程式、nginx、API、PostgreSQL 和其他服務共用宿主機。先前的 Scenario B 開發試跑使用單一 Uvicorn 和測試用 DB／Redis 容器，見 §3。 | **拓樸**　在另一台桌機執行 `loadtest/run.sh`。預設產壓端與整個 Compose stack 仍共用該機器。實際 CPU 限額與服務配置（待桌機壓測結果）。 |
+| **RAM／容器配額**　8 GB。Docker Desktop VM 4 CPU／5 GB（Excel 匯出紀錄）。 | **RAM／容器配額**　（待桌機壓測結果） |
+| **OS／版本**　macOS（Intel）。Excel 匯出日期為 2026-11-21（台北）。 | **OS／版本／日期／commit**　（待桌機壓測結果，填入 `environment.txt`） |
+| **拓樸**　筆電壓測的產壓程式、nginx、API、PostgreSQL 和其他服務共用宿主機。先前的 Scenario B 開發試跑使用單一 Uvicorn 和測試用 DB／Redis 容器，見 §3。 | **拓樸**　在另一台桌機執行 `loadtest/run.sh`。預設產壓端與整個 Compose stack 仍共用該機器。實際 CPU 限額與服務配置（待桌機壓測結果）。 |
 
-`compose.yaml` 預設啟動三個 API 副本（各 512 MiB）與 PostgreSQL 16。宿主機 nginx 預設 `127.0.0.1:8080`，產壓容器走 Compose network 的 `http://nginx:8080`。A 使用 `grafana/k6:0.57.0`，B 的 writer 與 SSE probe 使用專案 API image 中的 Python。兩個情境各自建立活動。見 `compose.yaml:45`、`compose.yaml:104`、`compose.yaml:203`、`loadtest/run.sh:30`、`loadtest/run.sh:81`、`loadtest/run.sh:109`。
+`compose.yaml` 預設啟動三個 API 副本（各 512 MiB）與 PostgreSQL 16。宿主機 nginx 預設 `127.0.0.1:8080`，產壓容器走 Compose network 的 `http://nginx:8080`。A 使用 `grafana/k6:0.57.0`，B 的 writer 與 SSE probe 使用專案 API image 中的 Python。兩個情境各自建立活動。見 `compose.yaml:45`、`compose.yaml:107`、`compose.yaml:203`、`loadtest/run.sh:30`、`loadtest/run.sh:81`、`loadtest/run.sh:109`。
 
 ## 2. Scenario A
 
-**參數與流量**　單一開賣活動 10,000 席、3,000 個 `constant-vus`，持續 60 秒。準備腳本經 API 匯入 CSV、發布活動，再建立每位買家的獨立 session。每次購買抽 1–4 張，約 70% 指定席、30% 區域配位。成功後約 80% 模擬付款並輪詢訂單、10% 取消、10% 保留至期限，另抽約 2% 用原 key 驗證重放。觸及個人配額後，確認已有 4 張的 VU 切到查訂單。請求 timeout 5 秒，指定的可重試 409 最多重送兩次。見 `loadtest/prepare_a.py:72`、`loadtest/prepare_a.py:97`、`loadtest/scenario_a.js:22`、`loadtest/scenario_a.js:57`、`loadtest/scenario_a.js:87`、`loadtest/scenario_a.js:121`、`loadtest/scenario_a.js:153`。
+**參數與流量**　單一開賣活動 10,000 席、3,000 個 `constant-vus`，持續 60 秒。準備腳本以 `POST /api/v1/auth/login` 登入主辦人，透過 API 建立活動、匯入座位並發布，並直接在 PostgreSQL 建立每位買家的獨立 session。初始 idle 與 absolute deadline 均為 12 小時。正常登入的預設分別為 30 分鐘與 12 小時。每次購買抽 1–4 張，約 70% 指定席、30% 區域配位。成功後約 80% 模擬付款並輪詢訂單、10% 取消、10% 保留至期限，另抽約 2% 用原 key 驗證重放。觸及個人配額後，確認已有 4 張的 VU 切到查訂單。請求 timeout 5 秒，指定的可重試 409 最多重送兩次。見 `loadtest/prepare_a.py:56`、`loadtest/prepare_a.py:72`、`loadtest/prepare_a.py:110`、`backend/src/ticketing/core/settings.py:46`、`loadtest/scenario_a.js:22`、`loadtest/scenario_a.js:57`、`loadtest/scenario_a.js:87`、`loadtest/scenario_a.js:121`、`loadtest/scenario_a.js:153`。
 
 | 正式結果 | 數值 | 來源／口徑 |
 |---|---|---|
-| k6 總 RPS | （待桌機壓測結果） | `a/k6-summary.json` 的 `http_reqs.rate`。包含重試、付款與查詢。 |
-| k6 HTTP p50／p95（ms） | （待桌機壓測結果） | `http_req_duration` 的 median／p95。 |
+| k6 總 RPS | （待桌機壓測結果） | `a/k6-summary.json` 的 `metrics.http_reqs.rate`。包含重試、付款與查詢。 |
+| k6 HTTP p50／p95（ms） | （待桌機壓測結果） | `a/k6-summary.json` 的 `metrics.http_req_duration.med` 與 `metrics.http_req_duration["p(95)"]`。 |
 | nginx HTTP p50／p95／p99（ms） | （待桌機壓測結果） | `a/nginx-access.json` 中帶本輪 run ID 的 `req_ms` 實為秒，乘 1,000 後對整輪樣本計算百分位數。nginx 與 k6 各有自己的樣本口徑。 |
 | 非預期錯誤率 | （待桌機壓測結果） | k6 `unexpected_errors`，例如 503、timeout、未列入預期清單的 409。 |
-| 業務衝突、成功、503、timeout | （待桌機壓測結果） | k6 outcomes 與 log，並用同輪 nginx status 交叉核對。客戶端 timeout 與 Edge 499 各報各的數字。 |
+| 業務衝突、成功、503、timeout | （待桌機壓測結果） | k6 outcomes 與 log，並用同輪 nginx status 交叉核對。分別記錄 client timeout 與 nginx 在 client disconnect 時寫入的 Edge log status 499。 |
 | 訂單／座位最終狀態、SQL 違規列 | （待桌機壓測結果） | `a/final-state.txt`、`a/consistency.txt`，排空後重驗見 §6。 |
 
-**CP1 筆電觀察**　3,000 VUs 在 2 核心／4 執行緒機器上把 CPU 壓滿，產壓端與服務互相爭用。大多數請求快速收到 `503 server-busy`，或在客戶端 timeout。總吞吐約 **86–95 req/s**，SQL mean 約 **35–170 ms**，同機 CPU 競爭明顯。一致性檢查未發現超賣。這是交接提供的試跑摘要。此輪完整 k6 percentile、錯誤比例與 SQL 輸出未附於倉庫，正式欄位待桌機補測。
+**筆電壓測**　3,000 VUs 在 2 核心／4 執行緒機器上把 CPU 壓滿，產壓端與服務互相爭用。大多數請求快速收到 `503 server-busy`，或在客戶端 timeout。總吞吐約 **86–95 req/s**，SQL mean 約 **35–170 ms**，同機 CPU 競爭明顯。一致性檢查未發現超賣。筆電試跑僅有摘要。完整 k6 percentile、錯誤率與 SQL 輸出待桌機正式量測。
 
 ## 3. Scenario B
 
@@ -60,7 +60,7 @@
 
 Burst 的 8,337 次串流嘗試包含 6,110 次 HTTP request errors，並出現 DB session 重驗 timeout。Paced run 的 115 次嘗試包含 10 次 request errors、81 次 EOF，無 gap／resync，全部 probe 最後收斂。兩輪都尚未驗證 2,000 條目標達成。見 [Scenario B 本機量測](loadtest/scenario_b.md#local-measurements)。
 
-## 4. CP3 座位匯入
+## 4. 座位匯入
 
 | 項目 | 結果 | 量測起訖 |
 |---|---|---|
@@ -70,9 +70,9 @@ Burst 的 8,337 次串流嘗試包含 6,110 次 HTTP request errors，並出現 
 
 100,000 列的個別秒數未附於紀錄。測試也確認 job 回報及 PostgreSQL 實際座位數都為 100,000。見 [test_import_100k_under_60s](backend/tests/imports/test_import_perf.py)（`backend/tests/imports/test_import_perf.py:16`）。可在已備妥 PostgreSQL 整合測試環境執行 `uv run pytest -s backend/tests/imports/test_import_perf.py`，或透過 `make test` 跑 Compose 測試。檔案上限及列數預設見 `backend/src/ticketing/core/settings.py:89`。
 
-## 5. CP4 Excel 匯出
+## 5. Excel 匯出
 
-以 `scripts/seed_orders_500k.sql` 灌入 **500,000** 筆訂單，以 Admin 經 nginx 呼叫 `GET /api/v1/events/{event_id}/reports/sales.xlsx?tz=Asia/Taipei`，完成下載後用 openpyxl read-only 驗證。三個 API 副本均驗證 cgroup 的 512 MiB 上限。見 `backend/src/ticketing/api/routes/reports.py:124`、`compose.yaml:104` 及 [CP4 原始量測](docs/evidence/cp4-excel-500k.md)。
+以 `scripts/seed_orders_500k.sql` 灌入 **500,000** 筆訂單，以 Admin 經 nginx 呼叫 `GET /api/v1/events/{event_id}/reports/sales.xlsx?tz=Asia/Taipei`，完成下載後用 openpyxl read-only 驗證。三個 API 副本均驗證 cgroup 的 512 MiB 上限。見 `backend/src/ticketing/api/routes/reports.py:124`、`compose.yaml:107` 及 [Excel 匯出原始量測](docs/evidence/cp4-excel-500k.md)。
 
 | 項目 | 實測 |
 |---|---|
@@ -83,7 +83,7 @@ Burst 的 8,337 次串流嘗試包含 6,110 次 HTTP request errors，並出現 
 | OOM／重啟 | 三副本 `OOMKilled=false`、`RestartCount=0`。 |
 | 檔案驗證 | 33,419,621 bytes。含 `Summary`、`Zones`、`Orders`，明細 500,000 列，表頭標示 `Asia/Taipei`，金額以數值存放。 |
 
-匯出使用 server-side cursor 每批 5,000 列與 xlsxwriter `constant_memory`，暫存檔寫入容器掛載的 export volume。nginx 報表專用 `proxy_read_timeout` 為 300 秒。CP4 證據覆蓋單次匯出與檔案驗證。倉庫另有要求 cgroup `memory.peak` 的 opt-in 測試，這次用 cgroup v2 取樣。見 `backend/src/ticketing/reports/sales.py:30`、`backend/src/ticketing/reports/sales.py:289`、`compose.yaml:103`、`infra/nginx/nginx.conf:138`、`backend/tests/reports/test_export_memory.py:22`。
+匯出使用 server-side cursor 每批 5,000 列與 xlsxwriter `constant_memory`，暫存檔寫入容器掛載的 export volume。nginx 報表專用 `proxy_read_timeout` 為 300 秒。匯出量測涵蓋單次匯出與檔案驗證。倉庫另有要求 cgroup `memory.peak` 的 opt-in 測試，這次用 cgroup v2 取樣。見 `backend/src/ticketing/reports/sales.py:30`、`backend/src/ticketing/reports/sales.py:289`、`compose.yaml:103`、`infra/nginx/nginx.conf:138`、`backend/tests/reports/test_export_memory.py:22`。
 
 ## 6. 一致性檢查
 
@@ -100,7 +100,7 @@ Scenario A 結束後腳本先等 90 秒，針對該活動執行 `loadtest/consis
 | `booking_replay_record` | 已完成的 create-order replay 有對應 owner 與訂單，保存的狀態碼、resource ref、Location 一致。 |
 | `outbox_unassigned`、`event_sequence`、`seat_event_missing`、`seat_event_extra` | outbox 完成編序，活動 seq 連續且 DB head 相符，archive 與 outbox 的逐席變更無缺少或多出。 |
 
-SQL 入口及規則見 `loadtest/consistency.sql:17`、`loadtest/consistency.sql:68`、`loadtest/consistency.sql:97`、`loadtest/consistency.sql:145`。Scenario B 使用合成訂單與座位寫入 fixture，採獨立 audit。Probe 必須追上最終 head 並與 DB 座位索引／狀態／版本 hash 相符，另檢查未編序數及 archive 差異。見 `loadtest/sse_client.py:261`、`loadtest/sse_client.py:334`。
+SQL 入口及規則見 `loadtest/consistency.sql:17`、`loadtest/consistency.sql:68`、`loadtest/consistency.sql:97`、`loadtest/consistency.sql:145`。Scenario B 使用合成訂單與座位寫入 fixture，採獨立 audit。Probe 必須追上最終 head 並與 DB 座位索引／狀態／版本 hash 相符。以 `peak_active = matching_clients = target_connections` 且 `outbox_pending = archive_mismatches = 0` 為通過條件。見 `loadtest/sse_client.py:261`、`loadtest/sse_client.py:348`、`loadtest/sse_client.py:363`。
 
 A 排空後重驗指令。將 `EVENT_ID` 設為 `a/event.json` 的活動 ID，`SEATS` 設為該輪預期庫存。
 
@@ -116,14 +116,14 @@ docker compose exec -T postgres psql -U ticketing -d ticketing \
 
 | 情境 | 觀察與正式量測判讀 |
 |---|---|
-| A／CP1 已觀察 | 筆電 CPU 飽和，k6 與 nginx、API、PostgreSQL 等服務共享 CPU。SQL mean 上升，503 和 timeout 主導結果。程式在 pool acquire、鎖及查詢逾時時會提早回可重試 503。試跑的總 RPS 反映這台機器上的混合結果。見 `backend/src/ticketing/core/db.py:39`、`backend/src/ticketing/booking/database.py:15`。 |
+| A 筆電壓測 | 筆電 CPU 飽和，k6 與 nginx、API、PostgreSQL 等服務共享 CPU。SQL mean 上升，503 和 timeout 主導結果。程式在 pool acquire、鎖及查詢逾時時會提早回可重試 503。試跑的總 RPS 反映這台機器上的混合結果。見 `backend/src/ticketing/core/db.py:39`、`backend/src/ticketing/booking/database.py:15`。 |
 | A 桌機待驗證 | 預期受 CPU、DB pool 等待、熱座位及同使用者配額鎖、付款回呼和 DB I/O 影響。比對同一時段的 k6、nginx、App／業務每秒資料、每容器 CPU 與 PostgreSQL wait。將成功 hold、業務 409 與 503 分開看。 |
 | B 開發試跑與待驗證 | Burst 已出現 session DB 重驗 timeout。正式跑應對照連線建立、各副本連線分布、DB pool、relay backlog、重連、delta apply 與最終 probe 數。共享 reader 把 PG polling 按活動攤銷，SSE fan-out、連線傳輸及重新驗證仍需資源。見 `backend/src/ticketing/realtime/reader.py:161`、`backend/src/ticketing/realtime/revocation.py:88`。 |
-| CP3／CP4 | 匯入計時含背景作業與回報。Excel 在同機實測已完成，`memory.current` 的峰值接近上限，同時可見大量可回收 page cache。更高磁碟 I/O 或與其他流量共用資源時的影響尚待量測。 |
+| 座位匯入／Excel 匯出 | 匯入計時含背景作業與回報。Excel 在同機實測已完成，`memory.current` 的峰值接近上限，同時可見大量可回收 page cache。更高磁碟 I/O 或與其他流量共用資源時的影響尚待量測。 |
 
 ## 8. 重現指令與產物
 
-從 repo root 使用 Git、Bash、Docker（Compose v2）及 `curl`。使用 Compose 的開發預設身分與 DB 參數，或依腳本同步調整環境。腳本透過 `http://127.0.0.1:${HTTP_PORT:-8080}/healthz/live` 檢查既有服務，未啟動時執行 `docker compose up -d --build`。若要按當前 checkout 重建可加 `REBUILD=1`。見 `loadtest/run.sh:42`、`loadtest/run.sh:57`、`loadtest/prepare_a.py:54`。
+從 repo root 使用 Git、Bash、Docker（Compose v2）及 `curl`。使用預設主辦人憑證、SQL 帳號和資料庫 `ticketing`、`sid` cookie，並允許 `http://localhost:8080` Origin。Linux bind mount 需先確認容器 UID 可讀寫輸出目錄。腳本透過 `http://127.0.0.1:${HTTP_PORT:-8080}/healthz/live` 檢查既有服務，未啟動時執行 `docker compose up -d --build`。若要按當前 checkout 重建可加 `REBUILD=1`。自訂 host port 請由 shell 傳入，例如 `HTTP_PORT=8081 loadtest/run.sh smoke`。見 `loadtest/run.sh:40`、`loadtest/run.sh:57`、`loadtest/run.sh:83`、`loadtest/prepare_a.py:56`。
 
 ```bash
 loadtest/run.sh smoke
@@ -132,7 +132,7 @@ loadtest/run.sh a
 loadtest/run.sh b
 ```
 
-`smoke` 為 A 50 VUs／15 秒／1,000 席與 B 50 SSE／30 秒／20 changes/s。 `all` 依序跑正式參數的 A、B。 `a` 和 `b` 可獨立執行。可用 `VUS`、`DURATION`、`SEATS`、`CONNECTIONS`、`B_DURATION`、`B_RATE` 覆寫參數。 `K6_CPUS` 可限制 A 的產壓容器 CPU，設值時需記入正式報告。自訂 `OUT` 時使用 `loadtest/` 下的相對路徑，以配合容器的掛載。見 `loadtest/run.sh:13`、`loadtest/run.sh:81`、`loadtest/run.sh:134`。
+`smoke` 為 A 50 VUs／15 秒／1,000 席與 B 50 SSE／30 秒／20 changes/s。 `all` 依序跑正式參數的 A、B。 `a` 和 `b` 可獨立執行。可用 `VUS`、`DURATION`、`SEATS`、`CONNECTIONS`、`B_DURATION`、`B_RATE` 覆寫參數。A、B 共用 `SEATS`。A 向下取 4 的倍數，SQL 仍用原值核對。B 至少 16 席，且 `B_DURATION` 為大於 25 的整數秒。 `K6_CPUS` 可限制 A 的產壓容器 CPU，設值時需記入正式報告。自訂 `OUT` 時使用 `loadtest/` 下的相對路徑，以配合容器的掛載。見 `loadtest/run.sh:13`、`loadtest/run.sh:81`、`loadtest/run.sh:134`。
 
 | 產物 | 用途 |
 |---|---|
@@ -141,6 +141,6 @@ loadtest/run.sh b
 | `a/metrics_1s.csv`、`a/business_1s.csv`、`a/event.json` | 對照系統與業務秒級資料，定位該輪活動。 |
 | `a/consistency.txt`、`a/final-state.txt` | 核對 SQL 輸出及訂單／座位統計。保留排空後重驗輸出。 |
 | `b/seed.txt`、`b/writer.txt`、`b/sse-client.txt` | 填 B 的活動、寫入成績、連線與最終 audit。 |
-| `loadtest/out/<timestamp>.tar.gz` | 腳本刪除 `sessions.json` 後打包結果。 |
+| `loadtest/out/<timestamp>.tar.gz` | 腳本進入打包步驟時刪除 `sessions.json`。提早中斷時憑證可能留在輸出目錄。 |
 
-腳本會在部分收集步驟失敗後繼續打包。需核對檔案存在且有完整結果、k6 thresholds、SQL 無執行錯誤，及 B 的最終 probe audit。其他手動參數見 [工具包](loadtest/README.md)。
+部分階段失敗後仍可能打包。A 須確認 k6 `checks` 全數成功、`unexpected_errors` 為零，並在 hold 到期與待辦排空後確認 SQL 無執行錯誤且回傳零違規列。B 須確認峰值及最終相符的 probe 數皆達目標，且無待編序 outbox 或 archive 差異。正式報告應記錄未達項目。權限、各參數限制與手動執行的 `LOADTEST_DATABASE_URL` 見 [壓測工具包](loadtest/README.md)。
