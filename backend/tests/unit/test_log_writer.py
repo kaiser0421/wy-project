@@ -53,11 +53,27 @@ def test_dropped_record_is_collector_compatible(monkeypatch) -> None:
     assert record["service"] == "api"
 
 
-def test_records_accepted_before_close_are_written(monkeypatch) -> None:
+def test_record_accepted_during_the_last_empty_wait_is_written(monkeypatch) -> None:
+    """A record accepted (and close() called) while the writer is inside an empty wait."""
+    from queue import Empty
+
     written: list[str] = []
     monkeypatch.setattr(_TeeWriter, "_write", lambda self, lines: written.append(lines))
-    for _ in range(20):
-        writer = _TeeWriter(None, background=True, capacity=64)
-        writer.msg('{"event": "last"}')
-        writer.close()
-    assert sum(chunk.count('"last"') for chunk in written) == 20
+    writer = _TeeWriter(None, background=False)  # no thread yet: drive _drain by hand
+    writer._queue = __import__("queue").Queue(maxsize=8)
+    real_get = writer._queue.get
+    calls = 0
+
+    def racing_get(block: bool = True, timeout: float | None = None):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # During the first empty wait: a record is accepted, then close() sets the flag.
+            writer.msg('{"event": "last"}')
+            writer._closing.set()
+            raise Empty
+        return real_get(block, 0.01 if block else None)
+
+    writer._queue.get = racing_get  # type: ignore[method-assign]
+    writer._drain()
+    assert any('"last"' in chunk for chunk in written)
