@@ -140,7 +140,7 @@ scenario_a() {
     > "$OUT/a/metrics_1s.csv" 2>/dev/null || true
   psql_q -c "\copy (SELECT * FROM business_1s WHERE ts BETWEEN '$started' AND '$ended'::timestamptz + interval '30 seconds' ORDER BY ts) TO STDOUT WITH CSV HEADER" \
     > "$OUT/a/business_1s.csv" 2>/dev/null || true
-  docker compose exec -T nginx sh -c "grep -F '\"load_run\":\"a-$STAMP\"' /data/logs/nginx-access.json" \
+  with_deadline 300 docker compose exec -T nginx sh -c "grep -F '\"load_run\":\"a-$STAMP\"' /data/logs/nginx-access.json" \
     > "$OUT/a/nginx-access.json" 2>/dev/null || true
 }
 
@@ -167,8 +167,11 @@ scenario_b() {
   tail -10 "$OUT/b/writer.txt" | tee -a "$OUT/run.log"
 }
 
-# Run a command with a deadline when coreutils `timeout` is available (Linux/WSL).
-with_deadline() { if command -v timeout >/dev/null; then timeout "$@"; else shift; "$@"; fi; }
+# Run a command with a deadline: coreutils `timeout` on Linux/WSL, perl's alarm elsewhere
+# (stock macOS has perl but no `timeout`).
+with_deadline() {
+  if command -v timeout >/dev/null; then timeout "$@"; else perl -e 'alarm shift; exec @ARGV' "$@"; fi
+}
 
 service_logs() {
   # Best effort: container logs since the run started, so failures can be diagnosed from the
@@ -190,16 +193,20 @@ service_logs() {
 }
 
 # Checkout URLs carry a capability token; mask it in every text file of the archive.
+# Fails (and so blocks packing) if any file could not be scrubbed.
 redact_archive() {
-  find "$OUT" -type f \( -name '*.log' -o -name '*.txt' -o -name '*.json' -o -name '*.csv' \) \
-    -exec sed -i.bak -E 's#(/pay/)[A-Za-z0-9._~%-]+#\1[redacted]#g' {} + 2>/dev/null || true
-  find "$OUT" -name '*.bak' -delete 2>/dev/null || true
+  LC_ALL=C find "$OUT" -type f \( -name '*.log' -o -name '*.txt' -o -name '*.json' -o -name '*.csv' \) \
+    -exec env LC_ALL=C sed -i.bak -E 's#(/pay/)[A-Za-z0-9._~%-]+#\1[redacted]#g' {} + \
+    && find "$OUT" -name '*.bak' -delete
 }
 
 bundle() {
   find "$OUT" -name 'sessions.json' -delete          # live credentials never leave the machine
   service_logs
-  redact_archive
+  if ! redact_archive; then
+    log "Could not scrub checkout tokens from $OUT; not packing. Inspect or delete it manually."
+    return 1
+  fi
   tar -czf "$OUT.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
   log "Results archive: $OUT.tar.gz"
 }
