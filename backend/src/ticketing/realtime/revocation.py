@@ -18,8 +18,13 @@ from ticketing.core.logging import get_logger
 
 log = get_logger(__name__)
 
-RECHECK_ACQUIRE_TIMEOUT_S = 0.2
-RECHECK_QUERY_TIMEOUT_MS = 300
+RECHECK_ACQUIRE_TIMEOUT_S = 1.0
+RECHECK_QUERY_TIMEOUT_MS = 1000
+# Consecutive failed rechecks (about one per second) before every local stream is closed.
+# Two was too eager: under heavy SSE load a busy replica missed two 0.2 s / 0.3 s rechecks and
+# closed all of its streams at once, so every client reconnected and refetched the snapshot
+# together. Pub/Sub still closes revoked streams immediately; this backstop now waits ~5 s.
+FAIL_CLOSED_AFTER = 5
 
 _LIVE_SESSIONS = """
 WITH clock AS MATERIALIZED (SELECT app_now() AS sampled_at)
@@ -94,7 +99,7 @@ class Revocations:
         return {row["id"] for row in rows}
 
     async def _recheck(self) -> None:
-        """Check distinct IDs independently of traffic and fail closed after two failures."""
+        """Check distinct IDs independently of traffic; fail closed after repeated failures."""
         loop = asyncio.get_running_loop()
         failures = 0
         while True:
@@ -108,7 +113,7 @@ class Revocations:
                     log.warning(
                         "seat_stream.recheck_failed", error=type(exc).__name__, failures=failures
                     )
-                    if failures >= 2:
+                    if failures >= FAIL_CLOSED_AFTER:
                         for sid in self.sessions:
                             self.revoke(sid)
                 else:

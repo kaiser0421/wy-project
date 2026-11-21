@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 
 import asyncpg
 
@@ -53,7 +53,4 @@ async def acquire(pool: asyncpg.Pool, timeout_s: float) -> AsyncIterator[asyncpg
     except TimeoutError as exc:
         raise server_busy("The database did not answer in time.") from exc
     finally:
-        # asyncpg terminates a connection whose reset fails before re-raising; the request has
-        # already finished its work, so it must not fail because of this.
-        with suppress(TimeoutError):
-            await pool.release(conn, timeout=timeout_s)
+        await pool.release(conn)

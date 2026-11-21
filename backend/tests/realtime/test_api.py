@@ -636,7 +636,7 @@ async def test_missing_replay_row_sends_resync_and_closes(
             await anext(events)
 
 
-async def test_two_failed_rechecks_close_all_local_streams(
+async def test_repeated_failed_rechecks_close_all_local_streams(
     client: httpx.AsyncClient,
     running_app: ASGIApp,
     asgi_app: ASGIApp,
@@ -660,6 +660,8 @@ async def test_two_failed_rechecks_close_all_local_streams(
         raise TimeoutError
 
     monkeypatch.setattr(revocations, "_live_sessions", fail)
+    # Shrink the production threshold (5) so the test stays fast; the behaviour is the same.
+    monkeypatch.setattr(revocation, "FAIL_CLOSED_AFTER", 2)
     async with (
         open_stream(running_app, client, event) as first,
         open_stream(running_app, client, event) as second,
