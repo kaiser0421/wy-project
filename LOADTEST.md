@@ -65,8 +65,8 @@ Burst 的 8,337 次串流嘗試包含 6,110 次 HTTP request errors，並出現 
 | 項目 | 結果 | 量測起訖 |
 |---|---|---|
 | 10,000 列 CSV | **3.3 秒**（筆電 API 試跑摘要） | 從提交 multipart 檔案到輪詢 job 為 `succeeded`，包含輪詢間隔。準備腳本的量測點見 `loadtest/prepare_a.py:77`。 |
-| 100,000 列 CSV | **低於 60 秒**（Workstream B） | 測試先產檔，才開始計時。包含 API 上傳、worker tick 與讀取 terminal job。 |
-| 100,000 列 JSON | **低於 60 秒**（Workstream B） | 同上，各格式獨立執行。 |
+| 100,000 列 CSV | **低於 60 秒**（`test_import_100k_under_60s`） | 測試先產檔，才開始計時。包含 API 上傳、worker tick 與讀取 terminal job。 |
+| 100,000 列 JSON | **低於 60 秒**（`test_import_100k_under_60s`） | 同上，各格式獨立執行。 |
 
 100,000 列的個別秒數未附於紀錄。測試也確認 job 回報及 PostgreSQL 實際座位數都為 100,000。見 [test_import_100k_under_60s](backend/tests/imports/test_import_perf.py)（`backend/tests/imports/test_import_perf.py:16`）。可在已備妥 PostgreSQL 整合測試環境執行 `uv run pytest -s backend/tests/imports/test_import_perf.py`，或透過 `make test` 跑 Compose 測試。檔案上限及列數預設見 `backend/src/ticketing/core/settings.py:89`。
 

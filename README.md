@@ -4,9 +4,9 @@
 
 ## 快速開始
 
-需要 Git、Docker（含 Compose v2）、Bash、`curl`、`uv` 與 Make。以下使用 Compose 開發預設值，請先確認 host ports 8080、5432、6379 可用。見 `compose.yaml:58`、`compose.yaml:72`、`compose.yaml:203`。
+需要 Git、Docker（含 Compose v2）、Bash、`curl`、`uv` 與 Make。以下使用 Compose 開發預設值，請先確認 host ports 8080、5432、6379 可用。
 
-1. 以 HTTPS 取得程式。若 repository 為私人，需使用有讀取權限的 GitHub 帳號。
+1. 取得程式。
 
    ```bash
    git clone https://github.com/kaiser0421/wy-project.git
@@ -19,21 +19,21 @@
    docker compose up -d --build
    ```
 
-3. 重複執行 `docker compose ps -a`，等 `migrate`、`seed` 以 0 結束，三個 `api` 副本皆為 healthy。執行 `curl -fsSi http://127.0.0.1:8080/healthz/live`，確認 HTTP 200 與 `X-Request-ID`。見 `compose.yaml:90`、`compose.yaml:105`、`compose.yaml:112`、`infra/nginx/nginx.conf:86`。
-4. 在 [操作介面](http://localhost:8080) 選 **Sign in**，依序以三個帳號登入，每次檢查後選 **Sign out**。`seed` 會建立預設帳號，保留已有的帳號與密碼。見 `backend/src/ticketing/seed/main.py:22`、`frontend/src/main.ts:26`、`frontend/tests/e2e/nginx.spec.ts:10`。
+3. 重複執行 `docker compose ps -a`，等 `migrate`、`seed` 以 0 結束，三個 `api` 副本皆為 healthy。執行 `curl -fsSi http://127.0.0.1:8080/healthz/live`，確認 HTTP 200 與 `X-Request-ID`。
+4. 在 [操作介面](http://localhost:8080) 選 **Sign in**，依序以三個帳號登入，每次檢查後選 **Sign out**。`seed` 會建立預設帳號，保留已有的帳號與密碼。
 
    | 角色 | 預設帳號 | 預設密碼 | 登入後檢查 |
    | --- | --- | --- | --- |
    | User | `user@example.com` | `User#Dev2026!` | 開啟 **Organizer**，確認可看到 **Create an event**。 |
    | Admin | `admin@example.com` | `Admin#Dev2026!` | 開啟 **Monitoring**，確認顯示 **Live** 並可進入 **Manage users**。 |
-   | Viewer | `viewer@example.com` | `Viewer#Dev2026!` | 確認可開啟 **Events**，導覽列沒有 **Organizer** 或 **Monitoring**。 |
+   | Viewer | `viewer@example.com` | `Viewer#Dev2026!` | 可瀏覽 **Events**、座位圖與活動報表，導覽列沒有 **Organizer** 或 **Monitoring**。 |
 
-5. 開啟 [Swagger UI](http://localhost:8080/api/docs)，確認可瀏覽 API operations。見 `backend/src/ticketing/api/app.py:328`。
-6. 執行 `uv run --python 3.12 python scripts/e2e_flow.py --base http://127.0.0.1:8080`，確認輸出 `E2E flow passed`。腳本會寫入活動與已付款訂單。見 `scripts/e2e_flow.py:65`、`scripts/e2e_flow.py:118`、`scripts/e2e_flow.py:163`。
-7. 執行 `make test`，確認後端與前端檢查成功，指令以 0 結束。見 `Makefile:22`。
-8. 確認容器可寫入壓測輸出目錄後，執行 `loadtest/run.sh smoke`，核對 k6、SQL 與 SSE audit。見 [壓測前提與結果核對](loadtest/README.md)。
+5. 開啟 [Swagger UI](http://localhost:8080/api/docs)，確認可瀏覽 API operations。
+6. 執行 `uv run scripts/e2e_flow.py --base http://127.0.0.1:8080`，確認輸出 `E2E flow passed`。腳本會寫入活動與已付款訂單。
+7. 執行 `make test`，確認後端與前端檢查成功，指令以 0 結束。
+8. 執行 `loadtest/run.sh smoke`，以小規模跑過情境 A、B 與一致性檢查。結果核對方式見 [壓測工具包](loadtest/README.md)。
 
-從全新 checkout 建置至服務 healthy（待冷建置計時）。使用既有映像檔啟動至 healthy（待暖啟動計時）。
+首次建置需下載 base images 並安裝 Python 與 npm 依賴，時間取決於網路。已有 Docker 建置快取時，從全新 clone 執行 `docker compose up -d --build` 到全部服務 healthy 約 40 秒（開發筆電實測）。
 
 [本機開發](#本機開發) · [測試與實測](#測試與實測) · [API 與架構](#api-與架構) · [服務與設定](#服務與設定) · [需求對照](#需求對照) · [已知問題與未完成項目](#已知問題與未完成項目)
 
@@ -87,7 +87,7 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 併發測試包含指定座位、區域配位與同一使用者的限購競爭。破壞驗證會抓到同一座位有多筆 active claim。見 `backend/tests/booking/test_booking.py:46`、`backend/tests/booking/test_booking.py:67`、`backend/tests/booking/test_booking.py:91`、`backend/tests/booking/test_booking.py:106`、[破壞驗證輸出](docs/evidence/break-it.txt)。
 
 - 壓測以 `loadtest/run.sh smoke` 試跑，以 `loadtest/run.sh all` 執行情境 A（10,000 席、3,000 VUs、60 秒及一致性檢查）與 B（2,000 條 SSE）。見 `loadtest/run.sh:21`。參數與輸出格式見 [壓測工具包](loadtest/README.md)，報告見 [LOADTEST.md](LOADTEST.md)。
-- 匯入 10,000 列的 API 實測為 3.3 秒。Workstream B 的 `test_import_100k_under_60s` 對 CSV 與 JSON 各驗證 100,000 列從上傳到完成均在 60 秒內。見 `backend/tests/imports/test_import_perf.py:16`。
+- 匯入 10,000 列的 API 實測為 3.3 秒。`test_import_100k_under_60s` 對 CSV 與 JSON 各驗證 100,000 列從上傳到完成均在 60 秒內。見 `backend/tests/imports/test_import_perf.py:16`。
 - 在 512 MiB 上限的 API 容器匯出 500,000 筆訂單，首次下載完成為 217.3 秒，`anon` 取樣峰值約 108 MiB，三個副本均無 OOM。見 [Excel 匯出實測紀錄](docs/evidence/cp4-excel-500k.md)。
 
 ## API 與架構
@@ -131,4 +131,5 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 - **正式情境 A／B（待桌機壓測結果）**。待以 `loadtest/run.sh all` 補齊正式 RPS、p50／p95／p99、錯誤率、SSE 套用延遲與壓測後一致性結果。
 - **筆電壓測**。在 2 核心／4 執行緒的 MacBook 上，3,000 VUs 與服務同機造成 CPU 飽和。多數請求收到快速的 `503 server-busy` 或 client timeout，約 86–95 req/s，SQL 平均耗時受競爭影響約 35–170 ms。該次一致性檢查未發現超賣。
 - **大型 Excel 匯出耗時**。兩次下載約 217–237 秒，nginx 報表路徑的讀取逾時為 300 秒。見 `infra/nginx/nginx.conf:138`、[Excel 匯出實測紀錄](docs/evidence/cp4-excel-500k.md)。
+- **固定 Docker 子網**。Compose 網路使用 `172.28.0.0/24`，nginx 固定在 `172.28.0.200`，讓 API 只信任 nginx 轉送的 client IP。若本機已有網路使用同一段位址，`docker compose up` 會回報 `Pool overlaps with other one on this address space`，需先移除該網路（例如舊的堆疊執行 `docker compose down`）。見 `compose.yaml:10`、`compose.yaml:220`。
 - **監控可見性**。極晚到達的 nginx 日誌仍可依 request ID 查到，但可能超出每秒指標的回填窗口。付款服務的內部／回呼配送日誌輸出至自身容器，collector 讀取的是 nginx 與共享目錄的服務日誌。見 `backend/src/ticketing/telemetry/logs.py:76`、`compose.yaml:169`、[監控資料契約](backend/src/ticketing/telemetry/README.md)。

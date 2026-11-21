@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx>=0.27"]
+# ///
 """End-to-end flow against a running stack (docker compose up -d --build).
 
 Walks the main business path through nginx exactly as a browser would:
