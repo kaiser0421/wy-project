@@ -137,6 +137,7 @@ nav a:hover, nav a[aria-current] { color: var(--primary-dark); background: #edf3
 .description { max-width: 65ch; white-space: pre-line; overflow-wrap: anywhere; }
 .list-tail { display: grid; justify-items: start; gap: .6rem; }
 .seat-layout { display: grid; grid-template-columns: minmax(0, 2.5fr) minmax(15rem, 1fr); gap: 1rem; align-items: start; }
+.seat-layout > section { grid-template-columns: minmax(0, 1fr); }
 .legend, .chosen, .record-list { list-style: none; padding: 0; margin: 0; }
 .legend { display: flex; flex-wrap: wrap; gap: .45rem 1rem; }
 .legend li { display: flex; align-items: center; gap: .38rem; font-size: .875rem; }
@@ -149,6 +150,12 @@ nav a:hover, nav a[aria-current] { color: var(--primary-dark); background: #edf3
 .swatch.sold::after { content: "×"; }
 .swatch.selected::after { content: "✓"; }
 .stale { background: #fff3d8; color: #734a0e; border: 1px solid #ead4a7; border-radius: .4rem; padding: .58rem .7rem; }
+.pending-confirmation { background: #fff3d8; color: #734a0e; border: 1px solid #ead4a7; border-radius: .4rem; padding: .75rem; }
+.pending-confirmation p { margin-bottom: .5rem; }
+.pending-confirmation button { margin-right: .5rem; }
+.pending-confirmation ul { margin: .35rem 0 0; }
+.field-error { color: var(--danger); font-size: .875rem; }
+.field-error:empty { display: none; }
 .map-viewport {
   max-width: 100%; height: min(62vh, 32rem); min-height: 16rem; overflow: auto; position: relative;
   background: #f2f6f9; border: 1px solid var(--border); border-radius: .45rem; scrollbar-gutter: stable;

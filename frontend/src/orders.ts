@@ -1,6 +1,6 @@
-import { api, mockMode, type Order } from "./api";
+import { api, mockMode, type Order, type User } from "./api";
 import { countdown, label, money } from "./format";
-import { idempotencyKey, retainIntent } from "./intent";
+import { IntentUnavailable, MutationIntent, retryDelay, retryLabel, retrySeconds } from "./intent";
 import { button, el, errorText, heading, interval, link, notice, panel, show, sleep } from "./view";
 
 const ongoing = (status: string) => ["pending_payment", "refund_pending"].includes(status);
@@ -59,7 +59,7 @@ function checkoutLink(url: string): URL {
   return target;
 }
 
-export async function orderPage(root: HTMLElement, id: string, signal: AbortSignal): Promise<void> {
+export async function orderPage(root: HTMLElement, id: string, user: User, signal: AbortSignal): Promise<void> {
   let order = await api.order(id, signal);
   if (signal.aborted) return;
   const status = el("span", { class: "tag", role: "status" });
@@ -71,19 +71,24 @@ export async function orderPage(root: HTMLElement, id: string, signal: AbortSign
   const pay = button("Open checkout");
   const cancel = button("Cancel order", "danger");
   const refresh = button("Check status", "secondary");
+  const expired = button("Clear expired request", "quiet");
+  const pendingStatus = el("p");
+  const confirmation = el("div", { class: "pending-confirmation", hidden: true }, pendingStatus, expired);
   const checkout = el("div");
   const shortId = id.slice(0, 8);
   root.append(heading(order.event_title ?? `Order ${shortId}`, `Order reference ${id}`),
     el("div", { class: "page-actions" }, link("All orders", "#/orders")),
     el("div", { class: "order-layout" }, panel(el("div", { class: "split" }, el("h2", {}, "Tickets"), status), items),
       panel(el("h2", {}, "Order summary"), totals, timer, el("div", { class: "actions" }, pay, cancel, refresh),
-        checkout, feedback, updateStatus)));
+        confirmation, checkout, feedback, updateStatus)));
 
   let busy = false;
   let checking = false;
   let needsRefresh = false;
-  let payKey: string | undefined;
-  let cancelKey: string | undefined;
+  const payment = new MutationIntent<null>(user.id, { operation: "payment", event: order.event_id, order: id });
+  const cancellation = new MutationIntent<null>(user.id, { operation: "cancellation", event: order.event_id, order: id });
+  let checkAfter = 0;
+  let pollDelay = 2000;
 
   function render(): void {
     const pending = order.status === "pending_payment";
@@ -93,13 +98,26 @@ export async function orderPage(root: HTMLElement, id: string, signal: AbortSign
     timer.textContent = !order.expires_at ? "" : elapsed
       ? "Hold time elapsed. Checking the server for final status."
       : `Hold expires in ${countdown(order.expires_at)}`;
-    pay.hidden = !pending;
-    cancel.hidden = !pending && order.status !== "paid";
-    pay.disabled = busy || elapsed;
-    cancel.disabled = busy;
-    refresh.disabled = checking;
-    pay.textContent = payKey ? "Retry checkout" : "Open checkout";
-    cancel.textContent = cancelKey ? "Retry cancellation" : order.status === "paid" ? "Request refund" : "Cancel order";
+    const paying = Boolean(payment.current);
+    const cancelling = Boolean(cancellation.current);
+    const payWait = payment.seconds;
+    const cancelWait = cancellation.seconds;
+    const refreshWait = retrySeconds(checkAfter);
+    pay.hidden = payment.expired || (!paying && !pending);
+    cancel.hidden = cancellation.expired || (!cancelling && !pending && order.status !== "paid");
+    pay.disabled = busy || payWait > 0 || (!paying && (elapsed || cancelling));
+    cancel.disabled = busy || cancelWait > 0 || (!cancelling && paying);
+    refresh.disabled = checking || refreshWait > 0;
+    pay.textContent = retryLabel(paying ? "Retry checkout" : "Open checkout", payWait);
+    cancel.textContent = retryLabel(cancelling ? "Retry cancellation"
+      : order.status === "paid" ? "Request refund" : "Cancel order", cancelWait);
+    refresh.textContent = retryLabel("Check status", refreshWait);
+    confirmation.hidden = !paying && !cancelling;
+    expired.hidden = !payment.expired && !cancellation.expired;
+    expired.disabled = busy;
+    pendingStatus.textContent = expired.hidden
+      ? "Pending confirmation. Retry to recover the result of the original request."
+      : "Pending confirmation. The retry window has ended. Check this order before clearing the request.";
     if (!pending) checkout.replaceChildren();
   }
 
@@ -117,7 +135,7 @@ export async function orderPage(root: HTMLElement, id: string, signal: AbortSign
   }
 
   async function check(): Promise<void> {
-    if (checking || signal.aborted) return;
+    if (checking || signal.aborted || retrySeconds(checkAfter)) return;
     checking = true;
     render();
     try {
@@ -125,9 +143,13 @@ export async function orderPage(root: HTMLElement, id: string, signal: AbortSign
       if (signal.aborted) return;
       order = latest;
       needsRefresh = false;
+      pollDelay = 2000;
+      checkAfter = 0;
       show(updateStatus, "");
       renderOrder();
     } catch (error) {
+      checkAfter = Date.now() + retryDelay(error);
+      pollDelay = Math.min(16_000, pollDelay * 2);
       if (!signal.aborted) show(updateStatus, errorText(error), true);
     } finally {
       checking = false;
@@ -137,28 +159,26 @@ export async function orderPage(root: HTMLElement, id: string, signal: AbortSign
 
   async function poll(): Promise<void> {
     while (!signal.aborted) {
-      await sleep(2000, signal);
+      await sleep(Math.max(checkAfter - Date.now(), pollDelay + Math.random() * 250), signal);
       if (ongoing(order.status) || needsRefresh) await check();
     }
   }
 
   pay.onclick = async () => {
-    if (busy) return;
+    if (pay.disabled || pay.hidden || signal.aborted) return;
     // Reserve the tab in the user's click gesture. If popups are blocked,
     // the checkout still has an explicit link once the intent completes.
     const tab = mockMode ? null : window.open("about:blank", "_blank");
     if (tab) tab.opener = null;
-    payKey ??= idempotencyKey();
     busy = true;
     render();
     show(feedback, "Preparing checkout…");
     let launched = false;
     try {
-      const payment = await api.pay(id, payKey, signal);
-      payKey = undefined;
+      const result = await payment.send(payment.current ? undefined : null, (_body, key) => api.pay(id, key, signal));
       if (signal.aborted) return;
-      if (payment.checkout_url) {
-        const url = checkoutLink(payment.checkout_url);
+      if (result.checkout_url && order.status === "pending_payment") {
+        const url = checkoutLink(result.checkout_url);
         checkout.replaceChildren(el("a", { href: url.href, target: "_blank", rel: "noopener noreferrer" }, "Open payment page"));
         if (tab && !tab.closed) {
           tab.location.replace(url.href);
@@ -170,8 +190,7 @@ export async function orderPage(root: HTMLElement, id: string, signal: AbortSign
         show(feedback, "Checking payment status…");
       }
     } catch (error) {
-      if (!retainIntent(error)) payKey = undefined;
-      if (!signal.aborted) show(feedback, errorText(error), true);
+      if (!signal.aborted) show(feedback, error instanceof IntentUnavailable ? error.message : errorText(error), true);
     } finally {
       if (!launched) tab?.close();
       busy = false;
@@ -182,20 +201,17 @@ export async function orderPage(root: HTMLElement, id: string, signal: AbortSign
   };
 
   cancel.onclick = async () => {
-    if (busy) return;
-    if (!cancelKey && !window.confirm(order.status === "paid"
+    if (cancel.disabled || cancel.hidden || signal.aborted) return;
+    if (!cancellation.current && !window.confirm(order.status === "paid"
       ? "Request a refund for this order?" : "Cancel this order and release the held seats?")) return;
-    cancelKey ??= idempotencyKey();
     busy = true;
     render();
     show(feedback, "Sending cancellation…");
     try {
-      await api.cancel(id, cancelKey, signal);
-      cancelKey = undefined;
+      await cancellation.send(cancellation.current ? undefined : null, (_body, key) => api.cancel(id, key, signal));
       show(feedback, "Cancellation received.");
     } catch (error) {
-      if (!retainIntent(error)) cancelKey = undefined;
-      if (!signal.aborted) show(feedback, errorText(error), true);
+      if (!signal.aborted) show(feedback, error instanceof IntentUnavailable ? error.message : errorText(error), true);
     } finally {
       busy = false;
       needsRefresh = true;
@@ -204,6 +220,11 @@ export async function orderPage(root: HTMLElement, id: string, signal: AbortSign
     }
   };
   refresh.onclick = () => void check();
+  expired.onclick = async () => {
+    if (busy) return;
+    await Promise.all([payment.dismissExpired(), cancellation.dismissExpired()]);
+    render();
+  };
   interval(render, 1000, signal);
   renderOrder();
   void poll();

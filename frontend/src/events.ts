@@ -1,6 +1,7 @@
 import { api, ApiError, seatStream, type Booking, type EventInfo, type Id, type Snapshot, type User } from "./api";
 import { date, label, money } from "./format";
-import { idempotencyKey, retainIntent } from "./intent";
+import { IntentUnavailable, MutationIntent, retryDelay, retryLabel } from "./intent";
+import { SeatReconnect } from "./reconnect";
 import { SeatCanvas } from "./seat-canvas";
 import { AVAILABLE, SeatModel } from "./seat-model";
 import { button, el, errorText, field, formValue, heading, interval, link,
@@ -122,11 +123,13 @@ export async function eventPage(root: HTMLElement, id: Id, user: User, signal: A
   const quantity = select([["1", "1 ticket"], ["2", "2 tickets"], ["3", "3 tickets"], ["4", "4 tickets"]]);
   const auto = button("Find seats", "secondary", "submit");
   const retry = button("Retry last request", "secondary");
-  const discard = button("Return to selection", "quiet");
-  retry.hidden = discard.hidden = true;
+  const expired = button("Clear expired request", "quiet");
+  const pendingText = el("p");
+  const pending = el("div", { class: "pending-confirmation", hidden: true },
+    pendingText, retry, expired, link("My orders", "#/orders", "text-link"));
   const allocation = el("form", { class: "allocation" }, field("Zone", zone), field("Quantity", quantity), auto);
   if (buyer) controls.append(el("h2", {}, "Tickets"), summary, selection, manual, el("hr"),
-    el("h3", {}, "Automatic allocation"), allocation, retry, discard, bookingStatus);
+    el("h3", {}, "Automatic allocation"), allocation, pending, bookingStatus);
   else controls.append(el("h2", {}, "Zones and prices"), summary, selection);
   if (manage || user.role === "viewer") {
     controls.append(el("hr"), salesReport(id));
@@ -147,7 +150,7 @@ export async function eventPage(root: HTMLElement, id: Id, user: User, signal: A
   let canvas: SeatCanvas | undefined;
   let snapshot: Snapshot | undefined;
   const selected = new Set<number>();
-  let intent: { body: Booking; key: string } | undefined;
+  const intent = new MutationIntent<Booking>(user.id, { operation: "booking", event: id });
   let booking = false;
   let lastFrame = performance.now();
   let lastHead = 0;
@@ -155,21 +158,32 @@ export async function eventPage(root: HTMLElement, id: Id, user: User, signal: A
   let outboxAge = 0;
   let disconnected = false;
   let received = false;
+  let unavailable = false;
 
   function renderBooking(): void {
     const open = saleOpen(event);
     summary.textContent = buyer
       ? open ? `${selected.size} of 4 seats selected` : "Ticket sales are currently closed."
       : "Browse the seating plan and published zone prices.";
-    manual.disabled = !open || !selected.size || booking || Boolean(intent);
-    auto.disabled = !open || !snapshot?.zones.length || booking || Boolean(intent);
-    zone.disabled = quantity.disabled = booking || Boolean(intent);
-    retry.hidden = discard.hidden = !intent;
-    retry.disabled = discard.disabled = booking;
+    const waiting = Boolean(intent.current);
+    const elapsed = intent.expired;
+    const seconds = intent.seconds;
+    manual.disabled = !open || !selected.size || booking || waiting;
+    auto.disabled = !open || !snapshot?.zones.length || booking || waiting;
+    zone.disabled = quantity.disabled = booking || waiting;
+    pending.hidden = !waiting;
+    expired.hidden = !elapsed;
+    expired.disabled = booking;
+    retry.hidden = elapsed;
+    retry.disabled = booking || seconds > 0;
+    retry.textContent = retryLabel("Retry last request", seconds);
+    pendingText.textContent = elapsed
+      ? "Pending confirmation. The retry window has ended. Check My orders before clearing this request."
+      : "Pending confirmation. Retry to recover the result of the original booking.";
     const now = performance.now();
     const late = now - lastFrame >= 5000 || outboxAge > 2000
       || (lagSince !== undefined && now - lagSince >= 3000);
-    const text = disconnected ? "Reconnecting" : late ? "Stale" : received ? "Live" : "Connecting";
+    const text = unavailable ? "Unavailable" : disconnected ? "Reconnecting" : late ? "Stale" : received ? "Live" : "Connecting";
     if (connection.textContent !== text) connection.textContent = text;
     stale.hidden = !(disconnected || late);
   }
@@ -209,7 +223,7 @@ export async function eventPage(root: HTMLElement, id: Id, user: User, signal: A
     else {
       selected.add(position);
       canvas?.select(position, true);
-      if (!intent) show(bookingStatus, "");
+      if (!intent.current) show(bookingStatus, "");
     }
     renderSelection();
   }
@@ -253,14 +267,15 @@ export async function eventPage(root: HTMLElement, id: Id, user: User, signal: A
   async function subscribe(): Promise<void> {
     let snapshotNeeded = true;
     let minLayout: number | undefined;
-    let attempt = 0;
+    const reconnect = new SeatReconnect();
     while (!signal.aborted) {
+      let retryAfter = 0;
       try {
         if (snapshotNeeded) {
           const next = await api.seats(id, minLayout, signal);
           if (signal.aborted) return;
           if (next.layout_ver < (minLayout ?? 0) || next.last_seq < (model?.applied ?? 0)) {
-            await sleep(600, signal);
+            await sleep(reconnect.delay(), signal);
             continue;
           }
           setSnapshot(next);
@@ -271,15 +286,17 @@ export async function eventPage(root: HTMLElement, id: Id, user: User, signal: A
         const connectionAbort = new AbortController();
         let seen = performance.now();
         const watchdog = setInterval(() => {
-          if (performance.now() - seen >= 10_000) connectionAbort.abort();
+          const now = performance.now();
+          if (now - seen >= 20_000 || (lagSince !== undefined && now - lagSince >= 10_000)) {
+            connectionAbort.abort();
+          }
         }, 1000);
         try {
           const streamSignal = AbortSignal.any([signal, connectionAbort.signal]);
-          for await (const frame of seatStream(id, model.applied, streamSignal)) {
+          for await (const frame of seatStream(id, model.applied, streamSignal, () => { seen = performance.now(); })) {
             if (signal.aborted) return;
-            seen = lastFrame = performance.now();
-            attempt = 0;
-            disconnected = false;
+            seen = performance.now();
+            if (frame.event === "heartbeat") continue;
             if (frame.event === "resync" || frame.event === "layout") {
               snapshotNeeded = true;
               minLayout = Math.max(snapshot?.layout_ver ?? 0, frame.event === "layout" ? frame.data.layout_ver : 0);
@@ -309,8 +326,13 @@ export async function eventPage(root: HTMLElement, id: Id, user: User, signal: A
                 renderSelection();
               }
             }
+            lastFrame = seen;
+            disconnected = false;
             received = true;
             trackLag();
+            if (lagSince === undefined && outboxAge <= 2000) {
+              if (frame.event === "progress") reconnect.caughtUp(seen);
+            } else reconnect.lagging();
             renderBooking();
           }
         } finally {
@@ -321,37 +343,35 @@ export async function eventPage(root: HTMLElement, id: Id, user: User, signal: A
         if (signal.aborted) return;
         if (error instanceof ApiError && [403, 404].includes(error.status)) {
           inventory.textContent = errorText(error);
+          unavailable = true;
           disconnected = true;
           renderBooking();
           return;
         }
+        retryAfter = retryDelay(error);
         if (!model) inventory.textContent = "Seat data is temporarily unavailable. Retrying…";
       }
       disconnected = true;
       received = false;
       renderBooking();
-      if (snapshotNeeded && model && attempt === 0) {
-        attempt++;
-        continue;
-      }
-      await sleep(Math.min(6000, 400 * 2 ** Math.min(attempt++, 4)) + Math.random() * 200, signal);
+      lagSince = undefined;
+      await sleep(Math.max(reconnect.delay(), retryAfter), signal);
     }
   }
 
   async function book(body?: Booking): Promise<void> {
-    if (booking || (!intent && !body)) return;
-    intent ??= { body: body!, key: idempotencyKey() };
+    if (booking || signal.aborted || intent.seconds || intent.expired) return;
+    if (body && (intent.current || !saleOpen(event))) return;
     booking = true;
     renderBooking();
     show(bookingStatus, "Requesting tickets…");
     try {
-      const order = await api.book(id, intent.body, intent.key, signal);
-      intent = undefined;
+      const order = await intent.send(body, (saved, key) => api.book(id, saved, key, signal));
       if (!signal.aborted) location.hash = `#/orders/${encodeURIComponent(order.id)}`;
     } catch (error) {
-      const retain = retainIntent(error);
-      if (!retain) intent = undefined;
-      show(bookingStatus, errorText(error) + (retain ? " Retry to check the result of this same request." : ""), true);
+      if (!signal.aborted) {
+        show(bookingStatus, error instanceof IntentUnavailable ? error.message : errorText(error), true);
+      }
     } finally {
       booking = false;
       renderBooking();
@@ -364,9 +384,8 @@ export async function eventPage(root: HTMLElement, id: Id, user: User, signal: A
     void book({ zone_code: zone.value, quantity: Number(quantity.value) });
   };
   retry.onclick = () => void book();
-  discard.onclick = () => {
-    intent = undefined;
-    show(bookingStatus, "Check My orders for any hold created by the previous request.");
+  expired.onclick = async () => {
+    if (!booking) await intent.dismissExpired();
     renderBooking();
   };
   signal.addEventListener("abort", () => canvas?.destroy(), { once: true });

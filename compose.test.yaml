@@ -1,5 +1,5 @@
 # Test stack: same PostgreSQL image and configuration as production (fsync on).
-#   make test   ->   docker compose -f compose.test.yaml run --rm tests
+# Run the backend and frontend suites with make test.
 
 services:
   postgres:
@@ -35,9 +35,38 @@ services:
     environment:
       APP_ENV: test
       TEST_ADMIN_DATABASE_URL: postgresql://test:test@postgres:5432/postgres
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://redis:6379/${TEST_REDIS_DB:-0}
+      TEST_TEMPLATE_DB: ${TEST_TEMPLATE_DB:-ticketing_template}
       ENABLE_TEST_HOOKS: "true"
-    command: ["sh", "-c", "ruff check backend && ruff format --check backend && mypy backend/src && lint-imports && pytest -q"]
+    command:
+      - sh
+      - -ec
+      - |
+        ruff check backend paymock
+        ruff format --check backend paymock
+        mypy backend/src paymock/src
+        lint-imports
+        pytest -q -p no:cacheprovider backend/tests
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+
+  frontend-tests:
+    image: mcr.microsoft.com/playwright:v1.61.1-noble
+    working_dir: /frontend
+    init: true
+    volumes:
+      - ./frontend:/source:ro
+    environment:
+      CI: "true"
+    command:
+      - sh
+      - -ec
+      - |
+        tar -C /source --exclude='./node_modules' --exclude='./.npm-cache' --exclude='./dist' \
+          --exclude='./playwright-report' --exclude='./test-results' -cf - . | tar -xf -
+        npm ci
+        npm run typecheck
+        npm run build
+        npm test
+        npm run test:e2e

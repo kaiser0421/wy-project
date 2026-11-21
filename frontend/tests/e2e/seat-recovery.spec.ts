@@ -39,13 +39,15 @@ test("gap recovery reconnects from the applied sequence and requests the require
     }
   });
   await page.goto("/#/events/1");
-  await expect.poll(() => cursor.slice(0, 4)).toEqual(["10", "10", "13", "14"]);
+  await expect.poll(() => cursor.slice(0, 4), { timeout: 15_000 }).toEqual(["10", "10", "13", "14"]);
   expect(requestedLayouts).toEqual([null, "2"]);
   await page.getByLabel("Interactive seat map").focus();
   await expect(page.locator(".seat-readout")).toContainText("available");
 });
 
-test("retry sends the same booking body, CSRF token, and idempotency key", async ({ page }) => {
+test("reload preserves the original booking and its retry countdown", async ({ page }) => {
+  const now = Date.now();
+  await page.clock.setFixedTime(now);
   const attempts: { body: unknown; key?: string; csrf?: string }[] = [];
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
@@ -67,6 +69,7 @@ test("retry sends the same booking body, CSRF token, and idempotency key", async
       attempts.push({ body: route.request().postDataJSON(), key: headers["idempotency-key"], csrf: headers["x-csrf-token"] });
       await route.fulfill({
         status: 409, contentType: "application/problem+json",
+        headers: attempts.length === 1 ? { "Retry-After": "3" } : undefined,
         json: { code: attempts.length === 1 ? "idempotency-in-progress" : "insufficient-seats",
           retryable: attempts.length === 1 },
       });
@@ -77,6 +80,12 @@ test("retry sends the same booking body, CSRF token, and idempotency key", async
   await page.goto("/#/events/1");
   await page.getByLabel("Quantity").selectOption("2");
   await page.getByRole("button", { name: "Find seats" }).click();
+  await expect(page.getByRole("button", { name: /Retry last request \(\d+s\)/ })).toBeDisabled();
+  await page.reload();
+  await expect(page.getByText(/Pending confirmation/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /Retry last request/ })).toBeDisabled();
+  expect(attempts).toHaveLength(1);
+  await page.clock.setFixedTime(now + 3000);
   await page.getByRole("button", { name: "Retry last request" }).click();
   await expect(page.getByText(/too few seats/)).toBeVisible();
   expect(attempts).toHaveLength(2);
@@ -84,4 +93,44 @@ test("retry sends the same booking body, CSRF token, and idempotency key", async
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   ), csrf: "restored-token" });
   expect(attempts[1]).toEqual(attempts[0]);
+  await expect(page.getByText(/Pending confirmation/)).toBeHidden();
+});
+
+test("a lost payment response is recoverable after signing out and back in", async ({ page }) => {
+  let csrf = "first-session";
+  const attempts: { key?: string; csrf?: string; body: string | null }[] = [];
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/auth/logout")) {
+      csrf = "second-session";
+      await route.fulfill({ status: 204 });
+    } else if (path.endsWith("/auth/me") || path.endsWith("/auth/login")) {
+      await route.fulfill({ json: { user: { id: 2, email: "test@example.test", role: "user" }, csrf_token: csrf } });
+    } else if (path.endsWith("/orders/test-order/payments")) {
+      const headers = route.request().headers();
+      attempts.push({ key: headers["idempotency-key"], csrf: headers["x-csrf-token"], body: route.request().postData() });
+      if (attempts.length === 1) await route.abort();
+      else await route.fulfill({ json: {} });
+    } else if (path.endsWith("/orders/test-order")) {
+      await route.fulfill({ json: {
+        id: "test-order", event_id: 9, event_title: "Payment retry",
+        status: "pending_payment", expires_at: "2099-01-01T00:00:00Z",
+        subtotal_twd: 100, fee_twd: 5, total_twd: 105,
+      } });
+    } else await route.fulfill({ json: { items: [], next_cursor: null } });
+  });
+  await page.goto("/#/orders/test-order");
+  await page.getByRole("button", { name: "Open checkout" }).click();
+  await expect(page.getByText(/server could not be reached/)).toBeVisible();
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.getByLabel("Email address").fill("test@example.test");
+  await page.getByLabel("Password").fill("test-password");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.getByRole("region", { name: "Pending confirmation" }).getByRole("link").click();
+  await page.getByRole("button", { name: "Retry checkout" }).click();
+  await expect(page.getByText(/Pending confirmation/)).toBeHidden();
+  expect(attempts).toEqual([
+    { key: expect.any(String), csrf: "first-session", body: null },
+    { key: attempts[0]!.key, csrf: "second-session", body: null },
+  ]);
 });

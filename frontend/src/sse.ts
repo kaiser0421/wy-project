@@ -12,6 +12,8 @@ export class EventParser {
   private id?: string;
   private skipLF = false;
 
+  constructor(private readonly onComment?: () => void) {}
+
   push(chunk: string): Frame[] {
     const frames: Frame[] = [];
     let start = 0;
@@ -46,6 +48,10 @@ export class EventParser {
       this.id = undefined;
       return frame;
     }
+    if (line.startsWith(":")) {
+      this.onComment?.();
+      return;
+    }
     const colon = line.indexOf(":");
     const field = colon < 0 ? line : line.slice(0, colon);
     const value = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "");
@@ -55,10 +61,12 @@ export class EventParser {
   }
 }
 
-export async function* readFrames(body: ReadableStream<Uint8Array>): AsyncGenerator<Frame> {
+export async function* readFrames(
+  body: ReadableStream<Uint8Array>, onComment?: () => void,
+): AsyncGenerator<Frame> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  const parser = new EventParser();
+  const parser = new EventParser(onComment);
   try {
     while (true) {
       const { value, done } = await reader.read();
