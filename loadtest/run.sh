@@ -170,11 +170,12 @@ scenario_b() {
 # Run a command with a deadline: coreutils `timeout` on Linux/WSL, perl's alarm elsewhere
 # (stock macOS has perl but no `timeout`).
 with_deadline() {
-  # GNU timeout runs the command in a background process group; a command that touches the
-  # terminal (docker compose exec) is then stopped by SIGTTIN and never sees the deadline.
-  # --foreground keeps it in the terminal's group, -k forces a kill, and stdin is /dev/null.
+  # GNU timeout only sends TERM by default; a docker compose exec that does not exit on TERM
+  # kept a run waiting for hours. -k sends KILL to the whole process group (the docker CLI and
+  # its compose plugin) 10 s later, and stdin is /dev/null so nothing waits on the terminal.
+  # The command inside the container is not killed; this only bounds how long the run waits.
   if command -v timeout >/dev/null; then
-    timeout --foreground -k 10 "$@" </dev/null
+    timeout -k 10 "$@" </dev/null
   else
     perl -e 'alarm shift; exec @ARGV' "$@" </dev/null
   fi
