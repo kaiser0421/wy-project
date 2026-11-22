@@ -219,7 +219,7 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 - **服務日誌檔的保留**。各服務寫入共用目錄的 JSON 日誌檔由 collector 讀取入庫，容器 stdout 有輪替，但這些檔案本身不會自動輪替刪除；長時間或大量壓測後需手動清理（資料庫中的日誌依分區保留）。
 - **Admin 全站訂單翻頁**。以訂單建立時間與 ID 作 keyset 分頁；翻頁期間若有較早取得 ID、較晚才提交的訂單，可能落在已翻過的範圍而未顯示，或出現在後面的頁次；重新從第一頁查詢即可看到正確結果。
 - **背景服務日誌**。worker、relay、collector 的日誌仍在事件迴圈中同步寫檔；磁碟異常緩慢時可能延遲這些服務（API 已改為背景寫入、佇列滿時丟棄並計數）。
-- **相依套件弱點**。正式執行的 Python 與前端套件掃描為 0 個已知弱點，git 歷史沒有機密外洩；前端開發工具（typescript-eslint 相依的 minimatch）有 7 個 moderate，不會進入正式打包，尚未升級。掃描尚未放進 CI。見 [掃描紀錄](docs/evidence/security-scan-20261122.md)。
+- **相依套件與機密掃描**。交付版本的 Python 執行期相依套件與 `npm audit --omit=dev` 的掃描範圍內均未發現已知弱點；Gitleaks 在本機 Git refs 可達的非合併提交差異中未偵測到機密；前端開發工具（typescript-eslint 相依的 minimatch）有 7 個 moderate，不會進入正式打包，尚未升級。掃描尚未放進 CI。見 [掃描紀錄](docs/evidence/security-scan-20261122.md)。
 
 - **水平擴充**。正式配置的過載拒絕、庫存與付款完成量見 [結果總表](LOADTEST.md#四結果總表)，早期擴充見 [改進歷程](LOADTEST.md#附錄改進歷程)。
 - **正式 Scenario A 過載**。6 副本的 nginx 503 占 35.4%，3 副本基準為 88.1%。6 副本的 598 筆 nginx 499 都在付款路徑，抽樣重放 98 筆全數驗證。基準有 63 筆 nginx 499，74 筆重放中有 46 筆驗證成功。兩輪 runner 的整體結果皆為 **FAILED**。k6 的 `unexpected_errors` 兩輪均未達門檻，3 副本基準另有 `replay_unverified` 未達門檻，並未通過 runner 的重放筆數比對。[6 副本 nginx](docs/evidence/loadtest-final-6replicas-20261122/a/nginx-summary.txt#L1-L20) · [3 副本 nginx](docs/evidence/loadtest-final-20261122/a/nginx-summary.txt#L1-L20) · [6 副本執行紀錄](docs/evidence/loadtest-final-6replicas-20261122/run-log.txt#L526-L570) · [3 副本執行紀錄](docs/evidence/loadtest-final-20261122/run-log.txt#L508-L554)
