@@ -32,6 +32,9 @@ test("registration shows field errors, respects rate limits, and returns to sign
   await page.route("**/api/v1/events/**", route => route.fulfill({ status: 404 }));
   await page.goto("/#/events/17");
   await page.getByRole("link", { name: "Create an account" }).click();
+  // The sign-in form has fields with the same labels; wait until the registration form has replaced it.
+  await expect(page).toHaveURL(/#\/register$/);
+  await expect(page.getByRole("heading", { name: "Create an account" })).toBeVisible();
   const email = page.getByLabel("Email address");
   const password = page.getByLabel("Password");
   await email.fill("buyer@example.test");
