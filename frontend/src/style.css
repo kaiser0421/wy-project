@@ -205,6 +205,10 @@ button {
   max-width: 100%;
 }
 button:disabled { opacity: .56; cursor: default; }
+.button-link { display: inline-flex; align-items: center; border-radius: .45rem; border: 1px solid var(--clear);
+  padding: .53rem .85rem; font-size: .875rem; line-height: 1.45; font-weight: 650; min-height: 2.55rem;
+  text-decoration: none; }
+.button-link.primary:hover { background: var(--primary-dark); }
 .primary { background: var(--primary); color: var(--on-primary); }
 .primary:hover:not(:disabled) { background: var(--primary-dark); }
 .secondary { background: var(--secondary-background); color: var(--secondary-ink); border-color: var(--secondary-border); }

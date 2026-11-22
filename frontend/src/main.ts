@@ -288,7 +288,7 @@ async function renderRoute(): Promise<void> {
         if (part === "events") await eventPage(root, id, user, signal);
         if (part === "orders") await orderPage(root, id, user, signal);
         if (part === "organizer") await managePage(root, id, user, signal);
-      } else if (part === "events") eventsPage(root, signal);
+      } else if (part === "events") eventsPage(root, signal, user.role !== "viewer");
       else if (part === "orders") ordersPage(root, signal);
       else if (part === "organizer") organizerPage(root, user, signal);
       else if (identifier === "users") usersPage(root, user, signal);

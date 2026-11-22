@@ -48,7 +48,9 @@ test("buyer can choose a seat by keyboard, create a hold, and see payment settle
 test("organizer creates a draft, uploads seats, and publishes from the current revision", async ({ page }) => {
   await page.goto("/?mock=1#/login");
   await page.getByRole("button", { name: "User", exact: true }).click();
-  await page.getByRole("link", { name: "Organizer", exact: true }).click();
+  await page.getByRole("link", { name: "Events", exact: true }).click();
+  // Organizers reach the create form from the Events list, where they look first.
+  await page.getByRole("link", { name: "Create an event" }).click();
   await page.getByLabel("Event title").fill("Community concert");
   await page.getByLabel("Category").fill("Music");
   await page.getByLabel("Venue").fill("Community hall");
@@ -72,6 +74,8 @@ test("viewer can browse and the seat page fits a 400px viewport", async ({ page 
   await page.setViewportSize({ width: 400, height: 800 });
   await page.goto("/?mock=1#/login");
   await page.getByRole("button", { name: "Viewer", exact: true }).click();
+  await expect(page.getByRole("link", { name: "Harbor Lights Festival" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Create an event" })).toHaveCount(0);
   await page.getByRole("link", { name: "Harbor Lights Festival" }).click();
   await expect(page.getByLabel("Interactive seat map")).toBeVisible();
   await expect(page.getByRole("button", { name: "Hold selected seats" })).toHaveCount(0);

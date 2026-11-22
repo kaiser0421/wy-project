@@ -24,7 +24,7 @@
 
    | 角色 | 預設帳號 | 預設密碼 | 登入後檢查 |
    | --- | --- | --- | --- |
-   | User | `user@example.com` | `User#Dev2026!` | 開啟 **Organizer**，確認可看到 **Create an event**。 |
+   | User | `user@example.com` | `User#Dev2026!` | 在 **Events** 頁點 **Create an event**（或直接開啟 **Organizer**），確認可看到建立活動的表單。 |
    | Admin | `admin@example.com` | `Admin#Dev2026!` | 從 **All orders** 管理所有活動的訂單，並可透過 **Monitoring** 與 **Manage users** 監控系統及管理帳號。 |
    | Viewer | `viewer@example.com` | `Viewer#Dev2026!` | 可瀏覽 **Events**、座位圖與活動報表，導覽列沒有 **Organizer** 或 **Monitoring**。 |
 

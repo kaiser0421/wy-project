@@ -7,7 +7,7 @@ import { AVAILABLE, SeatModel } from "./seat-model";
 import { button, el, errorText, field, formValue, heading, interval, link,
   notice, panel, salesReport, select, show, sleep } from "./view";
 
-export function eventsPage(root: HTMLElement, signal: AbortSignal): void {
+export function eventsPage(root: HTMLElement, signal: AbortSignal, canCreate = false): void {
   const cards = el("div", { class: "event-grid" });
   const status = notice();
   const more = button("Load more events", "secondary");
@@ -20,7 +20,10 @@ export function eventsPage(root: HTMLElement, signal: AbortSignal): void {
       el("option", { value: "-created" }, "Recently added"), el("option", { value: "price_min" }, "Lowest price"))),
     button("Apply filters", "secondary", "submit"),
   );
-  root.append(heading("Events", "Browse events and find available tickets."), panel(search), cards, tail);
+  const title = heading("Events", "Browse events and find available tickets.");
+  // Event creation lives on the Organizer page; point organizers there from the place they look first.
+  if (canCreate) title.append(el("div", { class: "actions" }, link("Create an event", "#/organizer", "button-link primary")));
+  root.append(title, panel(search), cards, tail);
   let cursor: string | null = null;
   let done = false;
   let busy = false;
