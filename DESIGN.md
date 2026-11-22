@@ -373,12 +373,12 @@ API 呼叫 paymock 時透過 `X-Request-ID` 傳遞識別碼，paymock 以路由�
 - **告警演練**　停掉 relay 後，`SERVICE_DOWN`（relay）與 outbox 編序延遲告警依規則進入 pending、轉為 firing 並出現在 Admin 監控頁，重新啟動後轉為 resolved。見 [告警演練紀錄](docs/evidence/alert-drill-20261121/README.md)。
 **第 2 題：「圖表都正常，但使用者正在受害」**
 
-- **結論：能偵測，靠的是業務指標告警，而不是 HTTP 指標。** HTTP 狀態碼只說明「伺服器有回應」，不說明「使用者有沒有買到票」，所以另外每秒記錄購票漏斗（嘗試、成功、各種失敗原因）與付款回呼延遲，並以告警規則監看。
-- **情境與偵測**　例如模擬金流 confirm 回 200，買家輪詢訂單也一直回 200，但畫面長時間停在待付款。當 capture 經回呼或 poll 寫入，`PAYMENT_CALLBACK_LAG` 可在最近 60 秒記錄中指出超過 30 秒的落差。完全沒有觀測到 capture 時，這條規則沒有資料，需查看金流與訂單、`HOLD_EXPIRY_BACKLOG` 等旁證。另一種情境是瀏覽與監控正常，大量買家在有空位的活動反覆遇到 `hold_soldout`。 `PURCHASE_FUNNEL_COLLAPSE` 依活動看過去 30 秒，成功率低於 20%、conflict 與 limit 合計少於失敗的一半且仍有可用席，條件持續 30 秒才發出告警。單一小區的問題可能被同活動其他區的流量掩蓋。見 `backend/src/ticketing/telemetry/alerts.py:32`、`backend/src/ticketing/telemetry/alerts.py:45`、`backend/src/ticketing/telemetry/alerts.py:58`、`backend/src/ticketing/telemetry/alerts.py:205`、`backend/src/ticketing/booking/create.py:262`。
+- **結論**　即使 HTTP 指標正常，業務告警仍可偵測符合規則的部分購票與付款異常。系統每秒記錄指定的鎖位結果，另由已入庫的 capture 紀錄計算付款回呼延遲。
+- **情境與偵測**　例如模擬金流 confirm 與買家輪詢訂單都回 200，畫面仍長時間停在待付款。當 capture 經回呼或 poll 入庫，`PAYMENT_CALLBACK_LAG` 可在最近 60 秒入庫的紀錄中指出超過 30 秒的落差。若 capture 一直未入庫，這筆付款不會觸發該告警，可查看金流與訂單、`HOLD_EXPIRY_BACKLOG` 等旁證。另一種情境是大量買家在有空位的活動反覆遇到 `hold_soldout`。`PURCHASE_FUNNEL_COLLAPSE` 依活動看過去 30 秒，成功率的分母為 `hold_ok + hold_conflict + hold_limit + hold_soldout`。成功率低於 20%、conflict 與 limit 合計少於失敗的一半且仍有可用席，條件持續 30 秒才發出告警。單一小區的問題可能被同活動其他區的流量掩蓋。見 `backend/src/ticketing/telemetry/alerts.py:43`、`backend/src/ticketing/telemetry/alerts.py:58`、`backend/src/ticketing/telemetry/alerts.py:205`、`backend/src/ticketing/booking/create.py:262`。
 **第 3 題：多個副本同時寫入每秒指標，以及一個副本時鐘慢 20 秒**
 
 - **避免重複計算與遺失**　API 附上 boot UUID 與 interval number，經 Redis Stream 送監控樣本。Collector 在 PG 同一交易插入 `telemetry_ingest`，只對新 `(boot_uuid, interval_no)` 累加 histogram 和業務計數，提交後 `XACK`。重啟以 `XAUTOCLAIM` 領回 pending。API flush 前 crash、XADD 失敗或 stream 修剪仍可丟資料，`completeness` 和 `late_or_missing` 依 producer heartbeat 和回報數揭露缺口。Edge 以 device/inode 的 checkpoint 與日誌同交易提交。見 `backend/src/ticketing/telemetry/api_setup.py:57`、`backend/src/ticketing/telemetry/api_setup.py:76`、`backend/src/ticketing/telemetry/app_metrics.py:109`、`backend/src/ticketing/telemetry/app_metrics.py:194`、`backend/src/ticketing/telemetry/app_metrics.py:241`、`backend/src/ticketing/telemetry/app_metrics.py:284`、`backend/src/ticketing/telemetry/collector.py:153`、`backend/src/ticketing/telemetry/logs.py:266`。
-- **一個副本時鐘慢 20 秒時的圖表現象**　以 Redis Stream ID 的接收時間減 producer 單調時鐘，取 60 秒樣本的最小偏移來分桶。只慢 API 的 wall clock 時，該副本的量仍落在校正後的秒，所以圖表上的 App 流量仍落在正確的秒、不會整段往前或往後偏 20 秒；偏差約 20,000 ms 會出現在監控 API 回傳的 `clock_skew_ms` 欄位（Admin 圖表沒有畫這個欄位）。nginx 的秒不受影響。網路抖動、首次校正資料不足和秒邊界仍可能使樣本落到相鄰桶。見 `backend/src/ticketing/telemetry/app_metrics.py:163–178`、`backend/src/ticketing/telemetry/app_metrics.py:165–173`、`backend/src/ticketing/telemetry/app_metrics.py:190`、`backend/src/ticketing/telemetry/app_metrics.py:235`、`backend/src/ticketing/telemetry/app_metrics.py:228–238`。
+- **一個副本時鐘慢 20 秒時的圖表現象**　以 Redis Stream ID 的接收時間減 producer 單調時鐘，取 60 秒樣本的最小偏移來分桶。單純的 API wall clock 慢 20 秒不會讓 App 流量整體平移 20 秒，分桶精度仍取決於樣本到達 Redis 的時間與校正樣本。監控 API 的 `clock_skew_ms` 回傳近期有回報的副本中，時鐘偏差絕對值的最大值。該副本的時鐘偏差估計約為 20,000 ms。nginx 仍以自己的日誌時間分桶。見 `backend/src/ticketing/telemetry/app_metrics.py:163–178`、`backend/src/ticketing/telemetry/app_metrics.py:228–238`、`backend/src/ticketing/telemetry/collector.py:61`。
 **第 4 題：兩個來源的數字不一致時，相信哪一個？為什麼？**
 
 - **結論：依「要回答的問題」決定，有固定的優先順序。**
@@ -386,7 +386,7 @@ API 呼叫 paymock 時透過 `X-Request-ID` 傳遞識別碼，paymock 以路由�
   2. **「系統對外回了什麼、在入口處理了多久」→ 相信 nginx（Edge）。** 它是伺服器端最接近使用者的量測點；客戶端實際收到的結果與等待時間，則以客戶端量測（k6、SSE 探測客戶端）為準。
   3. **App（API 程序）的數字只用來定位問題**：是哪個路由、哪種業務結果，不拿來當使用者體驗的最終數字。
 - **為什麼在伺服器端的數字中，Edge 比 App 更接近使用者體驗**
-  - **位置**：nginx 在最外層，每個請求都經過它。請求在進入 API 前被擋下、API 程序當掉或重啟、nginx 因上游不可用或逾時回 502／504、客戶端在回應前斷線（nginx 記為 499，客戶端不會收到這個狀態碼），App 都看不到，只有 nginx 記得到。
+  - **位置**　對外的 HTTP 狀態碼以 nginx（Edge）為準，例如上游不可用或逾時時由 nginx 回傳的 502／504。客戶端斷線則由 nginx 記為 499。若請求已進入 ASGI 的量測 middleware，即使 Edge 記為 499 或 502／504，仍可能留下 App 樣本，兩邊記錄的狀態可以不同。見 `backend/src/ticketing/telemetry/api_setup.py:35–53`。
   - **量測範圍**：nginx 的耗時（`$request_time`）包含在 nginx 排隊與 proxy 的時間，比 App 更接近使用者等待的時間；App 只從請求進入 middleware 才開始計時。網路傳輸時間兩者都量不到，要看客戶端量測。
   - **遺失風險**：Edge 來自 nginx 寫到磁碟的存取日誌，collector 重啟後會從已提交的檔案游標續讀仍保留的日誌（若未讀的日誌已被輪替刪除則無法補回；落後 watermark 超過 2 秒的舊 bucket 只寫入 `access_logs`）。App 樣本先存在各副本記憶體，再經 Redis Stream 傳送，副本在送出前終止時那幾秒會遺失。每秒 App 資料附 `completeness`：該秒有回報的副本數除以預期副本數（上限 100%），低於 100% 代表有副本沒回報；即使顯示 100%，個別樣本仍可能遺失。
 - **不一致本身就是排查線索**：兩邊都保存並比對，而不是丟掉其中一個。先對齊時間窗與流量範圍，再用 `request_id` 對照 nginx 存取日誌的狀態碼、上游位址與耗時，以及 API 的請求紀錄。Edge 的 5xx 多於 App 時，檢查 nginx 自己產生的錯誤（上游不可用、逾時）與 App 樣本缺口；Edge 的 499 增加代表更多客戶端在請求完成前斷線，可比對 Edge 與上游耗時，再用客戶端樣本確認是否和等待過久有關。
