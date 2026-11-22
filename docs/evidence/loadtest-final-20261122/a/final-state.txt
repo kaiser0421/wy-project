@@ -1,0 +1,14 @@
+     status      | orders | tickets 
+-----------------+--------+---------
+ pending_payment |   3652 |    7640
+ paid            |    237 |     438
+ cancelled       |     52 |      95
+(3 rows)
+
+  status   | count 
+-----------+-------
+ available |  1922
+ held      |  7640
+ sold      |   438
+(3 rows)
+

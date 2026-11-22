@@ -1,4 +1,4 @@
-"""Render the load-test charts in docs/evidence/charts from the committed evidence files.
+"""Render the load-test charts in docs/evidence/charts from the evidence files.
 
 Usage: uv run --no-project --with matplotlib==3.9.2 python loadtest/charts.py
 Every number plotted comes from docs/evidence/loadtest-*/ (k6 summaries, nginx summaries,
@@ -23,9 +23,10 @@ ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "docs" / "evidence"
 OUT = EVIDENCE / "charts"
 RUNS = {
-    "Run 1 (3 replicas)": EVIDENCE / "loadtest-run1-20261121",
-    "Run 2 (3 replicas)": EVIDENCE / "loadtest-run2-20261121",
+    "Run 1": EVIDENCE / "loadtest-run1-20261121",
+    "Run 2": EVIDENCE / "loadtest-run2-20261121",
     "6 replicas": EVIDENCE / "loadtest-run3-6replicas-20261121",
+    "Final": EVIDENCE / "loadtest-final-20261122",
 }
 COLORS = {"ok": "#2a8b7b", "conflict": "#9c661a", "busy": "#7a8699", "error": "#b3261e"}
 plt.rcParams.update(
@@ -123,8 +124,8 @@ def per_second(run: Path) -> list[dict]:
 def chart_timeline() -> None:
     """Scenario A: per-second edge metrics stored by the monitoring pipeline."""
     fig, axes = plt.subplots(3, 1, figsize=(8, 7), sharex=True)
-    for (name, run), color in zip(list(RUNS.items())[1:], ("#204ea8", "#2a8b7b"), strict=True):
-        rows = per_second(run)
+    for name, color in (("Final", "#204ea8"), ("6 replicas", "#2a8b7b")):
+        rows = per_second(RUNS[name])
         if not rows:
             continue
         start = datetime.fromisoformat(rows[0]["ts"])
@@ -139,7 +140,7 @@ def chart_timeline() -> None:
     axes[1].set_ylabel("5xx share (%)\n(nearly all 503 shed)")
     axes[2].set_ylabel("p95 latency (s)")
     axes[2].set_xlabel("Seconds since the first nginx second with >100 requests")
-    axes[0].set_title("Scenario A per second: 3 vs 6 API replicas")
+    axes[0].set_title("Scenario A per second: final run and 6-replica run")
     axes[0].legend(frameon=False)
     fig.tight_layout()
     fig.savefig(OUT / "a-per-second.png")
@@ -147,24 +148,25 @@ def chart_timeline() -> None:
 
 
 def chart_sse() -> None:
-    """Scenario B: run 1 vs run 2 for 2,000 SSE subscribers."""
+    """Scenario B: compare runs with SSE client reports."""
     reports = {}
-    for name in ("Run 1 (3 replicas)", "Run 2 (3 replicas)"):
+    for name in ("Run 1", "Run 2", "Final"):
         text = (RUNS[name] / "b" / "sse-client.txt").read_text()
         reports[name] = json.loads(next(line for line in text.splitlines() if line.startswith("{")))
-    fig, (left, right) = plt.subplots(1, 2, figsize=(9, 3.4))
+    fig, (left, right) = plt.subplots(1, 2, figsize=(10, 3.8))
     names = list(reports)
     matched = [reports[n]["matching_clients"] for n in names]
-    left.bar(names, [2000] * 2, color="#e4ebf3", label="Target 2,000")
+    targets = [reports[name]["target_connections"] for name in names]
+    left.bar(names, targets, color="#e4ebf3", label="Target connections")
     left.bar(names, matched, color="#2a8b7b", label="Matched the database")
     for i, value in enumerate(matched):
         left.text(i, value + 30, f"{value:,}", ha="center")
     left.set_ylim(0, 2300)
     left.set_title("Clients whose final seat map matched PostgreSQL")
     left.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=2)
-    width = 0.35
-    palette = ("#9c661a", "#204ea8")
-    for offset, name, color in zip((-width / 2, width / 2), names, palette, strict=True):
+    width = 0.25
+    palette = ("#9c661a", "#7a8699", "#204ea8")
+    for offset, name, color in zip((-width, 0, width), names, palette, strict=True):
         report = reports[name]
         values = [report["snapshot_ms"]["p50"] / 1000, report["delta_apply_ms"]["p50"] / 1000]
         right.bar([x + offset for x in (0, 1)], values, width, color=color, label=name)

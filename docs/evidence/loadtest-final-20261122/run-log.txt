@@ -1,0 +1,556 @@
+
+==> Starting the stack (docker compose up -d --build)
+ Image ticketing-backend:local Building 
+ Image ticketing-nginx:local Building 
+ Image ticketing-backend:local Building 
+ Image ticketing-backend:local Building 
+ Image ticketing-backend:local Building 
+ Image ticketing-backend:local Building 
+ Image ticketing-backend:local Building 
+ Image ticketing-paymock:local Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 3.93kB done
+#1 DONE 0.0s
+
+#2 [nginx internal] load build definition from Dockerfile
+#2 transferring dockerfile: 670B done
+#2 DONE 0.0s
+
+#3 [relay internal] load build definition from Dockerfile
+#3 transferring dockerfile: 2.21kB done
+#3 DONE 0.0s
+
+#4 [paymock internal] load build definition from Dockerfile
+#4 transferring dockerfile: 1.27kB done
+#4 DONE 0.0s
+
+#5 [paymock] resolve image config for docker-image://docker.io/docker/dockerfile:1.7
+#5 DONE 1.3s
+
+#6 [seed] docker-image://docker.io/docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+#6 resolve docker.io/docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e 0.0s done
+#6 CACHED
+
+#7 [collector internal] load build definition from Dockerfile
+#7 transferring dockerfile: 2.21kB done
+#7 DONE 0.0s
+
+#8 [api internal] load build definition from Dockerfile
+#8 transferring dockerfile: 2.21kB done
+#8 DONE 0.0s
+
+#9 [relay internal] load build definition from Dockerfile
+#9 transferring dockerfile: 2.21kB done
+#9 DONE 0.0s
+
+#10 [worker internal] load build definition from Dockerfile
+#10 transferring dockerfile: 2.21kB done
+#10 DONE 0.0s
+
+#11 [migrate internal] load build definition from Dockerfile
+#11 transferring dockerfile: 2.21kB done
+#11 DONE 0.0s
+
+#12 [seed internal] load build definition from Dockerfile
+#12 transferring dockerfile: 2.21kB done
+#12 DONE 0.0s
+
+#13 [seed internal] load metadata for docker.io/library/python:3.12-slim
+#13 ...
+
+#14 [migrate internal] load metadata for ghcr.io/astral-sh/uv:0.13.7
+#14 DONE 0.9s
+
+#15 [nginx internal] load metadata for docker.io/library/node:22-alpine
+#15 DONE 1.2s
+
+#16 [nginx internal] load metadata for docker.io/library/nginx:1.30-alpine
+#16 ...
+
+#13 [worker internal] load metadata for docker.io/library/python:3.12-slim
+#13 DONE 1.2s
+
+#17 [api internal] load .dockerignore
+#17 transferring context: 228B done
+#17 DONE 0.0s
+
+#18 [seed internal] load .dockerignore
+#18 transferring context: 228B done
+#18 DONE 0.0s
+
+#19 [worker internal] load .dockerignore
+#19 transferring context: 228B done
+#19 DONE 0.0s
+
+#20 [relay internal] load .dockerignore
+#20 transferring context: 228B done
+#20 DONE 0.0s
+
+#21 [paymock internal] load .dockerignore
+#21 transferring context: 228B done
+#21 DONE 0.1s
+
+#22 [collector internal] load .dockerignore
+#22 transferring context: 228B done
+#22 DONE 0.1s
+
+#23 [migrate internal] load .dockerignore
+#23 transferring context: 228B done
+#23 DONE 0.1s
+
+#24 [migrate] FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490
+#24 resolve ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 0.0s done
+#24 DONE 0.0s
+
+#25 [migrate builder 1/9] FROM docker.io/library/python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+#25 resolve docker.io/library/python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b 0.0s done
+#25 DONE 0.0s
+
+#26 [seed internal] load build context
+#26 transferring context: 7.69kB done
+#26 DONE 0.1s
+
+#27 [worker internal] load build context
+#27 transferring context: 7.69kB done
+#27 DONE 0.0s
+
+#28 [api internal] load build context
+#28 transferring context: 7.69kB done
+#28 DONE 0.1s
+
+#29 [relay internal] load build context
+#29 transferring context: 484.27kB 0.0s done
+#29 DONE 0.1s
+
+#30 [seed builder 4/9] COPY pyproject.toml uv.lock ./
+#30 CACHED
+
+#31 [seed builder 5/9] COPY backend/pyproject.toml backend/pyproject.toml
+#31 CACHED
+
+#32 [seed runtime 6/7] COPY backend/alembic.ini ./alembic.ini
+#32 CACHED
+
+#33 [seed builder 7/9] RUN --mount=type=cache,target=/root/.cache/uv     uv sync --frozen --no-dev --no-install-workspace --package ticketing
+#33 CACHED
+
+#34 [seed runtime 2/7] RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
+#34 CACHED
+
+#35 [seed builder 8/9] COPY backend/src backend/src
+#35 CACHED
+
+#36 [seed builder 6/9] COPY paymock/pyproject.toml paymock/pyproject.toml
+#36 CACHED
+
+#37 [seed runtime 5/7] WORKDIR /app
+#37 CACHED
+
+#38 [seed builder 9/9] RUN --mount=type=cache,target=/root/.cache/uv     uv sync --frozen --no-dev --package ticketing --no-editable
+#38 CACHED
+
+#39 [seed builder 3/9] WORKDIR /src
+#39 CACHED
+
+#40 [seed runtime 4/7] COPY --from=builder /opt/venv /opt/venv
+#40 CACHED
+
+#41 [seed runtime 3/7] RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid app --no-create-home app  && mkdir -p /data/logs /data/imports /data/exports && chown -R app:app /data
+#41 CACHED
+
+#42 [seed builder 2/9] COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /usr/local/bin/uv
+#42 CACHED
+
+#43 [relay runtime 7/7] COPY backend/migrations ./migrations
+#43 CACHED
+
+#44 [relay] exporting to image
+#44 exporting layers
+#44 ...
+
+#43 [collector runtime 7/7] COPY backend/migrations ./migrations
+#43 CACHED
+
+#45 [paymock internal] load build context
+#45 transferring context: 30.53kB 0.0s done
+#45 DONE 0.0s
+
+#46 [collector internal] load build context
+#46 transferring context: 7.69kB done
+#46 DONE 0.0s
+
+#47 [migrate internal] load build context
+#47 transferring context: 7.69kB done
+#47 DONE 0.0s
+
+#48 [paymock runtime 3/4] RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid app --no-create-home app  && mkdir -p /data/paymock /data/logs && chown app:app /data/paymock /data/logs
+#48 CACHED
+
+#49 [paymock builder 7/9] RUN --mount=type=cache,target=/root/.cache/uv     uv sync --frozen --no-dev --no-install-workspace --package paymock
+#49 CACHED
+
+#39 [paymock builder 3/9] WORKDIR /src
+#39 CACHED
+
+#50 [paymock builder 4/9] COPY pyproject.toml uv.lock ./
+#50 CACHED
+
+#34 [paymock runtime 2/7] RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
+#34 CACHED
+
+#51 [paymock builder 5/9] COPY backend/pyproject.toml backend/pyproject.toml
+#51 CACHED
+
+#52 [paymock builder 9/9] RUN --mount=type=cache,target=/root/.cache/uv     uv sync --frozen --no-dev --package paymock --no-editable
+#52 CACHED
+
+#53 [paymock builder 8/9] COPY paymock/src paymock/src
+#53 CACHED
+
+#54 [paymock builder 6/9] COPY paymock/pyproject.toml paymock/pyproject.toml
+#54 CACHED
+
+#42 [paymock builder 2/9] COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /usr/local/bin/uv
+#42 CACHED
+
+#55 [paymock runtime 4/4] COPY --from=builder /opt/venv /opt/venv
+#55 CACHED
+
+#44 [relay] exporting to image
+#44 exporting layers done
+#44 exporting manifest sha256:0e1219d8daf5ed1130f53ff9eb532e4d8b909ed9d5a57bf094cfeebcb1234e8c 0.0s done
+#44 exporting config sha256:d6abbb9c011f92792159b7d9c091b1129411fa2caeb06a2e439e2390b1a26759 0.0s done
+#44 exporting attestation manifest sha256:25bd744be73c3eecc23abba31e705cd0cc2478403f7b4ea1740049a4a56b53d3
+#44 exporting attestation manifest sha256:25bd744be73c3eecc23abba31e705cd0cc2478403f7b4ea1740049a4a56b53d3 0.1s done
+#44 exporting manifest list sha256:5302b8f87d0672f2300f731a218a4db114160d4f2efb79218f38959a605e49f2
+#44 exporting manifest list sha256:5302b8f87d0672f2300f731a218a4db114160d4f2efb79218f38959a605e49f2 0.1s done
+#44 naming to docker.io/library/ticketing-backend:local 0.0s done
+#44 unpacking to docker.io/library/ticketing-backend:local 0.0s done
+#44 DONE 0.3s
+
+#56 [api] exporting to image
+#56 exporting layers done
+#56 exporting manifest sha256:fd2cae0e8af0d3a1eb7c7517716a9159fdb34730c33dbc5b8653654f423e7038 0.0s done
+#56 exporting config sha256:e08571e634d2ed7b74f8c6d53fd0fada28f1a6e12cd98cfca0aeafb93e434977 0.0s done
+#56 exporting attestation manifest sha256:6784197c562b3ac86bce00d26216b203783abd0a449d879f5d881343b88a53c1 0.1s done
+#56 exporting manifest list sha256:533ccf3096ae19895fef62355e3fe7038d04a964c7c4241a752cc0de285fa3e7 0.1s done
+#56 naming to docker.io/library/ticketing-backend:local 0.0s done
+#56 unpacking to docker.io/library/ticketing-backend:local 0.1s done
+#56 DONE 0.3s
+
+#57 [worker] exporting to image
+#57 exporting layers done
+#57 exporting manifest sha256:70397eaeb6706c1b22ff699e168b731353dddc64bc6463d37d419a57fa90f195 0.0s done
+#57 exporting config sha256:bd008ca7580c18fcb7746b9c5694f7faf6f4b872e5c55ae1c929509d1732ba89 0.0s done
+#57 exporting attestation manifest sha256:82389c30d5a362ee01a9dfe68dd053c653f46a0ffc7afc14a312c5ce056a8a8c 0.1s done
+#57 exporting manifest list sha256:640c90e2bf81e8ef17d08bb5b2b5e1dbabb91f432e3281520d7bb55493976505 0.1s done
+#57 naming to docker.io/library/ticketing-backend:local 0.0s done
+#57 unpacking to docker.io/library/ticketing-backend:local 0.0s done
+#57 DONE 0.3s
+
+#58 [seed] exporting to image
+#58 exporting layers done
+#58 exporting manifest sha256:f0355c03e12178e7da767ec25dc0db36c18a5f6c788adef8caf3bebfcb8582a0 0.0s done
+#58 exporting config sha256:eee04e5e288d13b4cd142bf8e9c60bf048fb450b26b91729d27b1d590ba77547 0.0s done
+#58 exporting attestation manifest sha256:05e299def69aed762af414590be294a861f02e1e7433135cf2264cd78ef9a5d7 0.1s done
+#58 exporting manifest list sha256:e0fcfa17ddb92046b78884654c734ab0e59a4b72bf7c8ceb0cf804089fb582b4 0.1s done
+#58 naming to docker.io/library/ticketing-backend:local 0.0s done
+#58 unpacking to docker.io/library/ticketing-backend:local 0.0s done
+#58 DONE 0.3s
+
+#59 [collector] exporting to image
+#59 exporting layers done
+#59 exporting manifest sha256:d6b7274d21bcc47c13cef3e06335ec14329f33f67c54a6b55288f3544aa780ed 0.0s done
+#59 exporting config sha256:0f207d490276c400fffac3082ed9d5fff8e23498912f129f7590217459cb1a8f 0.0s done
+#59 exporting attestation manifest sha256:6cb9a3f4762e801bd38135a7279541c69c5f327cbd5d547493c0731673bfe119 0.1s done
+#59 exporting manifest list sha256:fb9adae182c2d7fa700a5f63cc1a96a0345309f2d4735dde491ee29dfb0f6dd3 0.0s done
+#59 naming to docker.io/library/ticketing-backend:local 0.0s done
+#59 unpacking to docker.io/library/ticketing-backend:local 0.1s done
+#59 DONE 0.3s
+
+#60 [paymock] exporting to image
+#60 exporting layers done
+#60 exporting manifest sha256:fb6abc90f86c13cb66053ec867cd78c19ef3390a24d1a06236f1ee59cb2d33cc 0.0s done
+#60 exporting config sha256:1c320a0e043710adb7daf00c312c4c56003bd7e247306ada096cd8dcbb117ec6 0.0s done
+#60 exporting attestation manifest sha256:cd219039238304c61d28d03b9bcc32f2ae29cecd9f194a92161283593db919df 0.1s done
+#60 exporting manifest list sha256:5ff562d7b9f74c18d9ae42f3fbeb1fb415d7fae6884cadd1ca10e11eca9299ef 0.0s done
+#60 naming to docker.io/library/ticketing-paymock:local 0.0s done
+#60 unpacking to docker.io/library/ticketing-paymock:local 0.1s done
+#60 DONE 0.3s
+
+#16 [nginx internal] load metadata for docker.io/library/nginx:1.30-alpine
+#16 DONE 1.8s
+
+#61 [nginx internal] load .dockerignore
+#61 transferring context: 228B done
+#61 DONE 0.0s
+
+#62 [migrate] exporting to image
+#62 exporting layers done
+#62 exporting manifest sha256:9fee1798c994f90bd73a23b4183e8eeea7384830d1a0ba4d87d003df0908d71b 0.0s done
+#62 exporting config sha256:2adb68c778f2f01ba259f96eb7cfa5ec8aa1d8448193fd0906b3af7d947e2a2b 0.0s done
+#62 exporting attestation manifest sha256:e4b9bdb2c806e58f089a018703752be00ebeee0c3e2f10eb6985e9e9d94a9966 0.1s done
+#62 exporting manifest list sha256:e1410e819c37e209728f02524cd63910e698a1ee48d5d302aeef1d39e8dea56f 0.0s done
+#62 naming to docker.io/library/ticketing-backend:local 0.0s done
+#62 unpacking to docker.io/library/ticketing-backend:local 0.0s done
+#62 DONE 0.4s
+
+#63 [nginx stage-1 1/4] FROM docker.io/library/nginx:1.30-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3
+#63 resolve docker.io/library/nginx:1.30-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3 0.0s done
+#63 DONE 0.0s
+
+#64 [nginx web 1/6] FROM docker.io/library/node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a
+#64 resolve docker.io/library/node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a 0.0s done
+#64 DONE 0.0s
+
+#65 [nginx internal] load build context
+#65 transferring context: 2.20kB done
+#65 DONE 0.0s
+
+#66 [nginx web 3/6] COPY frontend/package.json frontend/package-lock.json ./
+#66 CACHED
+
+#67 [nginx stage-1 2/4] RUN apk upgrade --no-cache
+#67 CACHED
+
+#68 [nginx stage-1 3/4] COPY infra/nginx/nginx.conf /etc/nginx/nginx.conf
+#68 CACHED
+
+#69 [nginx web 6/6] RUN npm run build
+#69 CACHED
+
+#70 [nginx web 4/6] RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+#70 CACHED
+
+#71 [nginx web 2/6] WORKDIR /web
+#71 CACHED
+
+#72 [nginx web 5/6] COPY frontend/ ./
+#72 CACHED
+
+#73 [nginx stage-1 4/4] COPY --from=web /web/dist /usr/share/nginx/html
+#73 CACHED
+
+#74 [nginx] exporting to image
+#74 exporting layers done
+#74 exporting manifest sha256:66c91519f5cd205cedf5281aabef133d87244cdd42f6d2134c58d8ffd93a0830 done
+#74 exporting config sha256:7bbcf67b9a624640ad1c3e0da1095674a4b2fd5101bf57ef538917d198747158 done
+#74 exporting attestation manifest sha256:7f3ced8f7f2a75d46545b621efe82ad025539f3086c39a0bf7d5b3aa324aa1e5
+#74 exporting attestation manifest sha256:7f3ced8f7f2a75d46545b621efe82ad025539f3086c39a0bf7d5b3aa324aa1e5 0.1s done
+#74 exporting manifest list sha256:bce0b37bc736609f3c68c73d6a231958c00beae509c786232de55148899e49cc 0.0s done
+#74 naming to docker.io/library/ticketing-nginx:local done
+#74 unpacking to docker.io/library/ticketing-nginx:local done
+#74 DONE 0.1s
+
+#75 [relay] resolving provenance for metadata file
+#75 ...
+
+#76 [collector] resolving provenance for metadata file
+#76 DONE 0.1s
+
+#77 [paymock] resolving provenance for metadata file
+#77 DONE 0.1s
+
+#78 [nginx] resolving provenance for metadata file
+#78 DONE 0.0s
+
+#79 [migrate] resolving provenance for metadata file
+#79 DONE 0.0s
+
+#80 [api] resolving provenance for metadata file
+#80 DONE 0.1s
+
+#75 [relay] resolving provenance for metadata file
+#75 DONE 0.1s
+
+#81 [seed] resolving provenance for metadata file
+#81 DONE 0.1s
+
+#82 [worker] resolving provenance for metadata file
+#82 DONE 0.1s
+ Image ticketing-backend:local Built 
+ Image ticketing-nginx:local Built 
+ Image ticketing-backend:local Built 
+ Image ticketing-backend:local Built 
+ Image ticketing-backend:local Built 
+ Image ticketing-backend:local Built 
+ Image ticketing-backend:local Built 
+ Image ticketing-paymock:local Built 
+ Volume wy-project_app_logs Creating 
+ Volume wy-project_paymock_data Creating 
+ Volume wy-project_app_logs Creating 
+ Volume wy-project_nginx_logs Creating 
+ Volume wy-project_nginx_logs Creating 
+ Volume wy-project_imports Creating 
+ Volume wy-project_imports Creating 
+ Volume wy-project_exports Creating 
+ Volume wy-project_exports Creating 
+ Volume wy-project_redis_data Creating 
+ Volume wy-project_redis_data Creating 
+ Volume wy-project_pg_data Creating 
+ Volume wy-project_pg_data Creating 
+ Network wy-project_default Creating 
+ Volume wy-project_paymock_data Creating 
+ Network wy-project_default Creating 
+ Volume wy-project_app_logs Created 
+ Volume wy-project_app_logs Created 
+ Volume wy-project_paymock_data Created 
+ Volume wy-project_paymock_data Created 
+ Volume wy-project_nginx_logs Created 
+ Volume wy-project_nginx_logs Created 
+ Volume wy-project_redis_data Created 
+ Volume wy-project_redis_data Created 
+ Volume wy-project_imports Created 
+ Volume wy-project_imports Created 
+ Volume wy-project_pg_data Created 
+ Volume wy-project_pg_data Created 
+ Volume wy-project_exports Created 
+ Volume wy-project_exports Created 
+ Network wy-project_default Created 
+ Network wy-project_default Created 
+ Container wy-project-postgres-1 Creating 
+ Container wy-project-redis-1 Creating 
+ Container wy-project-paymock-1 Creating 
+ Container wy-project-paymock-1 Created 
+ Container wy-project-redis-1 Created 
+ Container wy-project-postgres-1 Created 
+ Container wy-project-migrate-1 Creating 
+ Container wy-project-migrate-1 Created 
+ Container wy-project-worker-1 Creating 
+ Container wy-project-seed-1 Creating 
+ Container wy-project-collector-1 Creating 
+ Container wy-project-relay-1 Creating 
+ Container wy-project-seed-1 Created 
+ Container wy-project-api-1 Creating 
+ Container wy-project-api-2 Creating 
+ Container wy-project-api-3 Creating 
+ Container wy-project-collector-1 Created 
+ Container wy-project-worker-1 Created 
+ Container wy-project-relay-1 Created 
+ Container wy-project-api-2 Created 
+ Container wy-project-api-3 Created 
+ Container wy-project-nginx-1 Creating 
+ Container wy-project-api-1 Created 
+ Container wy-project-nginx-1 Created 
+ Container wy-project-paymock-1 Starting 
+ Container wy-project-redis-1 Starting 
+ Container wy-project-postgres-1 Starting 
+ Container wy-project-paymock-1 Started 
+ Container wy-project-paymock-1 Waiting 
+ Container wy-project-redis-1 Started 
+ Container wy-project-redis-1 Waiting 
+ Container wy-project-postgres-1 Started 
+ Container wy-project-postgres-1 Waiting 
+ Container wy-project-redis-1 Healthy 
+ Container wy-project-postgres-1 Healthy 
+ Container wy-project-migrate-1 Starting 
+ Container wy-project-migrate-1 Started 
+ Container wy-project-migrate-1 Waiting 
+ Container wy-project-paymock-1 Healthy 
+ Container wy-project-migrate-1 Exited 
+ Container wy-project-worker-1 Starting 
+ Container wy-project-collector-1 Starting 
+ Container wy-project-seed-1 Starting 
+ Container wy-project-relay-1 Starting 
+ Container wy-project-worker-1 Started 
+ Container wy-project-collector-1 Started 
+ Container wy-project-seed-1 Started 
+ Container wy-project-seed-1 Waiting 
+ Container wy-project-relay-1 Started 
+ Container wy-project-seed-1 Exited 
+ Container wy-project-api-1 Starting 
+ Container wy-project-api-1 Started 
+ Container wy-project-api-2 Starting 
+ Container wy-project-api-2 Started 
+ Container wy-project-api-3 Starting 
+ Container wy-project-api-3 Started 
+ Container wy-project-api-2 Waiting 
+ Container wy-project-api-3 Waiting 
+ Container wy-project-api-1 Waiting 
+ Container wy-project-api-2 Healthy 
+ Container wy-project-api-3 Healthy 
+ Container wy-project-api-1 Healthy 
+ Container wy-project-nginx-1 Starting 
+ Container wy-project-nginx-1 Started 
+
+==> Recording environment
+
+==> Scenario A: preparing event with 10000 seats and 3000 buyer sessions
+imported 10000 seats in 1.6s
+event 1: 10000 seats, 3000 buyer sessions -> /lt/out/20261122-111147/a
+
+==> Scenario A: k6 3000 VUs for 60s against event 1
+replays started=74 verified=46
+rush ↓ [ 100% ] 3000 VUs  1m0s
+
+running (1m03.9s), 0071/3000 VUs, 123588 complete and 0 interrupted iterations
+rush ↓ [ 100% ] 3000 VUs  1m0s
+
+running (1m04.9s), 0004/3000 VUs, 123655 complete and 0 interrupted iterations
+rush ↓ [ 100% ] 3000 VUs  1m0s
+
+     business_conflicts.............: 127827  1964.889351/s
+   ✓ checks.........................: 100.00% 46 out of 46
+     data_received..................: 107 MB  1.6 MB/s
+     data_sent......................: 57 MB   877 kB/s
+     http_req_blocked...............: avg=4.46ms   min=1.3µs  med=4.7µs    max=281.47ms p(90)=6.3µs  p(95)=7.9µs  p(99)=217.6ms 
+     http_req_connecting............: avg=1.65ms   min=0s     med=0s       max=222.21ms p(90)=0s     p(95)=0s     p(99)=66.96ms 
+     http_req_duration..............: avg=1.16s    min=1.98ms med=1.05s    max=5s       p(90)=1.9s   p(95)=2.02s  p(99)=2.64s   
+       { expected_response:true }...: avg=913.85ms min=1.98ms med=979.61ms max=4.92s    p(90)=1.96s  p(95)=2.04s  p(99)=2.38s   
+     http_req_failed................: 88.16%  118880 out of 134834
+     http_req_receiving.............: avg=54.57µs  min=0s     med=42.8µs   max=11.46ms  p(90)=72.1µs p(95)=87.4µs p(99)=251.17µs
+     http_req_sending...............: avg=164.48µs min=5.5µs  med=14.9µs   max=70.54ms  p(90)=35.5µs p(95)=51.8µs p(99)=3.29ms  
+     http_req_tls_handshaking.......: avg=0s       min=0s     med=0s       max=0s       p(90)=0s     p(95)=0s     p(99)=0s      
+     http_req_waiting...............: avg=1.16s    min=1.92ms med=1.05s    max=5s       p(90)=1.9s   p(95)=2.02s  p(99)=2.64s   
+     http_reqs......................: 134834  2072.597266/s
+     iteration_duration.............: avg=1.48s    min=84.5ms med=1.27s    max=26.42s   p(90)=2.22s  p(95)=2.52s  p(99)=3.88s   
+     iterations.....................: 123659  1900.821049/s
+   ✓ replay_progress................: 38.33%  46 out of 120
+     replay_started.................: 74      1.137489/s
+   ✗ replay_unverified..............: 28      0.430401/s
+     replay_verified................: 46      0.707088/s
+     scenario_a_iterations..........: 123659  1900.821049/s
+     scenario_a_outcomes............: 134875  2073.227497/s
+     server_busy....................: 118817  1826.392374/s
+     successful_holds...............: 3940    60.563606/s
+   ✗ unexpected_errors..............: 0.04%   63 out of 134834
+     vus............................: 4       min=0                max=3000
+     vus_max........................: 3000    min=96               max=3000
+
+
+running (1m05.1s), 0000/3000 VUs, 123659 complete and 0 interrupted iterations
+rush ✓ [ 100% ] 3000 VUs  1m0s
+time="2026-11-22T03:13:48Z" level=error msg="thresholds on metrics 'replay_unverified, unexpected_errors' have been crossed"
+
+==> Scenario A: waiting for holds, payments and outbox to drain (90 s)
+
+==> Scenario A: consistency checks (zero rows = consistent)
+     status      | orders | tickets 
+-----------------+--------+---------
+ pending_payment |   3652 |    7640
+ paid            |    237 |     438
+ cancelled       |     52 |      95
+(3 rows)
+
+  status   | count 
+-----------+-------
+ available |  1922
+ held      |  7640
+ sold      |   438
+(3 rows)
+
+
+==> Scenario B: seeding event and 2000 subscriber sessions
+{"event_id": 2, "seats": 10000, "sessions": 2000}
+
+==> Scenario B: 2000 subscribers for 80s, writer at 100 changes/s (event 2)
+ Container wy-project-api-run-fb39e820d284 Creating 
+ Container wy-project-api-run-fb39e820d284 Created 
+{"archive_mismatches":0,"connect_ms":{"p50":687,"p95":2360,"p99":4170},"connections_established":2000,"delta_apply_ms":{"p50":216,"p95":3070,"p99":7750},"delta_apply_samples":789776,"deltas_applied":789776,"final_head":1376,"gaps":19229,"matching_clients":2000,"outbox_pending":0,"peak_active":2000,"peak_active_during_writes":2000,"pg_state_sha256":"3b87c47c817f790dc0a1da671c30f9c9ad114a42aaae392b0da3d9c4f03ed6d1","processes":8,"request_errors":17,"resyncs":33,"snapshot_ms":{"p50":3420,"p95":8240,"p99":8640},"sse_body_bytes":264912047,"sse_body_bytes_per_second":3088627,"stalled_progress":19229,"stream_attempts":21279,"stream_error_rate":0.000799,"stream_request_errors":17,"target_connections":2000}
+{"changes": 5504, "seconds": 55.32495409099647, "changes_per_sec": 99.48494473121877}
+
+==> FAILED
+  - Scenario A k6 failed (exit 99)
+  - Scenario A replays started and verified differ
+
+==> Service logs: 63 warning/error lines

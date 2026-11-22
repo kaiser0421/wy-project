@@ -1,0 +1,21 @@
+date: 2026-11-22T11:12:07+08:00
+git: 346fe0f75c3039573a814209fedd57e0e38ed5c1
+host: Linux DESKTOP-Q7V7A3D 6.18.40.1-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Fri Jul 31 22:12:15 UTC 2026 x86_64 GNU/Linux
+cpus: 12
+model name	: AMD Ryzen 5 5600 6-Core Processor
+MemTotal:       16379368 kB
+docker: 29.9.3 cpus=12 mem=16772472832 os=Docker Desktop
+Docker Compose version v5.7.0
+API_REPLICAS=3 API_REPLICAS_RUNNING=3
+container: /wy-project-api-1 image=sha256:e1410e819c37e209728f02524cd63910e698a1ee48d5d302aeef1d39e8dea56f tag=ticketing-backend:local
+container: /wy-project-api-2 image=sha256:e1410e819c37e209728f02524cd63910e698a1ee48d5d302aeef1d39e8dea56f tag=ticketing-backend:local
+container: /wy-project-api-3 image=sha256:e1410e819c37e209728f02524cd63910e698a1ee48d5d302aeef1d39e8dea56f tag=ticketing-backend:local
+container: /wy-project-collector-1 image=sha256:e1410e819c37e209728f02524cd63910e698a1ee48d5d302aeef1d39e8dea56f tag=ticketing-backend:local
+container: /wy-project-nginx-1 image=sha256:bce0b37bc736609f3c68c73d6a231958c00beae509c786232de55148899e49cc tag=ticketing-nginx:local
+container: /wy-project-paymock-1 image=sha256:5ff562d7b9f74c18d9ae42f3fbeb1fb415d7fae6884cadd1ca10e11eca9299ef tag=ticketing-paymock:local
+container: /wy-project-postgres-1 image=sha256:1d5b02d3a9941fbd52437db4107f8c52d6297dac553ca1e5c299ebb3756b4857 tag=postgres:16-alpine
+container: /wy-project-redis-1 image=sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe tag=redis:7-alpine
+container: /wy-project-relay-1 image=sha256:e1410e819c37e209728f02524cd63910e698a1ee48d5d302aeef1d39e8dea56f tag=ticketing-backend:local
+container: /wy-project-worker-1 image=sha256:e1410e819c37e209728f02524cd63910e698a1ee48d5d302aeef1d39e8dea56f tag=ticketing-backend:local
+VUS=3000 DURATION=60s SEATS=10000 CONNECTIONS=2000 B_DURATION=80 B_RATE=100
+SSE_PROCESSES=auto SSE_RAMP=10

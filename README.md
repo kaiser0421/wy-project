@@ -140,7 +140,7 @@ uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.json --zone A
 `make test` 一行指令在 Docker 內執行單元、整合、併發、前端單元與預設的瀏覽器測試。整合驗證紀錄為後端 pytest 242 項（含單元、PostgreSQL／Redis 整合及併發測試）與前端 Vitest 58 項通過。經 nginx 的端到端流程與 nginx 版 Playwright 需先啟動整套服務，另行執行（CI 會在 smoke 後執行端到端流程）。逐條驗收條件與對應測試見 [驗收條件](docs/ACCEPTANCE.md)。
 
 
-成功與失敗的標準、各輪逐條結果與擴容對照見 [壓測結論與結果總表](LOADTEST.md#一結論)。
+正確性標準、最終 run 結果與擴充紀錄見 [壓測結論與結果總表](LOADTEST.md#一結論)。
 
 | 指令 | 驗證範圍 |
 | --- | --- |
@@ -165,9 +165,9 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 併發測試包含指定座位、區域配位與同一使用者的限購競爭。破壞驗證會抓到同一座位有多筆 active claim。見 `backend/tests/booking/test_booking.py:46`、`backend/tests/booking/test_booking.py:67`、`backend/tests/booking/test_booking.py:91`、`backend/tests/booking/test_booking.py:106`、[破壞驗證輸出](docs/evidence/break-it.txt)。
 
 - 請在可拋棄的 Compose 堆疊壓測。以 `loadtest/run.sh smoke` 試跑，以 `loadtest/run.sh all` 執行情境 A（10,000 席、3,000 VUs、60 秒及一致性檢查）與 B（2,000 條 SSE）。見 `loadtest/run.sh:234–236`。參數與輸出格式見 [壓測工具包](loadtest/README.md)，報告見 [LOADTEST.md](LOADTEST.md)。
-- **正式 Scenario A**。第 2 輪共 134,801 次 HTTP 請求、2,098 req/s，k6 p50／p95 為 1,043／2,036 ms，排空後占席 8,997／10,000。兩輪均未超賣，第 2 輪一致性 SQL 回傳 0 列。[第 1 輪證據](docs/evidence/loadtest-run1-20261121/) · [第 2 輪證據](docs/evidence/loadtest-run2-20261121/) · [一致性檢查](LOADTEST.md#6-一致性檢查)
-- **正式 Scenario B**。第 2 輪目標 100 changes/s，寫入期間同時 SSE 峰值 2,000，最終 2,000／2,000 個 client 與 DB 相符。[SSE 原始輸出](docs/evidence/loadtest-run2-20261121/b/sse-client.txt) · [壓測中管理後台監控](docs/screenshots/11-monitoring-under-load.png)
-- 匯入 10,000 列的 API 實測為 3.3 秒。100,000 列在完整 Docker 服務上從上傳到完成，閒置時 CSV 11.6–15.6 秒、JSON 17.0–22.2 秒；同時執行完整測試套件時 CSV 21.0 秒、JSON 47.8 秒（門檻 60 秒）。整合測試 `test_import_100k_under_60s` 在隔離資料庫為 CSV 15.14 秒、JSON 15.35 秒。見 [10 萬列匯入實測](docs/evidence/import-100k.md)、`backend/tests/imports/test_import_perf.py:17–36`。
+- **正式 Scenario A**。最終 run 共 134,834 次 HTTP 請求、2,072.6 req/s，k6 p50／p95／p99 為 1.05／2.02／2.64 秒，排空後占席 8,078／10,000。無超賣，一致性 SQL 回傳 0 列。[k6 原始輸出](docs/evidence/loadtest-final-20261122/a/k6-summary.json) · [k6 終端摘要](docs/evidence/loadtest-final-20261122/run-log.txt) · [庫存](docs/evidence/loadtest-final-20261122/a/final-state.txt) · [一致性檢查](LOADTEST.md#6-一致性檢查)
+- **正式 Scenario B**。最終 run writer 實測 99.5 changes/s，寫入期間同時 SSE 峰值 2,000，最終 2,000／2,000 個 client 與 PostgreSQL 相符。[Writer](docs/evidence/loadtest-final-20261122/b/writer.txt) · [SSE client](docs/evidence/loadtest-final-20261122/b/sse-client.txt)
+- 最終 run 的 Scenario A 準備階段匯入 10,000 列耗時 1.6 秒，見 [執行紀錄](docs/evidence/loadtest-final-20261122/run-log.txt#L479)。100,000 列在完整 Docker 服務上從上傳到完成，閒置時 CSV 11.6–15.6 秒、JSON 17.0–22.2 秒；同時執行完整測試套件時 CSV 21.0 秒、JSON 47.8 秒（門檻 60 秒）。整合測試 `test_import_100k_under_60s` 在隔離資料庫為 CSV 15.14 秒、JSON 15.35 秒。見 [10 萬列匯入實測](docs/evidence/import-100k.md)、`backend/tests/imports/test_import_perf.py:17–36`。
 - 在 512 MiB 上限的 API 容器匯出 500,000 筆訂單，首次下載完成為 217.3 秒，`anon` 取樣峰值約 108 MiB，三個副本均無 OOM。見 [Excel 匯出實測紀錄](docs/evidence/cp4-excel-500k.md)。
 
 在已啟動、可拋棄的 Compose 測試堆疊執行 `./scripts/export_500k.sh`，即可新增一個含 500,000 筆合成訂單的活動，以 Admin 經 nginx 下載報表，並用 openpyxl 唯讀模式驗證筆數。腳本會留下 `sales-500k-<活動 ID>.xlsx`，並列出下載耗時及各 API 容器的記憶體峰值。需安裝 uv，且各 API 副本須能讀取 cgroup v2 記憶體計數器，並設 512 MiB 上限。若 nginx 使用自訂網址，可在 shell 設定 `EXPORT_ORIGIN`，並透過 Compose override 將同一 Origin 加入 API 服務的 `ALLOWED_ORIGINS` 以允許登入。
@@ -218,9 +218,9 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 - **Admin 全站訂單翻頁**。以訂單建立時間與 ID 作 keyset 分頁；翻頁期間若有較早取得 ID、較晚才提交的訂單，可能落在已翻過的範圍而未顯示，或出現在後面的頁次；重新從第一頁查詢即可看到正確結果。
 - **背景服務日誌**。worker、relay、collector 的日誌仍在事件迴圈中同步寫檔；磁碟異常緩慢時可能延遲這些服務（API 已改為背景寫入、佇列滿時丟棄並計數）。
 
-- **水平擴充**。同一台桌機改用 6 個 API 副本重跑 Scenario A，排空後快照中 10,000 席全數被占用、過載 503 由 84% 降至 40%、一致性 0 違規；研判下一個瓶頸可能是 PostgreSQL 與付款路徑（尚待持續量測）。見 [LOADTEST.md](LOADTEST.md#7-瓶頸分析)。
-- **正式 Scenario A 過載**。第 2 輪 k6 正式判定 **FAILED**，17 筆重放重試後仍遭拒，另有 6 筆付款請求逾時。抽樣的 89 筆重放中 72 筆回傳原訂單、驗證正確，約 84% 的 HTTP 請求回 `503 server-busy`。[k6 原始輸出](docs/evidence/loadtest-run2-20261121/a/k6-summary.json) · [nginx 狀態摘要](docs/evidence/loadtest-run2-20261121/a/nginx-summary.txt)
-- **正式 Scenario B 重連與尾端延遲**。第 2 輪所有 client 最終與 DB 相符，壓測 client 仍頻繁因進度停滯而重連，delta 套用 p99 為 16,600 ms。[正式結果](LOADTEST.md#3-scenario-b)
+- **水平擴充**。過載拒絕、庫存與付款完成量的副本數對照見 [改進歷程](LOADTEST.md#附錄改進歷程)。
+- **正式 Scenario A 過載**。最終 run 有 88.1% 的 HTTP 請求回 `503 server-busy`，63 筆 client timeout（nginx 499）。抽樣重放發起 74 筆，46 筆驗證回傳原訂單，28 筆仍遭過載拒絕。k6 自我檢查判定 **FAILED**，正確性檢查通過。[k6 原始輸出](docs/evidence/loadtest-final-20261122/a/k6-summary.json) · [nginx 狀態摘要](docs/evidence/loadtest-final-20261122/a/nginx-summary.txt) · [結果總表](LOADTEST.md#三結果總表)
+- **正式 Scenario B 重連與尾端延遲**。Client 仍頻繁因進度停滯而重連，最終 run 的 delta 套用 p99 為 7,750 ms。[SSE 原始輸出](docs/evidence/loadtest-final-20261122/b/sse-client.txt)
 - **筆電壓測**。在 2 核心／4 執行緒的 MacBook 上，3,000 VUs 與服務同機造成 CPU 飽和。多數請求收到快速的 `503 server-busy` 或 client timeout，約 86–95 req/s，SQL 平均耗時受競爭影響約 35–170 ms。該次一致性檢查未發現超賣。
 - **大型 Excel 匯出耗時**。兩次下載約 217–237 秒，nginx 報表路徑的讀取逾時為 300 秒。見 `infra/nginx/nginx.conf:151`、[Excel 匯出實測紀錄](docs/evidence/cp4-excel-500k.md)。
 - **固定 Docker 子網**。Compose 網路使用 `172.28.0.0/24`，nginx 固定在 `172.28.0.200`，讓 API 只信任 nginx 轉送的 client IP。若本機已有網路使用同一段位址，`docker compose up` 會回報 `Pool overlaps with other one on this address space`，需先移除該網路（例如舊的堆疊執行 `docker compose down`）。見 `compose.yaml:10`、`compose.yaml:228`、`compose.yaml:248`。
