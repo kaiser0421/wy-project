@@ -36,7 +36,7 @@
 
 - **驗證本身比一次空查詢多約 0.19 ms（p50）**；同日以舊版腳本（未交替順序）另跑三次為 0.13–0.19 ms。p95、p99 由往返與排程雜訊主導。
 - `EXPLAIN (ANALYZE, BUFFERS)`（有效 token，回傳 1 列，Execution Time 0.265 ms）：這次 `sessions` 只有 41 列，planner 直接循序掃描；上方 2026-11-21 量測時 3,831 列則走 `sessions_token_hash_key` 唯一索引。使用者都以 `users_pkey` 取得，所有 buffer 皆命中記憶體。
-- 不包含取得連線池連線的等待；高負載時那才是主要成本（見下方限制）。
+- 此處重用同一條資料庫連線，量測範圍為查詢與往返時間。
 
 原始輸出（token hash 已遮蔽）：
 
@@ -62,5 +62,5 @@ Execution Time: 0.265 ms
 
 ## 限制
 
-- 這是閒置時的成本。高負載時主要成本是等待連線池（`DB_POOL_ACQUIRE_TIMEOUT_S`，逾時回 `503 server-busy`），需以壓測時的應用直方圖觀察，見 [LOADTEST.md](../../LOADTEST.md)。
+- 2026-11-21 的 HTTP 端點比較是在閒置堆疊上執行，端點差值混合了 pool acquire 與路由成本。2026-11-22 的隔離量測在有背景工作的堆疊上重用單一資料庫連線。兩次量測都未單獨量到高負載下的 pool acquire 等待。
 - 量測腳本為依序請求，不代表併發下的延遲分布。

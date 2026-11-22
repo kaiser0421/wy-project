@@ -84,7 +84,7 @@ sequenceDiagram
   end
 ```
 
-指定座位的保護取自 `FOR NO KEY UPDATE NOWAIT`。更新再檢查座位為 `available`，partial unique index 保證每席最多一筆未釋放的 order item。配額透過同一交易內的 guarded UPDATE 保留，失敗時一併回滾。見 `backend/src/ticketing/api/routes/orders.py:38`、`backend/src/ticketing/booking/create.py:51`、`backend/src/ticketing/booking/create.py:87`、`backend/src/ticketing/booking/create.py:122`、`backend/src/ticketing/booking/create.py:239`、`backend/src/ticketing/booking/database.py:30`、`backend/migrations/versions/0001_baseline.py:189`。
+指定座位的保護取自 `FOR NO KEY UPDATE NOWAIT`。更新再檢查座位為 `available`，partial unique index 保證每席最多一筆未釋放的 order item。配額透過同一交易內的 guarded UPDATE 保留，失敗時一併回滾。見 `backend/src/ticketing/api/routes/orders.py:40`、`backend/src/ticketing/booking/create.py:54`、`backend/src/ticketing/booking/create.py:91–92`、`backend/src/ticketing/booking/create.py:131–132`、`backend/src/ticketing/booking/create.py:242–248`、`backend/src/ticketing/booking/database.py:31`、`backend/migrations/versions/0001_baseline.py:189`。
 
 ## 3. 座位即時推送
 

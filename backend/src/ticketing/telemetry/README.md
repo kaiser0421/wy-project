@@ -21,6 +21,6 @@ nginx 晚到兩秒內的日誌會補入原秒。更晚的日誌仍可用 request
 
 - nginx must expose an internal `/nginx_status`. The collector defaults to `http://nginx:8080/nginx_status` and reads `NGINX_STATUS_URL` at startup. Suppressing the probe's own access log keeps idle traffic at zero.
 - Keep uncompressed rotated segments under their original `.json` prefix until the collector drains them. A same-inode truncate-and-regrow is detectable when the size shrinks or the consumed prefix fingerprint changes.
-- Payment reconciliation should populate `payment_attempts.provider_captured_at` from a verified capture observation when the attempt remains `awaiting_customer` and the capture row has not yet been recorded. `last_polled_at` measures polling activity. A capture that has yet to be observed by any local component is outside the signal.
+- `PAYMENT_CALLBACK_LAG` 以已提交的 `payment_captures` 紀錄計算 `recorded_at - captured_at`，量測從 provider 扣款到回呼或 poll 入庫的延遲。每次評估回看最近 60 秒入庫的 capture，取超過 30 秒門檻的最大延遲。尚未觀測的扣款不在此指標範圍內。`last_polled_at` 記錄的是輪詢時間。
 - The API producer flushes business counters recorded in the API process. Background-only outcomes need a producer lifecycle in the worker to appear in the same aggregates and completeness registry.
 - Admin alert SSE reads durable snapshots every second. Redis subscribers can also receive state transitions from `admin:alerts`.

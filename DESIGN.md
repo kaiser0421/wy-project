@@ -65,7 +65,7 @@
 | 順序 | 指定席路徑 |
 |---|---|
 | 1. API 驗證 | `POST /api/v1/events/{event_id}/orders` 限 Admin、User。policy 驗證 session、CSRF 與有提供的 Origin。要求 `Idempotency-Key`，座位 ID 驗證 1–4 個、不得重複並排序。route 將 event ID 與正規化 body 納入請求雜湊。見 `backend/src/ticketing/api/routes/orders.py:40`、`backend/src/ticketing/api/routes/orders.py:81`、`backend/src/ticketing/api/routes/orders.py:89`、`backend/src/ticketing/api/security.py:115–144`、`backend/src/ticketing/booking/models.py:16–31`。 |
-| 2. 進入交易 | `READ COMMITTED`，先鎖定並重驗 user/session，再檢查冪等記錄。新請求檢查發布與開賣時間，原子增加配額，先插入 order header 取得 event FK 所需的鎖。見 `backend/src/ticketing/booking/database.py:31`、`backend/src/ticketing/auth/sessions.py:111`、`backend/src/ticketing/booking/create.py:242–250`、`backend/src/ticketing/booking/create.py:149–164`、`backend/src/ticketing/booking/create.py:161`。 |
+| 2. 進入交易 | `READ COMMITTED`，先鎖定並重驗 user/session，再檢查冪等記錄。新請求檢查發布與開賣時間，原子增加配額，先插入 order header 取得 event FK 所需的鎖。見 `backend/src/ticketing/booking/database.py:31`、`backend/src/ticketing/auth/sessions.py:111`、`backend/src/ticketing/booking/create.py:242–250`、`backend/src/ticketing/booking/create.py:149–161`、`backend/src/ticketing/booking/create.py:162–168`。 |
 | 3. 第一層，座位 row lock | 依座位 ID 順序取鎖。同座位的並行寫入互斥，搶不到鎖回 `409 seat-contended`。在鎖內確認座位屬於活動且都可用，否則回 `409 seat-unavailable`。見 `backend/src/ticketing/booking/create.py:54–64`。 |
 | 4. 第二層，guarded UPDATE | 鎖後重新以 `app_now()` 確認開賣，計算期限。只有 `status='available'` 的座位能寫為 `held`、填入 `order_id` 並遞增版本。更新筆數少一筆就回滾整單。即使先行讀取改成無鎖，並行 UPDATE 等到前一個寫入提交後仍須重檢條件。見 `backend/src/ticketing/booking/create.py:91–92`、`backend/src/ticketing/booking/create.py:178`、`backend/src/ticketing/booking/create.py:183`。 |
 | 5. 第三層，partial unique index | 寫入 `order_items` 和單價。同一 `seat_id` 只容許一筆 `released_at IS NULL` 的 item。違反該 index 回 `409 seat-unavailable`，座位和配額一起回滾。見 `backend/src/ticketing/booking/create.py:99–112`、`backend/migrations/versions/0001_baseline.py:189`、`backend/src/ticketing/booking/orders.py:112`。 |
@@ -157,7 +157,7 @@ Booking invariant violations: [{'invariant': 'seat active claims', 'id': 2}, {'i
 
 ### Q2-2 扣款後程序被終止，如何恢復，要等多久？
 
-**答：** 程序遭 `kill -9` 後，Paymock 仍有同一交易保存的 capture 與待送回呼，會用同一 event ID 在 24 小時內重送，reconciler 也會查 provider，取消流程發現 capture 時同樣交給 `apply_event`（`paymock/src/paymock/store.py:111–129`、`paymock/src/paymock/delivery.py:28–52`、`backend/src/ticketing/payments/reconciler.py:60–71`、`backend/src/ticketing/payments/attempts.py:124–130`、`backend/src/ticketing/payments/reconciler.py:183–186`、`backend/src/ticketing/api/routes/payments.py:149–161`）。Handler 依 callback event ID 與 capture ID 去重，鎖後有效 hold 就售出，否則排入退款（`backend/src/ticketing/payments/callbacks.py:146–174`、`backend/src/ticketing/payments/callbacks.py:192–215`、`backend/src/ticketing/payments/callbacks.py:219–269`）。自 `last_polled_at`（無值時取 `updated_at`）滿 15 秒可領取，worker 每輪後等 5 秒，因此健康且無積壓時約 15–20 秒出現下次 poll 機會（`backend/src/ticketing/payments/reconciler.py:42–53`、`backend/src/ticketing/worker/main.py:22`、`backend/src/ticketing/worker/main.py:34`）。暫時中斷在依賴恢復後自動處理，無需人工介入，重啟、前輪耗時、provider 延遲、積壓與退款重試均另計，沒有固定完成上限。
+**答：** 程序遭 `kill -9` 後，Paymock 仍有同一交易保存的 capture 與待送回呼，會用同一 event ID 在 24 小時內重送，reconciler 也會查 provider，取消流程發現 capture 時同樣交給 `apply_event`（`paymock/src/paymock/store.py:111–118`、`paymock/src/paymock/store.py:119–129`、`paymock/src/paymock/delivery.py:53–78`、`backend/src/ticketing/payments/reconciler.py:60–71`、`backend/src/ticketing/payments/attempts.py:124–130`、`backend/src/ticketing/payments/reconciler.py:183–186`、`backend/src/ticketing/api/routes/payments.py:149–161`）。Handler 依 callback event ID 與 capture ID 去重，鎖後有效 hold 就售出，否則排入退款（`backend/src/ticketing/payments/callbacks.py:146–174`、`backend/src/ticketing/payments/callbacks.py:192–215`、`backend/src/ticketing/payments/callbacks.py:219–269`）。自 `last_polled_at`（無值時取 `updated_at`）滿 15 秒可領取，worker 每輪後等 5 秒，因此健康且無積壓時約 15–20 秒出現下次 poll 機會（`backend/src/ticketing/payments/reconciler.py:42–53`、`backend/src/ticketing/worker/main.py:22`、`backend/src/ticketing/worker/main.py:34`）。暫時中斷在依賴恢復後自動處理，無需人工介入，重啟、前輪耗時、provider 延遲、積壓與退款重試均另計，沒有固定完成上限。
 
 ### Q2-3 hold 到期看哪個時鐘，測試如何跳過等待？
 
@@ -205,7 +205,7 @@ flowchart TB
 | 座位已變更，relay 或 SSE 尚未通知 | outbox 隨座位提交。relay 每輪後等 50 ms 再處理已提交且未編序的批次，編序與 archive 同一交易。掛在交易中可回滾重做，掛在提交後由 API 直接讀取已編序資料。斷線客戶端 replay 或抓快照。見 `backend/src/ticketing/realtime/outbox.py:20`、`backend/src/ticketing/relay/main.py:10`、`backend/src/ticketing/realtime/relay.py:28`、`backend/src/ticketing/realtime/stream.py:45`。 |
 | payment attempt 已建立，但 provider 尚未收到請求，或已完成 create 但本地尚無結果 | attempt 和 key 先持久化，再以同 attempt ID 呼叫 provider。客戶端可重送，reconciler 也會重做 create 或 poll。attempt 至少間隔 15 秒才重新符合領取條件，reconciler 每輪後等 5 秒。見 `backend/src/ticketing/payments/attempts.py:49–78`、`backend/src/ticketing/payments/attempts.py:156–188`、`backend/src/ticketing/payments/reconciler.py:37–57`、`backend/src/ticketing/worker/main.py:22`。 |
 | 本地已排入退款或取消 intent，或 provider 已成功但本地未確認 | 到期 lease 可重領（30 秒）。退款以原 refund ID 重送，取消以 attempt ID 重送。本地寫入檢查 `lease_owner`。已付款訂單直到退款成功才在同一交易釋位與回補配額。失敗 backoff 上限 300 秒。見 `backend/src/ticketing/payments/reconciler.py:84`、`backend/src/ticketing/payments/reconciler.py:97`、`backend/src/ticketing/payments/reconciler.py:110`、`backend/src/ticketing/payments/reconciler.py:121–130`、`backend/src/ticketing/payments/reconciler.py:183–192`。 |
-| 匯入檔已存但 job 尚未提交，或 worker 在匯入中中斷 | 未被活躍 job 使用的舊檔經 24 小時可清除。已提交的 job 依活動與檔案 digest 去重。30 秒 lease 到期後 worker 以新 fence 領回，第三次 lease 到期仍未完成即終止。每批最多 5,000 列，staging COPY 與 `processed_rows` 同一交易提交。重領後重讀不可變檔案，略過已提交的 parser records 並保留原始行號。已提交的 `total_rows` 及 `file_validated` 檢查點也會保留，可分別略過解析及檔案驗證。finalize 在活動鎖內重驗 fence，將正式座位、outbox 與 job 結果一起提交。進度 SSE 可重讀 DB。見 `backend/src/ticketing/imports/jobs.py:32`、`backend/src/ticketing/imports/runner.py:55–85`、`backend/src/ticketing/imports/runner.py:136–142`、`backend/src/ticketing/imports/runner.py:340–342`、`backend/src/ticketing/imports/runner.py:375–379`、`backend/src/ticketing/imports/runner.py:386–394`、`backend/src/ticketing/imports/runner.py:218–228`、`backend/src/ticketing/imports/runner.py:292–302`、`backend/src/ticketing/imports/runner.py:440–448`、`backend/src/ticketing/api/routes/imports.py:174–182`。 |
+| 匯入檔已存但 job 尚未提交，或 worker 在匯入中中斷 | 未被活躍 job 使用的舊檔經 24 小時可清除。已提交的 job 依活動與檔案 digest 去重。30 秒 lease 到期後 worker 以新 fence 領回，第三次 lease 到期仍未完成即終止。每批最多 5,000 列，staging COPY 與 `processed_rows` 同一交易提交。重領後重讀不可變檔案，略過已提交的 parser records 並保留原始行號。已提交的 `total_rows` 及 `file_validated` 檢查點也會保留，可分別略過解析及檔案驗證。finalize 在活動鎖內重驗 fence，將正式座位、outbox 與 job 結果一起提交。進度 SSE 可重讀 DB。見 `backend/src/ticketing/imports/jobs.py:32`、`backend/src/ticketing/imports/runner.py:55–85`、`backend/src/ticketing/imports/runner.py:136–142`、`backend/src/ticketing/imports/runner.py:340–342`、`backend/src/ticketing/imports/runner.py:375–379`、`backend/src/ticketing/imports/runner.py:386–394`、`backend/src/ticketing/imports/runner.py:397–399`、`backend/src/ticketing/imports/runner.py:218–228`、`backend/src/ticketing/imports/runner.py:292–302`、`backend/src/ticketing/imports/runner.py:440–448`、`backend/src/ticketing/api/routes/imports.py:174–182`。 |
 | session 已撤銷，串流尚未收到通知 | 新請求即時讀 DB。座位串流靠 DB 批次重驗補上 Redis 通知遺失，見 Q5。若登入已提交但 cookie 尚未送達，該 session 仍受 idle／absolute deadline 限制，使用者可再登入。見 `backend/src/ticketing/api/routes/auth.py:215–233`、`backend/src/ticketing/auth/sessions.py:37–47`。 |
 | 日誌或 telemetry 已產生但尚未寫入歷史，或 collector 在提交後、ACK 前終止 | 檔案 checkpoint 隨 DB 寫入提交，Redis 已送達的 interval 可重新領取並去重。API 在 XADD 前終止的記憶體樣本可能永久遺失。告警寫入 DB 後若通知遺失，Admin SSE 下次輪詢仍可看到。見 Q6 及 `backend/src/ticketing/api/routes/monitoring.py:507–528`。 |
 
@@ -281,7 +281,7 @@ flowchart TB
 
 ### Q4-2 客戶端怎麼發現缺段並補回座位狀態？
 
-**答：** 客戶端從快照的 `last_seq` 開始，看到 `delta.from > last_applied + 1` 時判定缺段，以最後成功套用的 seq 作 `Last-Event-ID` 重連（`frontend/src/seat-model.ts:33–38`、`frontend/src/events.ts:267–324`、`frontend/src/api.ts:278`）。伺服器先從 ring 補送，缺段則查 PostgreSQL，最多 5,000 筆、每 process 8 個並行 replay task，補送預算 5 秒（`backend/src/ticketing/realtime/reader.py:28–29`、`backend/src/ticketing/realtime/reader.py:98`、`backend/src/ticketing/realtime/stream.py:45–66`）。缺史或超出預算會收到 `resync`，與 `layout` 一樣觸發重新取快照，必要時帶 `min_layout_ver`（`backend/src/ticketing/realtime/stream.py:160–163`、`frontend/src/events.ts:274–283`、`frontend/src/events.ts:299–303`）。
+**答：** 客戶端從快照的 `last_seq` 開始，看到 `delta.from > last_applied + 1` 時判定缺段，以最後成功套用的 seq 作 `Last-Event-ID` 重連（`frontend/src/seat-model.ts:33–38`、`frontend/src/events.ts:267–324`、`frontend/src/api.ts:278`）。伺服器先從 ring 補送，缺段則查 PostgreSQL，最多 5,000 筆、每 process 8 個並行 replay task，補送預算 5 秒（`backend/src/ticketing/realtime/reader.py:28–29`、`backend/src/ticketing/realtime/reader.py:98`、`backend/src/ticketing/realtime/stream.py:45–66`）。缺史或超出預算時，伺服器會嘗試送出 `resync`。客戶端收到 `resync` 或 `layout` 即重新取快照，必要時帶 `min_layout_ver`（`backend/src/ticketing/realtime/stream.py:160–179`、`frontend/src/events.ts:274–283`、`frontend/src/events.ts:299–303`）。
 
 ### Q4-3 慢連線落後時如何處理，畫面最差有多舊？
 
@@ -323,16 +323,18 @@ flowchart TB
   G{"delta.from 大於 last_applied + 1"}
   Rp["以 Last-Event-ID 重連 · ring 補送 · 缺段查 PostgreSQL"]
   Snap["重新抓快照"]
-  Slow["寫入超過 5 秒 · 送 resync 後關閉"]
+  Slow["寫入超過 5 秒 · 嘗試送 resync 後關閉"]
   W -->|"同一交易 COMMIT"| O
   O --> R
   R -->|"依活動指派連續 seq"| A
   A --> Rd --> Ring --> S --> C
   C --> G
   G -->|"是"| Rp --> S
-  Rp -->|"缺史或超出補送預算"| Snap
+  Rp -->|"缺史或超出補送預算，且收到 resync"| Snap
   S -->|"layout 或 resync"| Snap
-  S -.->|"慢客戶端"| Slow --> Snap
+  S -.->|"寫入逾時"| Slow
+  Slow -->|"收到 resync"| Snap
+  Slow -->|"串流關閉，未收到 resync"| Rp
   Snap --> C
 ```
 
@@ -359,7 +361,7 @@ flowchart TB
 
 ### Q5-1 登出、停用或改角色後，舊憑證何時失效，驗證成本多少？
 
-**答：** 登出先寫 `revoked_at` 再清 cookie，停用或改角色則在更新 user 的同一交易撤銷其 sessions（`backend/src/ticketing/api/routes/auth.py:265–269`、`backend/src/ticketing/api/routes/admin_users.py:221–240`）。每個帶 session cookie 的受保護 HTTP 請求做一次 token hash、pool acquire 和 PostgreSQL session JOIN user 查詢，提交後下次驗證就回 `401`，跨副本的 session cache 不一致時間為 0（無 session cache，`backend/src/ticketing/api/security.py:99–125`、`backend/src/ticketing/auth/sessions.py:37–55`）。隔離量測在同一 DB 連線交替執行各 6,000 次，`authenticate()` p50 **0.891 ms**，`SELECT 1` p50 **0.703 ms**，驗證本身多 **0.188 ms**，pool acquire 等待另計。已通過驗證的敏感寫入在交易內另做 fence，座位 SSE 收到撤銷通知即關閉，通知遺失時健康副本約 1 秒重驗（`backend/src/ticketing/booking/create.py:242–244`、`backend/src/ticketing/auth/sessions.py:111`、`backend/src/ticketing/realtime/revocation.py:21–27`）。
+**答：** 登出先寫 `revoked_at` 再清 cookie，停用或改角色則在更新 user 的同一交易撤銷其 sessions（`backend/src/ticketing/api/routes/auth.py:265–269`、`backend/src/ticketing/api/routes/admin_users.py:221–240`）。每個帶 session cookie 的受保護 HTTP 請求做一次 token hash、pool acquire 和 PostgreSQL session JOIN user 查詢，提交後下次驗證就回 `401`，跨副本的 session cache 不一致時間為 0（無 session cache，`backend/src/ticketing/api/security.py:99–125`、`backend/src/ticketing/auth/sessions.py:37–55`）。隔離量測在同一 DB 連線交替執行各 6,000 次，`authenticate()` p50 **0.891 ms**，`SELECT 1` p50 **0.703 ms**，驗證本身多 **0.188 ms**，pool acquire 等待另計。已通過驗證的敏感寫入在交易內另做 fence，座位 SSE 收到撤銷通知即關閉，通知遺失時健康副本約 1 秒重驗（`backend/src/ticketing/booking/create.py:242–244`、`backend/src/ticketing/auth/sessions.py:111`、`backend/src/ticketing/realtime/revocation.py:93–125`）。
 
 | 同連線呼叫（各 6,000 次） | p50 | p95 | p99 | 平均 |
 |---|---:|---:|---:|---:|
@@ -424,13 +426,13 @@ flowchart TB
 
 ### Q6-2 圖表都正常但使用者受害的情境？能否偵測？
 
-**答：** **能偵測符合告警規則的情境，靠的是業務指標，而不是 HTTP 狀態碼。** 例如金流 confirm 與訂單輪詢都回 `200`，畫面卻持續待付款。Capture 經回呼或 poll 入庫後，`PAYMENT_CALLBACK_LAG` 會檢查最近 60 秒入庫的紀錄，落差超過 30 秒即觸發（`backend/src/ticketing/telemetry/alerts.py:43–50`、`backend/src/ticketing/telemetry/alerts.py:184–197`）。若 capture 始終未入庫，需對照金流、訂單或 `HOLD_EXPIRY_BACKLOG`，該筆不會觸發回呼延遲告警。另一種情境是有空位卻大量遇到 `hold_soldout`，可由依活動聚合的 `PURCHASE_FUNNEL_COLLAPSE` 偵測（`backend/src/ticketing/telemetry/alerts.py:58–69`、`backend/src/ticketing/telemetry/alerts.py:205–206`、`backend/src/ticketing/booking/create.py:251–262`）。
+**答：** **能偵測符合告警規則的情境，靠的是業務指標，而不是 HTTP 狀態碼。** 例如金流 confirm 與訂單輪詢都回 `200`，畫面卻持續待付款。Capture 經回呼或 poll 入庫並提交後，`PAYMENT_CALLBACK_LAG` 會檢查最近 60 秒入庫的紀錄。若 `recorded_at - captured_at` 超過 30 秒，且目前無同規則、同 scope 的活躍告警，也未處於 5 分鐘冷卻期，就建立 `pending` 告警。此規則的 `wait_s` 為 0，可在同一輪評估轉為 `firing`（`backend/src/ticketing/telemetry/alerts.py:43–50`、`backend/src/ticketing/telemetry/alerts.py:74–78`、`backend/src/ticketing/telemetry/alerts.py:113–165`、`backend/src/ticketing/telemetry/alerts.py:184–197`）。若 capture 始終未入庫，需對照金流、訂單或 `HOLD_EXPIRY_BACKLOG`，該筆不會觸發回呼延遲告警。另一種情境是有空位卻大量遇到 `hold_soldout`，可由依活動聚合的 `PURCHASE_FUNNEL_COLLAPSE` 偵測（`backend/src/ticketing/telemetry/alerts.py:58–69`、`backend/src/ticketing/telemetry/alerts.py:205–206`、`backend/src/ticketing/booking/create.py:251–262`）。
 
 ### Q6-3 多副本如何去重與補收，牆鐘慢 20 秒會怎樣？
 
 **答：** **去重與遺失**　Collector 在同一個 PostgreSQL 交易以 `(boot_uuid, interval_no)` 寫 `telemetry_ingest`，只加總新 interval，提交後才 `XACK`，重啟靠 `XAUTOCLAIM` 補收 pending（`backend/src/ticketing/telemetry/app_metrics.py:194–205`、`backend/src/ticketing/telemetry/app_metrics.py:241–264`、`backend/src/ticketing/telemetry/app_metrics.py:284`、`backend/src/ticketing/telemetry/collector.py:153–162`）。API flush 前終止、XADD 失敗或 stream 被修剪仍可遺失資料，`completeness` 和 `late_or_missing` 揭露回報缺口（`backend/src/ticketing/telemetry/api_setup.py:57`、`backend/src/ticketing/telemetry/api_setup.py:76`、`backend/src/ticketing/telemetry/app_metrics.py:109`）。
 
-**牆鐘慢 20 秒**　App 以 Redis Stream ID 接收時間減 producer 單調時鐘，用近 60 秒的最小偏移校正分桶，流量不會平移 20 秒，精度仍受樣本到達時間影響。該副本近期有回報時，`clock_skew_ms` 會納入約 20,000 ms 的絕對偏差並取各副本最大值。Edge 照 nginx 自己的日誌時間分桶（`backend/src/ticketing/telemetry/app_metrics.py:163–178`、`backend/src/ticketing/telemetry/app_metrics.py:228–238`、`backend/src/ticketing/telemetry/collector.py:61–73`、`backend/tests/telemetry/test_app_metrics.py:39`）。
+**牆鐘慢 20 秒**　App 以 Redis Stream ID 接收時間減 producer 單調時鐘，用近 60 秒的最小偏移校正分桶。App 流量仍顯示在校正後的圖表時間桶，精度受樣本到達時間影響。該副本近期有回報時，監控 API 的 `clock_skew_ms` 會納入約 20,000 ms 的絕對偏差並取各副本最大值。Admin 圖表未繪製此欄位。Edge 照 nginx 自己的日誌時間分桶（`backend/src/ticketing/telemetry/app_metrics.py:163–178`、`backend/src/ticketing/telemetry/app_metrics.py:228–238`、`backend/src/ticketing/telemetry/collector.py:61–73`、`backend/tests/telemetry/test_app_metrics.py:39`）。見 [監控 API 欄位](backend/src/ticketing/api/routes/monitoring.py#L264-L271) · [Admin 圖表](frontend/src/admin.ts#L121-L129)。
 
 ### Q6-4 Edge 與 App 結果不一致時，信哪個來源？
 

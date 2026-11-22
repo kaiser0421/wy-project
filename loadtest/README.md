@@ -15,6 +15,15 @@ loadtest/run.sh all
 
 `smoke` 預設跑 A（50 VUs／15 秒／1,000 席）與 B（50 條 SSE／30 秒／20 changes/s）。`all` 依序跑 A 與 B 的正式規模，也可用 `loadtest/run.sh a` 或 `loadtest/run.sh b` 單獨執行。腳本沿用通過 host health probe 的堆疊，否則執行 `docker compose up -d --build`。見 `loadtest/run.sh`。
 
+可延長 A 的 k6 產壓時間或 B 的量測時間，例如：
+
+```bash
+DURATION=10m loadtest/run.sh a
+B_DURATION=600 loadtest/run.sh b
+```
+
+`with_deadline` 只套用在 nginx access log 擷取（300 秒）與各服務的 log 蒐集（每個服務 60 秒）。GNU `timeout` 到期時會對本機程序群組送出 TERM，10 秒後若仍在執行則送出 KILL。Perl fallback 以 `SIGALRM` 中止本機命令。兩種做法都以 `/dev/null` 作為 stdin，限制的是 runner 等待本機日誌命令的時間。情境執行時間不受這兩個期限限制，容器內的命令也可能繼續執行。[nginx 擷取](run.sh#L143-L144) · [期限與服務日誌](run.sh#L170-L195)
+
 | Shell 變數 | 正式預設值 | 說明 |
 |---|---|---|
 | `API_REPLICAS` | Compose 預設為 `3` | Shell 設為正整數時，runner 會在情境開始前依實際運行數調整 API 副本，並等待 API 就緒。未設定時沿用既有堆疊的副本數。 |

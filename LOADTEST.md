@@ -23,7 +23,7 @@
 | 工具 | k6（`loadtest/scenario_a.js`） | 自寫的 Python SSE 客戶端（`loadtest/sse_client.py`，分 8 個程序）＋寫入程式（`loadtest/scenario_b_writer.py`） |
 | 每個使用者做什麼 | 每個虛擬使用者是一個已登入的不同買家，重複：①下單 1–4 張（70% 指定座位、30% 只指定區域由系統配位）→ ②成功的話 80% 去付款（建立付款 → 模擬金流確認 → 最多輪詢 12 次直到訂單變「已付款」）、10% 取消、10% 放著不付 → ③收到限購回應且確認已持有 4 張後，改成只瀏覽訂單。2% 的成功訂單會用同一個 Idempotency-Key 再送一次，檢查不會重複下單 | 8 個客戶端程序各自先抓一次完整座位快照，再把 2,000 條 SSE 連線在 10 秒內逐步建立（每條連線從該快照開始），之後接收增量更新。斷線、序號缺口或進度停滯時，先從最後套用的事件編號（Last-Event-ID）重連。收到 resync、需要更新版面（layout）或資料解析失敗時，重新抓快照。寫入程式以每秒 100 次的速度改變座位狀態，持續約 55 秒。[復原邏輯](loadtest/sse_client.py#L216-L276) |
 | 時間 | 60 秒（k6 再給最多 90 秒讓進行中的迭代收尾） | 80 秒，之後最多再等 20 秒排空 |
-| 結束後檢查 | 等 90 秒讓付款與推送處理完，再跑一致性 SQL（`loadtest/consistency.sql`） | 比對每個客戶端最後看到的座位狀態與資料庫是否完全相同 |
+| 結束後檢查 | 固定等 90 秒後執行一致性 SQL（`loadtest/consistency.sql`） | 比對每個客戶端最後看到的座位狀態與資料庫是否完全相同 |
 | 一鍵執行 | `API_REPLICAS=6 loadtest/run.sh all`：先跑完 A（含排空與一致性檢查），再接著跑 B，兩者依序執行、不會同時壓 | 同左；只跑 B 用 `loadtest/run.sh b` |
 
 ## 三、怎麼判斷成功或失敗（k6 的 FAILED 是什麼意思）
@@ -38,7 +38,7 @@
 
 ### k6 的兩個門檻
 
-k6 在壓測結束時檢查 `scenario_a.js` 設定的 4 個門檻（`unexpected_errors`、`replay_unverified`、`checks`、`replay_progress`），任何一個沒過就以非 0 結束，壓測腳本印出 `FAILED`。6 副本僅 `unexpected_errors` 未達門檻，3 副本另有 `replay_unverified` 未達門檻。兩輪都通過 `checks`（進入驗證的重送須回 HTTP 201、帶重送標頭且訂單編號與原訂單相同）及 `replay_progress`（有抽樣時至少驗證一筆）。6 副本有 98 筆、3 副本有 46 筆通過重送驗證。[6 副本執行紀錄][run6] · [3 副本執行紀錄][run3]
+k6 在壓測結束時檢查 `scenario_a.js` 設定的 4 個門檻（`unexpected_errors`、`replay_unverified`、`checks`、`replay_progress`），任何一個沒過就以非 0 結束。下表列出本次未達標的兩項 k6 門檻。兩輪 runner 都回報整體結果 `FAILED`，3 副本還未通過 runner 的 `replay_started == replay_verified` 檢查（74 筆發起、46 筆驗證）。6 副本僅 `unexpected_errors` 未達門檻，3 副本另有 `replay_unverified` 未達門檻。兩輪都通過 `checks`（進入驗證的重送須回 HTTP 201、帶重送標頭且訂單編號與原訂單相同）及 `replay_progress`（有抽樣時至少驗證一筆）。6 副本有 98 筆、3 副本有 46 筆通過重送驗證。[6 副本執行紀錄][run6] · [3 副本執行紀錄][run3]
 
 | 門檻 | 條件 | 這次為什麼沒過 |
 | --- | --- | --- |
@@ -67,7 +67,7 @@ k6 在壓測結束時檢查 `scenario_a.js` 設定的 4 個門檻（`unexpected_
 | **SSE** | Server-Sent Events，伺服器持續把座位變化推給瀏覽器的長連線 |
 | **快照／delta** | 完整座位圖（快照）與之後的變化部分（delta）。瀏覽器打開座位頁時先抓快照，壓測客戶端則由同一程序內的連線共用一份初始快照 |
 | **resync／進度停滯** | 壓測客戶端收到 resync、需要更新版面或資料解析失敗時重抓快照。遇到序號缺口或進度停滯時，先從最後套用的事件編號重連 |
-| **排空（drain）** | 流量停止後等 90 秒，讓付款回呼、逾時處理與推送全部做完，再做一致性檢查 |
+| **排空（drain）** | Scenario A 流量停止後固定等 90 秒再做一致性檢查。屆時仍可能有有效鎖位與待處理的付款回呼、逾時工作或 outbox 事件 |
 
 ## 四、結果總表
 
@@ -90,6 +90,7 @@ k6 在壓測結束時檢查 `scenario_a.js` 設定的 4 個門檻（`unexpected_
 | A HTTP p50／p95／p99 | 1.06／2.03／4.05 s [k6][a-k66] | 1.05／2.02／2.64 s [k6][a-k63] |
 | A 錯誤率 · 伺服器錯誤（nginx 502／500） | 0%／0% [nginx][a-nginx6] | 0%／0% [nginx][a-nginx3] |
 | A 錯誤率 · 過載回應（nginx 503） | 35.4%（40,853 筆）[nginx][a-nginx6] | 88.1%（118,817 筆）[nginx][a-nginx3] |
+| A 錯誤率 · 客戶端斷線（nginx 499／nginx 請求總數） | 598/115,485 (0.52%) [nginx][a-nginx6] | 63/134,834 (0.05%) [nginx][a-nginx3] |
 | A 錯誤率 · 逾時等未歸入預定結果的請求（k6 `unexpected_errors`） | 0.53%（620 筆）[k6][a-k66] | 0.04%（63 筆）[k6][a-k63] |
 | A 錯誤率 · 預期狀態（200／201／409）以外的回應及逾時等請求失敗（k6 `http_req_failed`） | 35.90% [執行紀錄](docs/evidence/loadtest-final-6replicas-20261122/run-log.txt#L518) | 88.16% [執行紀錄](docs/evidence/loadtest-final-20261122/run-log.txt#L500) |
 | A nginx 建單 409 | 29,205 [nginx][a-nginx6] | 9,010 [nginx][a-nginx3] |

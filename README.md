@@ -137,7 +137,7 @@ uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.json --zone A
 | 瀏覽器測試 | Playwright（Chromium） | `frontend/tests/e2e/` | 介面流程；另有經 nginx 的整合版本 |
 | 端到端流程 | Python 腳本 | `scripts/e2e_flow.py` | 經 nginx 跑完建活動、匯入、發布、鎖位、付款回呼、報表、日誌追查（CI 也會執行） |
 
-`make test` 一行指令在 Docker 內執行單元、整合、併發、前端單元與預設的瀏覽器測試。整合驗證紀錄為後端 pytest 242 項（含單元、PostgreSQL／Redis 整合及併發測試）與前端 Vitest 58 項通過。經 nginx 的端到端流程與 nginx 版 Playwright 需先啟動整套服務，另行執行（CI 會在 smoke 後執行端到端流程）。逐條驗收條件與對應測試見 [驗收條件](docs/ACCEPTANCE.md)。
+`make test` 一行指令在 Docker 內執行單元、整合、併發、前端單元與預設的瀏覽器測試。2026-11-22 的 `make test` 紀錄為後端 pytest 244 項通過、1 項略過，前端 Vitest 58 項通過，預設 Playwright 9 項通過。經 nginx 的端到端流程與 nginx 版 Playwright 需先啟動整套服務，另行執行（CI 會在 smoke 後執行端到端流程）。逐條驗收條件與對應測試見 [驗收條件](docs/ACCEPTANCE.md)。
 
 
 正確性標準、最終 run 結果與擴充紀錄見 [壓測結論與結果總表](LOADTEST.md#一結論先看這裡)。
@@ -212,14 +212,14 @@ TICKETING_SMOKE_ORIGIN=http://localhost:8080 TICKETING_SMOKE_EVENT_ID=123 \
 
 ## 已知問題與未完成項目
 
-- **壓測資料留在資料庫**。`loadtest/run.sh` 在同一個資料庫建立壓測活動與 session；情境 B 的寫入程式直接切換座位狀態以模擬變化，會留下沒有訂單的「held」座位。請在可拋棄的 Compose 堆疊執行壓測。只可對該可拋棄專案執行 `docker compose down -v`，此指令會刪除該專案的所有資料 volumes，包含 PostgreSQL、Redis、金流與共用檔案。
+- **壓測資料留在資料庫**。`loadtest/run.sh` 在同一個資料庫建立壓測活動與 session；情境 B 的寫入程式直接切換座位狀態以模擬變化，可能留下連到合成 fixture 訂單、但缺少對應 `order_items` 的 `held` 座位。請在可拋棄的 Compose 堆疊執行壓測。只可對該可拋棄專案執行 `docker compose down -v`，此指令會刪除該專案的所有資料 volumes，包含 PostgreSQL、Redis、金流與共用檔案。
 - **`/healthz/ready` 失敗回應**。就緒探針回 503 時附帶診斷用的 JSON（各相依元件狀態），不是 problem+json，供容器健康檢查與維運判讀。
 - **服務日誌檔的保留**。各服務寫入共用目錄的 JSON 日誌檔由 collector 讀取入庫，容器 stdout 有輪替，但這些檔案本身不會自動輪替刪除；長時間或大量壓測後需手動清理（資料庫中的日誌依分區保留）。
 - **Admin 全站訂單翻頁**。以訂單建立時間與 ID 作 keyset 分頁；翻頁期間若有較早取得 ID、較晚才提交的訂單，可能落在已翻過的範圍而未顯示，或出現在後面的頁次；重新從第一頁查詢即可看到正確結果。
 - **背景服務日誌**。worker、relay、collector 的日誌仍在事件迴圈中同步寫檔；磁碟異常緩慢時可能延遲這些服務（API 已改為背景寫入、佇列滿時丟棄並計數）。
 
 - **水平擴充**。正式配置的過載拒絕、庫存與付款完成量見 [結果總表](LOADTEST.md#四結果總表)，早期擴充見 [改進歷程](LOADTEST.md#附錄改進歷程)。
-- **正式 Scenario A 過載**。6 副本的 nginx 503 占 35.4%，3 副本基準為 88.1%。6 副本的 598 筆 nginx 499 都在付款路徑，抽樣重放 98 筆全數驗證。基準有 63 筆 nginx 499，74 筆重放中有 46 筆驗證成功。兩輪 k6 判定 **FAILED**，6 副本僅 `unexpected_errors` 未達門檻，基準另有重放未驗證。[6 副本 nginx](docs/evidence/loadtest-final-6replicas-20261122/a/nginx-summary.txt#L1-L20) · [3 副本 nginx](docs/evidence/loadtest-final-20261122/a/nginx-summary.txt#L1-L20) · [6 副本 k6](docs/evidence/loadtest-final-6replicas-20261122/run-log.txt#L526-L541) · [3 副本 k6](docs/evidence/loadtest-final-20261122/run-log.txt#L508-L523)
+- **正式 Scenario A 過載**。6 副本的 nginx 503 占 35.4%，3 副本基準為 88.1%。6 副本的 598 筆 nginx 499 都在付款路徑，抽樣重放 98 筆全數驗證。基準有 63 筆 nginx 499，74 筆重放中有 46 筆驗證成功。兩輪 runner 的整體結果皆為 **FAILED**。k6 的 `unexpected_errors` 兩輪均未達門檻，3 副本基準另有 `replay_unverified` 未達門檻，並未通過 runner 的重放筆數比對。[6 副本 nginx](docs/evidence/loadtest-final-6replicas-20261122/a/nginx-summary.txt#L1-L20) · [3 副本 nginx](docs/evidence/loadtest-final-20261122/a/nginx-summary.txt#L1-L20) · [6 副本執行紀錄](docs/evidence/loadtest-final-6replicas-20261122/run-log.txt#L526-L570) · [3 副本執行紀錄](docs/evidence/loadtest-final-20261122/run-log.txt#L508-L554)
 - **正式 Scenario B 重連與尾端延遲**。兩輪 client 仍頻繁因進度停滯而重連，6／3 副本的 delta 套用 p99 分別為 9,450／7,750 ms。[6 副本 SSE](docs/evidence/loadtest-final-6replicas-20261122/b/sse-client.txt#L3) · [3 副本 SSE](docs/evidence/loadtest-final-20261122/b/sse-client.txt#L3)
 - **歷史 MacBook 試跑（僅留摘要）**。當時在 2 核心／4 執行緒的 MacBook 上以 3,000 VUs 與服務同機執行，摘要記錄 CPU 飽和、多數請求收到快速的 `503 server-busy` 或 client timeout，吞吐約 86–95 req/s，SQL 平均耗時約 35–170 ms，一致性檢查未發現超賣。
 - **大型 Excel 匯出耗時**。兩次下載約 217–237 秒，nginx 報表路徑的讀取逾時為 300 秒。見 `infra/nginx/nginx.conf:151`、[Excel 匯出實測紀錄](docs/evidence/cp4-excel-500k.md)。
