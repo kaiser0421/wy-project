@@ -112,7 +112,7 @@
 |---|---|---|---|
 | 5.5.1 | 可下載活動銷售 Excel，含摘要、區域彙總、訂單明細三部分 | 活動頁 Download sales report；`test_excel_reconciles_and_respects_dst` | ✅ |
 | 5.5.2 | 時間以指定時區顯示並在表頭註明；金額為數值儲存格 | 同上 | ✅ |
-| 5.5.3 | 50 萬筆訂單可在 512 MB 記憶體上限的 API 實例完成匯出 | [Excel 匯出實測](evidence/cp4-excel-500k.md)：217 秒、程式記憶體峰值約 108 MiB、無 OOM；`test_export_500k_within_container_budget`（選擇性執行） | ✅ |
+| 5.5.3 | 50 萬筆訂單可在 512 MiB（536,870,912 bytes）記憶體上限的 API 實例完成匯出 | [Excel 匯出實測](evidence/cp4-excel-500k.md)：217 秒、程式記憶體峰值約 108 MiB、無 OOM；`test_export_500k_within_container_budget`（選擇性執行） | ✅ |
 
 ### 5.6 系統管理（Admin）
 

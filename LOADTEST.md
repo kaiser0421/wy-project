@@ -2,7 +2,7 @@
 
 ## 一、結論
 
-- **建議配置為 6 個 API 副本。** 兩次最終 run 都在同一台桌機、同一 commit `346fe0f`，沿用題目指定的情境與規模。以 3 副本為基準，nginx 503 由 88.1% 降至 35.4%，排空後占席由 8,078 增至 10,000，已付款訂單由 237 增至 1,082 筆。[6 副本環境][env6] · [3 副本環境][env3] · [6 副本 nginx][a-nginx6] · [3 副本 nginx][a-nginx3] · [6 副本庫存][a-state6] · [3 副本庫存][a-state3]
+- **建議配置為 6 個 API 副本。** 兩次最終 run 都在同一台桌機、同一 commit `346fe0f`，沿用題目指定的情境與規模；兩次都由 runner 以 `docker compose up -d --build` 重新建置並啟動，映像 digest 不同但原始碼相同，差異主要來自副本數，仍可能含建置與機器狀態的變動。以 3 副本為基準，nginx 503 由 88.1% 降至 35.4%，排空後占席由 8,078 增至 10,000，已付款訂單由 237 增至 1,082 筆。[6 副本環境][env6] · [3 副本環境][env3] · [6 副本 nginx][a-nginx6] · [3 副本 nginx][a-nginx3] · [6 副本庫存][a-state6] · [3 副本庫存][a-state3]
 - **正確性通過。** 兩輪 A 均無超賣，一致性 SQL 回傳 0 列，HTTP 502／500 各 0。兩輪 B 寫入期間同時在線達 2,000，最終 2,000／2,000 個 client 與 PostgreSQL 一致。[6 副本 SQL][a-sql6] · [3 副本 SQL][a-sql3] · [6 副本 nginx][a-nginx6] · [3 副本 nginx][a-nginx3] · [6 副本 SSE][b-sse6] · [3 副本 SSE][b-sse3]
 - **k6 自我檢查。** 6 副本驗證全部 98 筆抽樣重放，k6 因 `unexpected_errors` 判定 **FAILED**。3 副本另有重放未驗證。[6 副本執行紀錄][run6] · [3 副本執行紀錄][run3]
 - **瓶頸。** 6 副本下，nginx 記錄的 598 筆 499 全在付款路徑。付款模擬器與 PostgreSQL 是後續量測重點，見 [瓶頸分析](#7-瓶頸分析)。[6 副本 nginx][a-nginx6]
@@ -92,7 +92,7 @@
 | 502／500 | 0／0 [nginx][a-nginx6] | 0／0 [nginx][a-nginx3] |
 | k6 成功鎖位 | 5,293 [k6][a-k66] | 3,940 [k6][a-k63] |
 
-6 副本的 k6 共記錄 620 筆 `unexpected_errors`，對照 nginx 有 598 筆付款路徑 client timeout（499）。3 副本的 `unexpected_errors` 和 nginx 499 同為 63 筆。k6 與 nginx 各自計數，付款摘要含模擬器路徑。[6 副本 k6][a-k66] · [6 副本 nginx][a-nginx6] · [3 副本 k6][a-k63] · [3 副本 nginx][a-nginx3] · [請求 timeout](loadtest/scenario_a.js#L77-L98)
+6 副本的 k6 共記錄 620 筆 `unexpected_errors`，對照 nginx 有 598 筆付款路徑的 499（client 在收到回應前斷線；k6 的請求逾時為 5 秒，最可能是逾時，但狀態碼本身無法逐筆證明）。3 副本的 `unexpected_errors` 和 nginx 499 同為 63 筆。k6 與 nginx 各自計數，付款摘要含模擬器路徑。[6 副本 k6][a-k66] · [6 副本 nginx][a-nginx6] · [3 副本 k6][a-k63] · [3 副本 nginx][a-nginx3] · [請求 timeout](loadtest/scenario_a.js#L77-L98)
 
 每秒請求、錯誤與延遲可跟鎖位、付款、取消等業務指標對照。[6 副本秒級 HTTP][a-metrics6] · [6 副本秒級業務][a-business6] · [3 副本秒級 HTTP][a-metrics3] · [3 副本秒級業務][a-business3]
 
