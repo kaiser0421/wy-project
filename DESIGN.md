@@ -390,7 +390,7 @@ API 呼叫 paymock 時透過 `X-Request-ID` 傳遞識別碼，paymock 以路由�
   - **量測範圍**：nginx 的耗時（`$request_time`）包含在 nginx 排隊與 proxy 的時間，比 App 更接近使用者等待的時間；App 只從請求進入 middleware 才開始計時。網路傳輸時間兩者都量不到，要看客戶端量測。
   - **遺失風險**：Edge 來自 nginx 寫到磁碟的存取日誌，collector 重啟後會從已提交的檔案游標續讀仍保留的日誌（若未讀的日誌已被輪替刪除則無法補回；落後 watermark 超過 2 秒的舊 bucket 只寫入 `access_logs`）。App 樣本先存在各副本記憶體，再經 Redis Stream 傳送，副本在送出前終止時那幾秒會遺失。每秒 App 資料附 `completeness`：該秒有回報的副本數除以預期副本數（上限 100%），低於 100% 代表有副本沒回報；即使顯示 100%，個別樣本仍可能遺失。
 - **不一致本身就是排查線索**：兩邊都保存並比對，而不是丟掉其中一個。先對齊時間窗與流量範圍，再用 `request_id` 對照 nginx 存取日誌的狀態碼、上游位址與耗時，以及 API 的請求紀錄。Edge 的 5xx 多於 App 時，檢查 nginx 自己產生的錯誤（上游不可用、逾時）與 App 樣本缺口；Edge 的 499 增加代表更多客戶端在請求完成前斷線，可比對 Edge 與上游耗時，再用客戶端樣本確認是否和等待過久有關。
-- **體感與畫面**：客戶端連線是否順暢、畫面多久更新，以 k6 與 SSE 探測客戶端的樣本為準，口徑見 [LOADTEST.md](LOADTEST.md)。
+- **客戶端端的量測**：客戶端實際收到的回應與等待時間看 k6；座位變化多久套用到客戶端狀態，看 SSE 探測客戶端的 delta 套用延遲（量到探測程式套用更新為止，不含瀏覽器繪製），口徑見 [LOADTEST.md](LOADTEST.md)。
 
 **驗證**　`test_edge_event_time_grace_sse_exclusion_and_connection_sample`、`test_minimum_delay_dedupe_wall_skew_completeness_and_gauge`、`test_rule_fires_and_resolves`、`test_admin_metric_history_streams_and_openapi`。見 `backend/tests/telemetry/test_logs.py:104`、`backend/tests/telemetry/test_app_metrics.py:39`、`backend/tests/telemetry/test_alerts.py:30`、`backend/tests/telemetry/test_admin.py:479`。
 
