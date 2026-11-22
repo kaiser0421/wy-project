@@ -338,6 +338,8 @@ flowchart LR
 
 **機制與流程**
 
+**第 1 題：RPS、錯誤率、p50/p95/p99、即時連線數的來源、時間窗口與儲存**
+
 | 指標 | 來源與時間窗口 | 儲存 |
 |---|---|---|
 | RPS | Edge 用 nginx 請求完成時的 `$msec` 分 UTC 秒，距 watermark 超過 2 秒的舊 bucket 只存 log。App 在 ASGI 完成時計入 route template，以 process 單調時鐘約每秒 flush。兩個 HTTP 聚合都排除 SSE。見 `infra/nginx/nginx.conf:39`、`backend/src/ticketing/telemetry/logs.py:242`、`backend/src/ticketing/telemetry/api_setup.py:35`、`backend/src/ticketing/telemetry/api_setup.py:76`。 | `metrics_1s.req_total`，key 為 `(source, scope, ts)`。 |
@@ -369,10 +371,26 @@ API 為每個完成的 HTTP 請求記錄一行 INFO JSON `request.completed`，�
 API 呼叫 paymock 時透過 `X-Request-ID` 傳遞識別碼，paymock 以路由樣板記錄處理結果，並沿用付款操作的識別碼傳送回呼。回呼日誌連回建立付款的請求，Worker 處理付款重試、取消、退款與座位匯入時沿用工作所保存的來源識別碼。Trace 可依識別碼串接 nginx、API、paymock 和 Worker 紀錄。
 
 - **告警演練**　停掉 relay 後，`SERVICE_DOWN`（relay）與 outbox 編序延遲告警依規則進入 pending、轉為 firing 並出現在 Admin 監控頁，重新啟動後轉為 resolved。見 [告警演練紀錄](docs/evidence/alert-drill-20261121/README.md)。
-- **HTTP 全 200 仍受害**　例如模擬金流 confirm 回 200，買家輪詢訂單也一直回 200，但畫面長時間停在待付款。當 capture 經回呼或 poll 寫入，`PAYMENT_CALLBACK_LAG` 可在最近 60 秒記錄中指出超過 30 秒的落差。完全沒有觀測到 capture 時，這條規則沒有資料，需查看金流與訂單、`HOLD_EXPIRY_BACKLOG` 等旁證。另一種情境是瀏覽與監控正常，大量買家在有空位的活動反覆遇到 `hold_soldout`。 `PURCHASE_FUNNEL_COLLAPSE` 依活動看過去 30 秒，成功率低於 20%、conflict 與 limit 合計少於失敗的一半且仍有可用席，條件持續 30 秒才發出告警。單一小區的問題可能被同活動其他區的流量掩蓋。見 `backend/src/ticketing/telemetry/alerts.py:32`、`backend/src/ticketing/telemetry/alerts.py:45`、`backend/src/ticketing/telemetry/alerts.py:58`、`backend/src/ticketing/telemetry/alerts.py:205`、`backend/src/ticketing/booking/create.py:262`。
-- **副本去重與遺失**　API 附上 boot UUID 與 interval number，經 Redis Stream 送監控樣本。Collector 在 PG 同一交易插入 `telemetry_ingest`，只對新 `(boot_uuid, interval_no)` 累加 histogram 和業務計數，提交後 `XACK`。重啟以 `XAUTOCLAIM` 領回 pending。API flush 前 crash、XADD 失敗或 stream 修剪仍可丟資料，`completeness` 和 `late_or_missing` 依 producer heartbeat 和回報數揭露缺口。Edge 以 device/inode 的 checkpoint 與日誌同交易提交。見 `backend/src/ticketing/telemetry/api_setup.py:57`、`backend/src/ticketing/telemetry/api_setup.py:76`、`backend/src/ticketing/telemetry/app_metrics.py:109`、`backend/src/ticketing/telemetry/app_metrics.py:194`、`backend/src/ticketing/telemetry/app_metrics.py:241`、`backend/src/ticketing/telemetry/app_metrics.py:284`、`backend/src/ticketing/telemetry/collector.py:153`、`backend/src/ticketing/telemetry/logs.py:266`。
-- **一個副本牆鐘慢 20 秒**　以 Redis Stream ID 的接收時間減 producer 單調時鐘，取 60 秒樣本的最小偏移來分桶。只慢 API 的 wall clock 時，該副本的量仍落在校正後的秒，圖表的 `clock_skew_ms` 約為 20,000，nginx 的秒不受它影響。網路抖動、首次校正資料不足和秒邊界仍可能使樣本落到相鄰桶。見 `backend/src/ticketing/telemetry/app_metrics.py:163–178`、`backend/src/ticketing/telemetry/app_metrics.py:165–173`、`backend/src/ticketing/telemetry/app_metrics.py:190`、`backend/src/ticketing/telemetry/app_metrics.py:235`、`backend/src/ticketing/telemetry/app_metrics.py:228–238`。
-- **來源衝突**　入口 HTTP 結果與耗時以 nginx 存取日誌為準。該日誌可觀察 proxy 逾時及排隊影響，並以 Edge log status 499 記錄 client disconnect。查特定 API handler 或 hold 結果使用 App 路由與業務資料，先看 completeness。訂單成交與座位歸屬以 PostgreSQL 交易為準。對客戶端連線或畫面體感用 k6／SSE probe 的樣本，口徑見 [LOADTEST.md](LOADTEST.md)。
+**第 2 題：「圖表都正常，但使用者正在受害」**
+
+- **結論：能偵測，靠的是業務指標告警，而不是 HTTP 指標。** HTTP 狀態碼只說明「伺服器有回應」，不說明「使用者有沒有買到票」，所以另外每秒記錄購票漏斗（嘗試、成功、各種失敗原因）與付款回呼延遲，並以告警規則監看。
+- **情境與偵測**　例如模擬金流 confirm 回 200，買家輪詢訂單也一直回 200，但畫面長時間停在待付款。當 capture 經回呼或 poll 寫入，`PAYMENT_CALLBACK_LAG` 可在最近 60 秒記錄中指出超過 30 秒的落差。完全沒有觀測到 capture 時，這條規則沒有資料，需查看金流與訂單、`HOLD_EXPIRY_BACKLOG` 等旁證。另一種情境是瀏覽與監控正常，大量買家在有空位的活動反覆遇到 `hold_soldout`。 `PURCHASE_FUNNEL_COLLAPSE` 依活動看過去 30 秒，成功率低於 20%、conflict 與 limit 合計少於失敗的一半且仍有可用席，條件持續 30 秒才發出告警。單一小區的問題可能被同活動其他區的流量掩蓋。見 `backend/src/ticketing/telemetry/alerts.py:32`、`backend/src/ticketing/telemetry/alerts.py:45`、`backend/src/ticketing/telemetry/alerts.py:58`、`backend/src/ticketing/telemetry/alerts.py:205`、`backend/src/ticketing/booking/create.py:262`。
+**第 3 題：多個副本同時寫入每秒指標，以及一個副本時鐘慢 20 秒**
+
+- **避免重複計算與遺失**　API 附上 boot UUID 與 interval number，經 Redis Stream 送監控樣本。Collector 在 PG 同一交易插入 `telemetry_ingest`，只對新 `(boot_uuid, interval_no)` 累加 histogram 和業務計數，提交後 `XACK`。重啟以 `XAUTOCLAIM` 領回 pending。API flush 前 crash、XADD 失敗或 stream 修剪仍可丟資料，`completeness` 和 `late_or_missing` 依 producer heartbeat 和回報數揭露缺口。Edge 以 device/inode 的 checkpoint 與日誌同交易提交。見 `backend/src/ticketing/telemetry/api_setup.py:57`、`backend/src/ticketing/telemetry/api_setup.py:76`、`backend/src/ticketing/telemetry/app_metrics.py:109`、`backend/src/ticketing/telemetry/app_metrics.py:194`、`backend/src/ticketing/telemetry/app_metrics.py:241`、`backend/src/ticketing/telemetry/app_metrics.py:284`、`backend/src/ticketing/telemetry/collector.py:153`、`backend/src/ticketing/telemetry/logs.py:266`。
+- **一個副本時鐘慢 20 秒時的圖表現象**　以 Redis Stream ID 的接收時間減 producer 單調時鐘，取 60 秒樣本的最小偏移來分桶。只慢 API 的 wall clock 時，該副本的量仍落在校正後的秒，圖表的 `clock_skew_ms` 約為 20,000，nginx 的秒不受它影響。網路抖動、首次校正資料不足和秒邊界仍可能使樣本落到相鄰桶。見 `backend/src/ticketing/telemetry/app_metrics.py:163–178`、`backend/src/ticketing/telemetry/app_metrics.py:165–173`、`backend/src/ticketing/telemetry/app_metrics.py:190`、`backend/src/ticketing/telemetry/app_metrics.py:235`、`backend/src/ticketing/telemetry/app_metrics.py:228–238`。
+**第 4 題：兩個來源的數字不一致時，相信哪一個？為什麼？**
+
+- **結論：依「要回答的問題」決定，有固定的優先順序。**
+  1. **「有沒有賣出、賣給誰」→ 相信 PostgreSQL。** 訂單與座位歸屬在同一個交易寫入，是唯一真實來源；監控數字只是它的統計。
+  2. **「使用者實際收到什麼回應、等了多久」→ 相信 nginx（Edge）。**
+  3. **App（API 程序）的數字只用來定位問題**：是哪個路由、哪種業務結果，不拿來當使用者體驗的最終數字。
+- **為什麼就使用者體驗而言 Edge 比 App 可信**
+  - **位置**：nginx 在最外層，每個請求都經過它。請求在進入 API 前被擋下、API 程序當掉或重啟、上游逾時回 502／504、客戶端等不及斷線（499），App 都看不到，只有 nginx 記得到。
+  - **量測範圍**：nginx 的耗時包含排隊與 proxy 時間，是使用者實際等待的時間；App 只從請求進入 middleware 才開始計時。
+  - **遺失風險**：Edge 來自 nginx 寫到磁碟的存取日誌，collector 以檔案游標續讀，程序重啟不會少算；App 樣本先存在各副本記憶體，再經 Redis Stream 傳送，副本在送出前終止時那幾秒會遺失。因此每秒資料附 `completeness`（有回報的副本比例），低於 100% 時 App 數字本來就不完整。
+- **不一致本身就是訊號**：Edge 的 5xx 明顯多於 App，代表請求沒進到 API（上游掛了或逾時）；Edge 的 499 增加而 App 正常，代表回應太慢、使用者先放棄了。所以兩邊都保存並比對差異，而不是丟掉其中一個。
+- **體感與畫面**：客戶端連線是否順暢、畫面多久更新，以 k6 與 SSE 探測客戶端的樣本為準，口徑見 [LOADTEST.md](LOADTEST.md)。
 
 **驗證**　`test_edge_event_time_grace_sse_exclusion_and_connection_sample`、`test_minimum_delay_dedupe_wall_skew_completeness_and_gauge`、`test_rule_fires_and_resolves`、`test_admin_metric_history_streams_and_openapi`。見 `backend/tests/telemetry/test_logs.py:104`、`backend/tests/telemetry/test_app_metrics.py:39`、`backend/tests/telemetry/test_alerts.py:30`、`backend/tests/telemetry/test_admin.py:479`。
 
