@@ -20,7 +20,7 @@
 | 1.5 | `.env.example` 列出所有可調參數並附說明 | 閱讀 [.env.example](../.env.example) | ✅ |
 | 1.6 | 提供 CSV 與 JSON 座位匯入範例 | [samples/](../samples/)；README 列出各範例在兩種匯入模式下的預期結果 | ✅ |
 | 1.7 | 系統架構圖呈現元件與資料流 | [docs/architecture.md](architecture.md)、[architecture.html](architecture.html) | ✅ |
-| 1.8 | LOADTEST 含機器規格、情境、RPS、p50/p95/p99、錯誤率、瓶頸分析、壓測後一致性 | [LOADTEST.md](../LOADTEST.md) · [最終 run 原始輸出](evidence/loadtest-final-20261122/) | ✅ |
+| 1.8 | LOADTEST 含機器規格、情境、RPS、p50/p95/p99、錯誤率、瓶頸分析、壓測後一致性 | [LOADTEST.md](../LOADTEST.md) 並列 6 副本建議配置與 3 副本基準，兩輪同桌機、同 commit `346fe0f`。[6 副本環境](evidence/loadtest-final-6replicas-20261122/environment.txt#L1-L9) · [3 副本環境](evidence/loadtest-final-20261122/environment.txt#L1-L9) | ✅ |
 | 1.9 | AI_USAGE 說明使用的 AI 工具與用途，並列出至少 3 處 AI 程式碼錯誤、如何發現與修正 | [AI_USAGE.md](../AI_USAGE.md)（6 例） | ✅ |
 | 1.10 | DESIGN 回答 Q1–Q6，並列出假設、替代方案、取捨、驗證方式 | [DESIGN.md](../DESIGN.md) | ✅ |
 
@@ -136,9 +136,9 @@
 | 6.2 | 有自動化**整合測試**，且使用與正式相同的資料庫 | `backend/tests/integration/`、`booking/`、`payments/`、`events/`、`imports/`、`realtime/`、`reports/`、`telemetry/`、`authz/`：pytest + httpx（直接打 FastAPI 應用）+ **PostgreSQL 16**（與正式相同映像）+ Redis 7；每個測試從 migrate 後的 template 複製獨立資料庫 | ✅ |
 | 6.3 | 一行指令執行預設測試套件 | `make test`（Docker 內：Ruff、mypy、import 規則、後端單元與整合、前端 lint／型別／Vitest／預設 Playwright）。[經 nginx 的端到端流程](../README.md#測試與實測)另行執行。大型 Excel 匯出另有 [opt-in 環境設定](../backend/tests/reports/test_export_memory.py#L1)與指令 `uv run pytest -s -m slow backend/tests/reports/test_export_memory.py`。 | ✅ |
 | 6.4 | 併發測試證明大量同時請求下仍正確 | `test_specific_seat_races`（200 人搶同一座位）、`test_quota_race`、`test_zone_converges`、`test_break_it` | ✅ |
-| 6.5 | 壓測 A：10,000 席、3,000 VU、60 秒 | [LOADTEST §2](../LOADTEST.md#2-scenario-a) · [最終 run 參數](evidence/loadtest-final-20261122/environment.txt) · [k6 摘要](evidence/loadtest-final-20261122/a/k6-summary.json) | ✅ |
-| 6.6 | 壓測 B：2,000 條即時連線同時訂閱同一活動 | 最終 run 寫入期間同時在線峰值 2,000 條，2,000／2,000 與 PostgreSQL 一致。[LOADTEST §3](../LOADTEST.md#3-scenario-b) · [SSE 原始輸出](evidence/loadtest-final-20261122/b/sse-client.txt) | ✅ |
-| 6.7 | 壓測後一致性檢查結果 | 最終 run 無超賣，排空後 `consistency.sql` 回傳 0 列。[LOADTEST §6](../LOADTEST.md#6-一致性檢查) · [SQL 原始輸出](evidence/loadtest-final-20261122/a/consistency.txt) | ✅ |
+| 6.5 | 壓測 A：10,000 席、3,000 VU、60 秒 | 6／3 副本分別實測 1,837.6／2,072.6 req/s，nginx 503 占 35.4%／88.1%，k6 皆判定 **FAILED**。[LOADTEST §2](../LOADTEST.md#2-scenario-a) · [6 副本執行紀錄](evidence/loadtest-final-6replicas-20261122/run-log.txt#L500-L541) · [3 副本執行紀錄](evidence/loadtest-final-20261122/run-log.txt#L482-L523) · [6 副本 nginx](evidence/loadtest-final-6replicas-20261122/a/nginx-summary.txt#L1-L20) · [3 副本 nginx](evidence/loadtest-final-20261122/a/nginx-summary.txt#L1-L20) | ✅ |
+| 6.6 | 壓測 B：2,000 條即時連線同時訂閱同一活動 | 6 副本及 3 副本基準寫入期間的同時在線峰值均為 2,000 條，兩輪各有 2,000／2,000 個 client 與 PostgreSQL 一致。[LOADTEST §3](../LOADTEST.md#3-scenario-b) · [6 副本 SSE](evidence/loadtest-final-6replicas-20261122/b/sse-client.txt#L3) · [3 副本 SSE](evidence/loadtest-final-20261122/b/sse-client.txt#L3) | ✅ |
+| 6.7 | 壓測後一致性檢查結果 | 6 副本及 3 副本基準均無超賣，排空後 `consistency.sql` 各回傳 0 列。[LOADTEST §6](../LOADTEST.md#6-一致性檢查) · [6 副本 SQL](evidence/loadtest-final-6replicas-20261122/a/consistency.txt) · [3 副本 SQL](evidence/loadtest-final-20261122/a/consistency.txt) | ✅ |
 
 ## 七、設計問答（DESIGN.md）
 

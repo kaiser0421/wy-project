@@ -22,11 +22,13 @@ import matplotlib.ticker
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "docs" / "evidence"
 OUT = EVIDENCE / "charts"
+FINAL_3 = "Final 3 replicas"
+FINAL_6 = "Final 6 replicas"
 RUNS = {
     "Run 1": EVIDENCE / "loadtest-run1-20261121",
     "Run 2": EVIDENCE / "loadtest-run2-20261121",
-    "6 replicas": EVIDENCE / "loadtest-run3-6replicas-20261121",
-    "Final": EVIDENCE / "loadtest-final-20261122",
+    FINAL_3: EVIDENCE / "loadtest-final-20261122",
+    FINAL_6: EVIDENCE / "loadtest-final-6replicas-20261122",
 }
 COLORS = {"ok": "#2a8b7b", "conflict": "#9c661a", "busy": "#7a8699", "error": "#b3261e"}
 plt.rcParams.update(
@@ -73,7 +75,7 @@ def chart_outcomes() -> None:
         ax.barh(labels, values, left=left, color=COLORS[key], label=text)
         left = [a + b for a, b in zip(left, values, strict=True)]
     ax.invert_yaxis()
-    ax.set_xlabel("Requests per run (k6 total, 60 s of load plus ramp-down)")
+    ax.set_xlabel("Requests per run (k6 total, 60 s of load plus graceful stop)")
     ax.set_title("Scenario A: request outcomes (3,000 VUs, 10,000 seats)")
     ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:,.0f}"))
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=2, frameon=False)
@@ -99,7 +101,7 @@ def chart_seats() -> None:
     ax.invert_yaxis()
     ax.set_xlim(0, 10_000)
     ax.set_xlabel("Seats (of 10,000) after the run and a 90 s drain")
-    ax.set_title("Scenario A: seat inventory after the run (0 oversold in every run)")
+    ax.set_title("Scenario A: seat inventory after the run")
     ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:,.0f}"))
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.3), ncol=3, frameon=False)
     fig.subplots_adjust(left=0.2, right=0.97, top=0.86, bottom=0.36)
@@ -124,7 +126,7 @@ def per_second(run: Path) -> list[dict]:
 def chart_timeline() -> None:
     """Scenario A: per-second edge metrics stored by the monitoring pipeline."""
     fig, axes = plt.subplots(3, 1, figsize=(8, 7), sharex=True)
-    for name, color in (("Final", "#204ea8"), ("6 replicas", "#2a8b7b")):
+    for name, color in ((FINAL_6, "#2a8b7b"), (FINAL_3, "#204ea8")):
         rows = per_second(RUNS[name])
         if not rows:
             continue
@@ -138,9 +140,9 @@ def chart_timeline() -> None:
         axes[2].plot(xs, p95, color=color, label=name)
     axes[0].set_ylabel("Requests/s")
     axes[1].set_ylabel("5xx share (%)\n(nearly all 503 shed)")
-    axes[2].set_ylabel("p95 latency (s)")
+    axes[2].set_ylabel("p95 latency (s)\n(histogram estimate)")
     axes[2].set_xlabel("Seconds since the first nginx second with >100 requests")
-    axes[0].set_title("Scenario A per second: final run and 6-replica run")
+    axes[0].set_title("Scenario A per second: final runs")
     axes[0].legend(frameon=False)
     fig.tight_layout()
     fig.savefig(OUT / "a-per-second.png")
@@ -150,9 +152,11 @@ def chart_timeline() -> None:
 def chart_sse() -> None:
     """Scenario B: compare runs with SSE client reports."""
     reports = {}
-    for name in ("Run 1", "Run 2", "Final"):
-        text = (RUNS[name] / "b" / "sse-client.txt").read_text()
-        reports[name] = json.loads(next(line for line in text.splitlines() if line.startswith("{")))
+    for name, run in RUNS.items():
+        text = (run / "b" / "sse-client.txt").read_text()
+        label = name.removesuffix(" replicas")
+        summary = next(line for line in text.splitlines() if line.startswith("{"))
+        reports[label] = json.loads(summary)
     fig, (left, right) = plt.subplots(1, 2, figsize=(10, 3.8))
     names = list(reports)
     matched = [reports[n]["matching_clients"] for n in names]
@@ -164,11 +168,12 @@ def chart_sse() -> None:
     left.set_ylim(0, 2300)
     left.set_title("Clients whose final seat map matched PostgreSQL")
     left.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=2)
-    width = 0.25
-    palette = ("#9c661a", "#7a8699", "#204ea8")
-    for offset, name, color in zip((-width, 0, width), names, palette, strict=True):
+    width = 0.2
+    palette = ("#9c661a", "#7a8699", "#204ea8", "#2a8b7b")
+    for index, (name, color) in enumerate(zip(names, palette, strict=True)):
         report = reports[name]
         values = [report["snapshot_ms"]["p50"] / 1000, report["delta_apply_ms"]["p50"] / 1000]
+        offset = (index - (len(names) - 1) / 2) * width
         right.bar([x + offset for x in (0, 1)], values, width, color=color, label=name)
     right.set_xticks([0, 1], ["Snapshot p50", "Delta apply p50"])
     right.set_ylabel("Seconds (log scale)")

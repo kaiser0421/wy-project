@@ -1,0 +1,24 @@
+date: 2026-11-22T11:26:01+08:00
+git: 346fe0f75c3039573a814209fedd57e0e38ed5c1
+host: Linux DESKTOP-Q7V7A3D 6.18.40.1-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Fri Jul 31 22:12:15 UTC 2026 x86_64 GNU/Linux
+cpus: 12
+model name	: AMD Ryzen 5 5600 6-Core Processor
+MemTotal:       16379368 kB
+docker: 29.9.3 cpus=12 mem=16772472832 os=Docker Desktop
+Docker Compose version v5.7.0
+API_REPLICAS=6 API_REPLICAS_RUNNING=6
+container: /wy-project-api-1 image=sha256:5229b4623506eb03e79acc44508796b62531e93176973f0ece9fe2e1d01ad52a tag=ticketing-backend:local
+container: /wy-project-api-2 image=sha256:5229b4623506eb03e79acc44508796b62531e93176973f0ece9fe2e1d01ad52a tag=ticketing-backend:local
+container: /wy-project-api-3 image=sha256:5229b4623506eb03e79acc44508796b62531e93176973f0ece9fe2e1d01ad52a tag=ticketing-backend:local
+container: /wy-project-api-4 image=sha256:5229b4623506eb03e79acc44508796b62531e93176973f0ece9fe2e1d01ad52a tag=ticketing-backend:local
+container: /wy-project-api-5 image=sha256:5229b4623506eb03e79acc44508796b62531e93176973f0ece9fe2e1d01ad52a tag=ticketing-backend:local
+container: /wy-project-api-6 image=sha256:5229b4623506eb03e79acc44508796b62531e93176973f0ece9fe2e1d01ad52a tag=ticketing-backend:local
+container: /wy-project-collector-1 image=sha256:5229b4623506eb03e79acc44508796b62531e93176973f0ece9fe2e1d01ad52a tag=ticketing-backend:local
+container: /wy-project-nginx-1 image=sha256:a2609b5c0dcb18e2f1aa12041f96bd9a909d212553784cb2f0e0be670a953d95 tag=ticketing-nginx:local
+container: /wy-project-paymock-1 image=sha256:d6f706417eb5fe05660ffbf6ce06252feedb12397a91acdf05fee32201d3d7d8 tag=ticketing-paymock:local
+container: /wy-project-postgres-1 image=sha256:1d5b02d3a9941fbd52437db4107f8c52d6297dac553ca1e5c299ebb3756b4857 tag=postgres:16-alpine
+container: /wy-project-redis-1 image=sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe tag=redis:7-alpine
+container: /wy-project-relay-1 image=sha256:5229b4623506eb03e79acc44508796b62531e93176973f0ece9fe2e1d01ad52a tag=ticketing-backend:local
+container: /wy-project-worker-1 image=sha256:5229b4623506eb03e79acc44508796b62531e93176973f0ece9fe2e1d01ad52a tag=ticketing-backend:local
+VUS=3000 DURATION=60s SEATS=10000 CONNECTIONS=2000 B_DURATION=80 B_RATE=100
+SSE_PROCESSES=auto SSE_RAMP=10

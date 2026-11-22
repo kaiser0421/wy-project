@@ -1,11 +1,11 @@
-# CP4：50 萬筆訂單 Excel 匯出（512 MB API 實例）
+# CP4：50 萬筆訂單 Excel 匯出（512 MiB API 實例）
 
-> 需求：題目第六節第 5 點「50 萬筆訂單需能在記憶體上限為 512MB 的 API 實例上完成匯出」。
-> 量測日期：2026-11-21（台北），執行環境見 `LOADTEST.md` §1（MacBook Intel 4 執行緒 / 8 GB，Docker Desktop VM 4 CPU / 5 GB）。
+> 題目第六節第 5 點要求在有記憶體上限的 API 實例完成 50 萬筆訂單匯出。本次以 512 MiB 上限驗證。
+> 量測日期：2026-11-21（台北），執行環境為 Intel MacBook（4 執行緒 / 8 GB）及 Docker Desktop VM（4 CPU / 5 GB）。
 
 ## 方法
 
-1. 以 `docker compose up -d --build` 啟動完整堆疊；`api` 服務的 compose 設定 `deploy.resources.limits.memory: 512m`，`docker inspect` 確認三個副本 `HostConfig.Memory = 536870912`，容器內 `/sys/fs/cgroup/memory.max = 536870912`。
+1. 以 `docker compose up -d --build` 啟動完整堆疊；`api` 服務的 compose 設定 `deploy.resources.limits.memory: 512m`，`docker inspect` 確認三個副本 `HostConfig.Memory = 536870912`，容器內 `/sys/fs/cgroup/memory.max = 536870912`，亦即 512 MiB。
 2. `scripts/seed_orders_500k.sql` 在 PostgreSQL 灌入一個活動與 **500,000 筆訂單**（耗時 497 秒）。
 3. 在三個 API 容器內每 0.2 秒取樣 cgroup v2 的 `memory.current` 與 `memory.stat`（`anon` = 程式實際使用的記憶體，`file` = page cache，可由核心回收）。此 kernel 沒有 `memory.peak`，因此以取樣峰值代替。
 4. 以 Admin 經 nginx 呼叫 `GET /api/v1/events/3/reports/sales.xlsx?tz=Asia/Taipei`。

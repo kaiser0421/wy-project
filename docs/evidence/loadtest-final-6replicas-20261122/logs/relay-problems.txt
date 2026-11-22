@@ -1,0 +1,1 @@
+relay-1  | {"component":"relay","error":"ProblemError","event":"service.tick_failed","level":"error","ts":"2026-11-22T03:27:24.129022Z","service":"relay","boot_uuid":"831b69237c1b476ea06f7b722439c0ad","local_seq":2}

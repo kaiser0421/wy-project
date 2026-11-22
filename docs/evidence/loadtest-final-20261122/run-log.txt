@@ -1,13 +1,13 @@
 
 ==> Starting the stack (docker compose up -d --build)
- Image ticketing-backend:local Building 
- Image ticketing-nginx:local Building 
- Image ticketing-backend:local Building 
- Image ticketing-backend:local Building 
- Image ticketing-backend:local Building 
- Image ticketing-backend:local Building 
- Image ticketing-backend:local Building 
- Image ticketing-paymock:local Building 
+ Image ticketing-backend:local Building
+ Image ticketing-nginx:local Building
+ Image ticketing-backend:local Building
+ Image ticketing-backend:local Building
+ Image ticketing-backend:local Building
+ Image ticketing-backend:local Building
+ Image ticketing-backend:local Building
+ Image ticketing-paymock:local Building
 #1 [internal] load local bake definitions
 #1 reading from stdin 3.93kB done
 #1 DONE 0.0s
@@ -368,110 +368,110 @@
 
 #82 [worker] resolving provenance for metadata file
 #82 DONE 0.1s
- Image ticketing-backend:local Built 
- Image ticketing-nginx:local Built 
- Image ticketing-backend:local Built 
- Image ticketing-backend:local Built 
- Image ticketing-backend:local Built 
- Image ticketing-backend:local Built 
- Image ticketing-backend:local Built 
- Image ticketing-paymock:local Built 
- Volume wy-project_app_logs Creating 
- Volume wy-project_paymock_data Creating 
- Volume wy-project_app_logs Creating 
- Volume wy-project_nginx_logs Creating 
- Volume wy-project_nginx_logs Creating 
- Volume wy-project_imports Creating 
- Volume wy-project_imports Creating 
- Volume wy-project_exports Creating 
- Volume wy-project_exports Creating 
- Volume wy-project_redis_data Creating 
- Volume wy-project_redis_data Creating 
- Volume wy-project_pg_data Creating 
- Volume wy-project_pg_data Creating 
- Network wy-project_default Creating 
- Volume wy-project_paymock_data Creating 
- Network wy-project_default Creating 
- Volume wy-project_app_logs Created 
- Volume wy-project_app_logs Created 
- Volume wy-project_paymock_data Created 
- Volume wy-project_paymock_data Created 
- Volume wy-project_nginx_logs Created 
- Volume wy-project_nginx_logs Created 
- Volume wy-project_redis_data Created 
- Volume wy-project_redis_data Created 
- Volume wy-project_imports Created 
- Volume wy-project_imports Created 
- Volume wy-project_pg_data Created 
- Volume wy-project_pg_data Created 
- Volume wy-project_exports Created 
- Volume wy-project_exports Created 
- Network wy-project_default Created 
- Network wy-project_default Created 
- Container wy-project-postgres-1 Creating 
- Container wy-project-redis-1 Creating 
- Container wy-project-paymock-1 Creating 
- Container wy-project-paymock-1 Created 
- Container wy-project-redis-1 Created 
- Container wy-project-postgres-1 Created 
- Container wy-project-migrate-1 Creating 
- Container wy-project-migrate-1 Created 
- Container wy-project-worker-1 Creating 
- Container wy-project-seed-1 Creating 
- Container wy-project-collector-1 Creating 
- Container wy-project-relay-1 Creating 
- Container wy-project-seed-1 Created 
- Container wy-project-api-1 Creating 
- Container wy-project-api-2 Creating 
- Container wy-project-api-3 Creating 
- Container wy-project-collector-1 Created 
- Container wy-project-worker-1 Created 
- Container wy-project-relay-1 Created 
- Container wy-project-api-2 Created 
- Container wy-project-api-3 Created 
- Container wy-project-nginx-1 Creating 
- Container wy-project-api-1 Created 
- Container wy-project-nginx-1 Created 
- Container wy-project-paymock-1 Starting 
- Container wy-project-redis-1 Starting 
- Container wy-project-postgres-1 Starting 
- Container wy-project-paymock-1 Started 
- Container wy-project-paymock-1 Waiting 
- Container wy-project-redis-1 Started 
- Container wy-project-redis-1 Waiting 
- Container wy-project-postgres-1 Started 
- Container wy-project-postgres-1 Waiting 
- Container wy-project-redis-1 Healthy 
- Container wy-project-postgres-1 Healthy 
- Container wy-project-migrate-1 Starting 
- Container wy-project-migrate-1 Started 
- Container wy-project-migrate-1 Waiting 
- Container wy-project-paymock-1 Healthy 
- Container wy-project-migrate-1 Exited 
- Container wy-project-worker-1 Starting 
- Container wy-project-collector-1 Starting 
- Container wy-project-seed-1 Starting 
- Container wy-project-relay-1 Starting 
- Container wy-project-worker-1 Started 
- Container wy-project-collector-1 Started 
- Container wy-project-seed-1 Started 
- Container wy-project-seed-1 Waiting 
- Container wy-project-relay-1 Started 
- Container wy-project-seed-1 Exited 
- Container wy-project-api-1 Starting 
- Container wy-project-api-1 Started 
- Container wy-project-api-2 Starting 
- Container wy-project-api-2 Started 
- Container wy-project-api-3 Starting 
- Container wy-project-api-3 Started 
- Container wy-project-api-2 Waiting 
- Container wy-project-api-3 Waiting 
- Container wy-project-api-1 Waiting 
- Container wy-project-api-2 Healthy 
- Container wy-project-api-3 Healthy 
- Container wy-project-api-1 Healthy 
- Container wy-project-nginx-1 Starting 
- Container wy-project-nginx-1 Started 
+ Image ticketing-backend:local Built
+ Image ticketing-nginx:local Built
+ Image ticketing-backend:local Built
+ Image ticketing-backend:local Built
+ Image ticketing-backend:local Built
+ Image ticketing-backend:local Built
+ Image ticketing-backend:local Built
+ Image ticketing-paymock:local Built
+ Volume wy-project_app_logs Creating
+ Volume wy-project_paymock_data Creating
+ Volume wy-project_app_logs Creating
+ Volume wy-project_nginx_logs Creating
+ Volume wy-project_nginx_logs Creating
+ Volume wy-project_imports Creating
+ Volume wy-project_imports Creating
+ Volume wy-project_exports Creating
+ Volume wy-project_exports Creating
+ Volume wy-project_redis_data Creating
+ Volume wy-project_redis_data Creating
+ Volume wy-project_pg_data Creating
+ Volume wy-project_pg_data Creating
+ Network wy-project_default Creating
+ Volume wy-project_paymock_data Creating
+ Network wy-project_default Creating
+ Volume wy-project_app_logs Created
+ Volume wy-project_app_logs Created
+ Volume wy-project_paymock_data Created
+ Volume wy-project_paymock_data Created
+ Volume wy-project_nginx_logs Created
+ Volume wy-project_nginx_logs Created
+ Volume wy-project_redis_data Created
+ Volume wy-project_redis_data Created
+ Volume wy-project_imports Created
+ Volume wy-project_imports Created
+ Volume wy-project_pg_data Created
+ Volume wy-project_pg_data Created
+ Volume wy-project_exports Created
+ Volume wy-project_exports Created
+ Network wy-project_default Created
+ Network wy-project_default Created
+ Container wy-project-postgres-1 Creating
+ Container wy-project-redis-1 Creating
+ Container wy-project-paymock-1 Creating
+ Container wy-project-paymock-1 Created
+ Container wy-project-redis-1 Created
+ Container wy-project-postgres-1 Created
+ Container wy-project-migrate-1 Creating
+ Container wy-project-migrate-1 Created
+ Container wy-project-worker-1 Creating
+ Container wy-project-seed-1 Creating
+ Container wy-project-collector-1 Creating
+ Container wy-project-relay-1 Creating
+ Container wy-project-seed-1 Created
+ Container wy-project-api-1 Creating
+ Container wy-project-api-2 Creating
+ Container wy-project-api-3 Creating
+ Container wy-project-collector-1 Created
+ Container wy-project-worker-1 Created
+ Container wy-project-relay-1 Created
+ Container wy-project-api-2 Created
+ Container wy-project-api-3 Created
+ Container wy-project-nginx-1 Creating
+ Container wy-project-api-1 Created
+ Container wy-project-nginx-1 Created
+ Container wy-project-paymock-1 Starting
+ Container wy-project-redis-1 Starting
+ Container wy-project-postgres-1 Starting
+ Container wy-project-paymock-1 Started
+ Container wy-project-paymock-1 Waiting
+ Container wy-project-redis-1 Started
+ Container wy-project-redis-1 Waiting
+ Container wy-project-postgres-1 Started
+ Container wy-project-postgres-1 Waiting
+ Container wy-project-redis-1 Healthy
+ Container wy-project-postgres-1 Healthy
+ Container wy-project-migrate-1 Starting
+ Container wy-project-migrate-1 Started
+ Container wy-project-migrate-1 Waiting
+ Container wy-project-paymock-1 Healthy
+ Container wy-project-migrate-1 Exited
+ Container wy-project-worker-1 Starting
+ Container wy-project-collector-1 Starting
+ Container wy-project-seed-1 Starting
+ Container wy-project-relay-1 Starting
+ Container wy-project-worker-1 Started
+ Container wy-project-collector-1 Started
+ Container wy-project-seed-1 Started
+ Container wy-project-seed-1 Waiting
+ Container wy-project-relay-1 Started
+ Container wy-project-seed-1 Exited
+ Container wy-project-api-1 Starting
+ Container wy-project-api-1 Started
+ Container wy-project-api-2 Starting
+ Container wy-project-api-2 Started
+ Container wy-project-api-3 Starting
+ Container wy-project-api-3 Started
+ Container wy-project-api-2 Waiting
+ Container wy-project-api-3 Waiting
+ Container wy-project-api-1 Waiting
+ Container wy-project-api-2 Healthy
+ Container wy-project-api-3 Healthy
+ Container wy-project-api-1 Healthy
+ Container wy-project-nginx-1 Starting
+ Container wy-project-nginx-1 Started
 
 ==> Recording environment
 
@@ -493,17 +493,17 @@ rush ↓ [ 100% ] 3000 VUs  1m0s
    ✓ checks.........................: 100.00% 46 out of 46
      data_received..................: 107 MB  1.6 MB/s
      data_sent......................: 57 MB   877 kB/s
-     http_req_blocked...............: avg=4.46ms   min=1.3µs  med=4.7µs    max=281.47ms p(90)=6.3µs  p(95)=7.9µs  p(99)=217.6ms 
-     http_req_connecting............: avg=1.65ms   min=0s     med=0s       max=222.21ms p(90)=0s     p(95)=0s     p(99)=66.96ms 
-     http_req_duration..............: avg=1.16s    min=1.98ms med=1.05s    max=5s       p(90)=1.9s   p(95)=2.02s  p(99)=2.64s   
-       { expected_response:true }...: avg=913.85ms min=1.98ms med=979.61ms max=4.92s    p(90)=1.96s  p(95)=2.04s  p(99)=2.38s   
+     http_req_blocked...............: avg=4.46ms   min=1.3µs  med=4.7µs    max=281.47ms p(90)=6.3µs  p(95)=7.9µs  p(99)=217.6ms
+     http_req_connecting............: avg=1.65ms   min=0s     med=0s       max=222.21ms p(90)=0s     p(95)=0s     p(99)=66.96ms
+     http_req_duration..............: avg=1.16s    min=1.98ms med=1.05s    max=5s       p(90)=1.9s   p(95)=2.02s  p(99)=2.64s
+       { expected_response:true }...: avg=913.85ms min=1.98ms med=979.61ms max=4.92s    p(90)=1.96s  p(95)=2.04s  p(99)=2.38s
      http_req_failed................: 88.16%  118880 out of 134834
      http_req_receiving.............: avg=54.57µs  min=0s     med=42.8µs   max=11.46ms  p(90)=72.1µs p(95)=87.4µs p(99)=251.17µs
-     http_req_sending...............: avg=164.48µs min=5.5µs  med=14.9µs   max=70.54ms  p(90)=35.5µs p(95)=51.8µs p(99)=3.29ms  
-     http_req_tls_handshaking.......: avg=0s       min=0s     med=0s       max=0s       p(90)=0s     p(95)=0s     p(99)=0s      
-     http_req_waiting...............: avg=1.16s    min=1.92ms med=1.05s    max=5s       p(90)=1.9s   p(95)=2.02s  p(99)=2.64s   
+     http_req_sending...............: avg=164.48µs min=5.5µs  med=14.9µs   max=70.54ms  p(90)=35.5µs p(95)=51.8µs p(99)=3.29ms
+     http_req_tls_handshaking.......: avg=0s       min=0s     med=0s       max=0s       p(90)=0s     p(95)=0s     p(99)=0s
+     http_req_waiting...............: avg=1.16s    min=1.92ms med=1.05s    max=5s       p(90)=1.9s   p(95)=2.02s  p(99)=2.64s
      http_reqs......................: 134834  2072.597266/s
-     iteration_duration.............: avg=1.48s    min=84.5ms med=1.27s    max=26.42s   p(90)=2.22s  p(95)=2.52s  p(99)=3.88s   
+     iteration_duration.............: avg=1.48s    min=84.5ms med=1.27s    max=26.42s   p(90)=2.22s  p(95)=2.52s  p(99)=3.88s
      iterations.....................: 123659  1900.821049/s
    ✓ replay_progress................: 38.33%  46 out of 120
      replay_started.................: 74      1.137489/s
@@ -525,14 +525,14 @@ time="2026-11-22T03:13:48Z" level=error msg="thresholds on metrics 'replay_unver
 ==> Scenario A: waiting for holds, payments and outbox to drain (90 s)
 
 ==> Scenario A: consistency checks (zero rows = consistent)
-     status      | orders | tickets 
+     status      | orders | tickets
 -----------------+--------+---------
  pending_payment |   3652 |    7640
  paid            |    237 |     438
  cancelled       |     52 |      95
 (3 rows)
 
-  status   | count 
+  status   | count
 -----------+-------
  available |  1922
  held      |  7640
@@ -544,8 +544,8 @@ time="2026-11-22T03:13:48Z" level=error msg="thresholds on metrics 'replay_unver
 {"event_id": 2, "seats": 10000, "sessions": 2000}
 
 ==> Scenario B: 2000 subscribers for 80s, writer at 100 changes/s (event 2)
- Container wy-project-api-run-fb39e820d284 Creating 
- Container wy-project-api-run-fb39e820d284 Created 
+ Container wy-project-api-run-fb39e820d284 Creating
+ Container wy-project-api-run-fb39e820d284 Created
 {"archive_mismatches":0,"connect_ms":{"p50":687,"p95":2360,"p99":4170},"connections_established":2000,"delta_apply_ms":{"p50":216,"p95":3070,"p99":7750},"delta_apply_samples":789776,"deltas_applied":789776,"final_head":1376,"gaps":19229,"matching_clients":2000,"outbox_pending":0,"peak_active":2000,"peak_active_during_writes":2000,"pg_state_sha256":"3b87c47c817f790dc0a1da671c30f9c9ad114a42aaae392b0da3d9c4f03ed6d1","processes":8,"request_errors":17,"resyncs":33,"snapshot_ms":{"p50":3420,"p95":8240,"p99":8640},"sse_body_bytes":264912047,"sse_body_bytes_per_second":3088627,"stalled_progress":19229,"stream_attempts":21279,"stream_error_rate":0.000799,"stream_request_errors":17,"target_connections":2000}
 {"changes": 5504, "seconds": 55.32495409099647, "changes_per_sec": 99.48494473121877}
 

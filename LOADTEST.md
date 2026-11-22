@@ -2,9 +2,10 @@
 
 ## 一、結論
 
-- **正確性通過。** Scenario A 無超賣，一致性 SQL 回傳 0 列，HTTP 502／500 各 0。Scenario B 寫入期間同時在線峰值達 2,000，最終 2,000／2,000 個 client 與 PostgreSQL 一致。[一致性 SQL 輸出][a-sql] · [nginx][a-nginx] · [SSE client][b-sse]
-- **容量。** 3,000 VUs 搶 10,000 席時，88.1% 的請求收到 `503 server-busy`。排空後占席 8,078／10,000，已付款 237 筆。k6 自我檢查判定 **FAILED**。[測試參數][env] · [nginx][a-nginx] · [最終庫存][a-state] · [執行紀錄][run]
-- **瓶頸。** A 的延遲中位數接近 DB pool 取用上限；B 的 client 仍頻繁因進度停滯而重連。見 [瓶頸分析](#7-瓶頸分析)。[k6][a-k6] · [DB pool 設定](backend/src/ticketing/core/settings.py#L34) · [SSE client][b-sse]
+- **建議配置為 6 個 API 副本。** 兩次最終 run 都在同一台桌機、同一 commit `346fe0f`，沿用題目指定的情境與規模。以 3 副本為基準，nginx 503 由 88.1% 降至 35.4%，排空後占席由 8,078 增至 10,000，已付款訂單由 237 增至 1,082 筆。[6 副本環境][env6] · [3 副本環境][env3] · [6 副本 nginx][a-nginx6] · [3 副本 nginx][a-nginx3] · [6 副本庫存][a-state6] · [3 副本庫存][a-state3]
+- **正確性通過。** 兩輪 A 均無超賣，一致性 SQL 回傳 0 列，HTTP 502／500 各 0。兩輪 B 寫入期間同時在線達 2,000，最終 2,000／2,000 個 client 與 PostgreSQL 一致。[6 副本 SQL][a-sql6] · [3 副本 SQL][a-sql3] · [6 副本 nginx][a-nginx6] · [3 副本 nginx][a-nginx3] · [6 副本 SSE][b-sse6] · [3 副本 SSE][b-sse3]
+- **k6 自我檢查。** 6 副本驗證全部 98 筆抽樣重放，k6 因 `unexpected_errors` 判定 **FAILED**。3 副本另有重放未驗證。[6 副本執行紀錄][run6] · [3 副本執行紀錄][run3]
+- **瓶頸。** 6 副本下，nginx 記錄的 598 筆 499 全在付款路徑。付款模擬器與 PostgreSQL 是後續量測重點，見 [瓶頸分析](#7-瓶頸分析)。[6 副本 nginx][a-nginx6]
 
 ## 二、怎麼判斷成功或失敗
 
@@ -24,41 +25,43 @@
 
 ### ① 正確性
 
-| 標準 | 目標 | 結果 | 證據 |
-| --- | ---: | ---: | --- |
-| A 同一座位被賣兩次 | 0 | ✅ 0 | [一致性 SQL 輸出][a-sql] |
-| A 排空後一致性 SQL 異常列 | 0 | ✅ 0 | [一致性 SQL 輸出][a-sql] |
-| A HTTP 502／500 | 0／0 | ✅ 0／0 | [nginx][a-nginx] |
-| B 寫入期間同時在線 | 2,000 | ✅ 2,000 | [SSE client][b-sse] |
-| B 最終與 PostgreSQL 一致 | 2,000 | ✅ 2,000 | [SSE client][b-sse] |
-| B 待推送事件／封存差異 | 0／0 | ✅ 0／0 | [SSE client][b-sse] |
+| 標準 | 目標 | 6 副本（建議） | 3 副本（基準） |
+| --- | ---: | --- | --- |
+| A 同一座位被賣兩次 | 0 | ✅ 0 [SQL][a-sql6] | ✅ 0 [SQL][a-sql3] |
+| A 排空後一致性 SQL 異常列 | 0 | ✅ 0 [SQL][a-sql6] | ✅ 0 [SQL][a-sql3] |
+| A HTTP 502／500 | 0／0 | ✅ 0／0 [nginx][a-nginx6] | ✅ 0／0 [nginx][a-nginx3] |
+| B 寫入期間同時在線 | 2,000 | ✅ 2,000 [SSE][b-sse6] | ✅ 2,000 [SSE][b-sse3] |
+| B 最終與 PostgreSQL 一致 | 2,000 | ✅ 2,000 [SSE][b-sse6] | ✅ 2,000 [SSE][b-sse3] |
+| B 待推送事件／封存差異 | 0／0 | ✅ 0／0 [SSE][b-sse6] | ✅ 0／0 [SSE][b-sse3] |
 
 ### ② 容量與體驗
 
-| 指標 | 結果 | 證據 |
+| 指標 | 6 副本（建議） | 3 副本（基準） |
 | --- | --- | --- |
-| A HTTP 請求數／吞吐 | 134,834／2,072.6 req/s | [k6][a-k6] |
-| A HTTP p50／p95／p99 | 1.05／2.02／2.64 s | [k6 終端摘要][run] · [原始毫秒數][a-k6] |
-| A 過載 503／建單 409 | 118,817（88.1%）／9,010 | [nginx][a-nginx] |
-| A 排空後占席／已付款訂單 | 8,078／10,000 席；237 筆 | [最終庫存][a-state] |
-| B 快照 p50 | 3.42 s | [SSE client][b-sse] |
-| B delta 套用 p50／p95／p99 | 216／3,070／7,750 ms | [SSE client][b-sse] |
-| B 串流嘗試（含重連）／進度停滯／resync | 21,279／19,229／33 | [SSE client][b-sse] |
+| A HTTP 請求數／吞吐 | 115,485／1,837.6 req/s [k6][a-k66] | 134,834／2,072.6 req/s [k6][a-k63] |
+| A HTTP p50／p95／p99 | 1.06／2.03／4.05 s [k6][a-k66] | 1.05／2.02／2.64 s [k6][a-k63] |
+| A nginx 503／建單 409 | 40,853（35.4%）／29,205 [nginx][a-nginx6] | 118,817（88.1%）／9,010 [nginx][a-nginx3] |
+| A 排空後占席／已付款訂單 | 10,000／10,000 席，1,082 筆 [庫存][a-state6] | 8,078／10,000 席，237 筆 [庫存][a-state3] |
+| B 快照 p50 | 193 ms [SSE][b-sse6] | 3,420 ms [SSE][b-sse3] |
+| B delta 套用 p50／p95／p99 | 175／2,750／9,450 ms [SSE][b-sse6] | 216／3,070／7,750 ms [SSE][b-sse3] |
+| B 串流嘗試（含重連）／進度停滯／resync | 18,555／16,526／0 [SSE][b-sse6] | 21,279／19,229／33 [SSE][b-sse3] |
 
 ### ③ k6 自我檢查
 
-| 檢查 | 結果 | 證據 |
+| 檢查 | 6 副本（建議） | 3 副本（基準） |
 | --- | --- | --- |
-| 每筆抽樣重放均成功驗證 | ❌ 發起 74 筆、驗證 46 筆，皆回原訂單；28 筆用完 10 次嘗試仍回過載 503 | [k6][a-k6] · [執行紀錄][run] · [重放邏輯](loadtest/scenario_a.js#L132) |
-| `unexpected_errors` 為 0 | ❌ 63 筆，對應 nginx 的 499 | [k6][a-k6] · [nginx][a-nginx] |
-| k6 判定 | **FAILED**，`replay_unverified` 與 `unexpected_errors` 未達門檻。Runner 另報 `replays started and verified differ` | [執行紀錄][run] |
+| 抽樣重放發起／驗證回原訂單／未驗證 | ✅ 98／98／0 [k6][a-k66] | ❌ 74／46／28 [k6][a-k63] |
+| `unexpected_errors` 為 0 | ❌ 620 筆（k6 顯示 0.53%）[k6][a-k66] · [執行紀錄][run6] | ❌ 63 筆（k6 顯示 0.04%）[k6][a-k63] · [執行紀錄][run3] |
+| k6 判定 | **FAILED**，僅 `unexpected_errors` 未達門檻。[執行紀錄][run6] | **FAILED**，`replay_unverified` 與 `unexpected_errors` 未達門檻。Runner 另報 `replays started and verified differ`。[執行紀錄][run3] |
+
+基準輪有 28 筆重放用完 10 次嘗試仍回過載 503。[基準輪 k6][a-k63] · [基準輪執行紀錄][run3] · [重放邏輯](loadtest/scenario_a.js#L132-L152)
 
 ### 其他資源指標
 
 | 標準（題目要求） | 結果 | 證據 |
 | --- | --- | --- |
-| 100,000 列座位匯入在 60 秒內完成 | ✅ 完整服務閒置時 CSV 11.6–15.6 秒、JSON 17.0–22.2 秒；同時跑完整測試套件時 CSV 21.0 秒、JSON 47.8 秒 | [匯入實測](docs/evidence/import-100k.md) |
-| 500,000 筆訂單 Excel 在 512 MB 記憶體上限內完成匯出 | ✅ 217 秒、程式記憶體峰值約 108 MiB、無 OOM | [Excel 實測](docs/evidence/cp4-excel-500k.md) |
+| 100,000 列座位匯入在 60 秒內完成 | ✅ 完整服務閒置時 CSV 11.6–15.6 秒、JSON 17.0–22.2 秒，同時跑完整測試套件時 CSV 21.0 秒、JSON 47.8 秒 | [匯入實測](docs/evidence/import-100k.md) |
+| 500,000 筆訂單 Excel 在 512 MiB 記憶體上限內完成匯出 | ✅ 217 秒、程式記憶體峰值約 108 MiB、無 OOM | [Excel 實測](docs/evidence/cp4-excel-500k.md) |
 
 ## 四、圖
 
@@ -68,68 +71,71 @@
 
 | 項目 | 設定 | 證據 |
 | --- | --- | --- |
-| 日期／commit | 2026-11-22（台北）／`346fe0f` | [環境與映像 digest][env] |
-| 桌機 | AMD Ryzen 5 5600、12 執行緒、WSL2 可見約 16 GB RAM | [環境][env] |
-| 容器 | Docker Desktop Engine 29.9.3、Compose v5.7.0、3 個 API 副本 | [環境][env] |
-| Scenario A | 3,000 VUs、60 秒、單一活動 10,000 席 | [環境][env] · [執行紀錄][run] |
-| Scenario B | 同一活動 2,000 條 SSE 連線、80 秒、writer 目標 100 changes/s | [環境][env] · [執行紀錄][run] |
+| 日期／commit | 2026-11-22（台北）／`346fe0f` | [6 副本環境與映像 digest][env6] · [3 副本環境與映像 digest][env3] |
+| 桌機 | AMD Ryzen 5 5600、12 執行緒、WSL2 可見約 16 GB RAM | [6 副本環境][env6] · [3 副本環境][env3] |
+| 容器 | Docker Desktop Engine 29.9.3、Compose v5.7.0，分別啟動 6 與 3 個 API 副本 | [6 副本環境][env6] · [3 副本環境][env3] |
+| Scenario A | 3,000 VUs、60 秒、單一活動 10,000 席 | [6 副本環境][env6] · [3 副本環境][env3] |
+| Scenario B | 同一活動 2,000 條 SSE 連線、80 秒、writer 目標 100 changes/s | [6 副本環境][env6] · [3 副本環境][env3] |
 
-產壓工具與服務共用桌機，經 Compose network 呼叫 nginx。A 使用 k6，B 使用專案 API image 內的 Python writer 與 SSE client，各情境獨立建立活動。[Runner](loadtest/run.sh#L103)
+題目固定 A、B 的規模與情境，API 副本數由部署決定。產壓工具與服務共用桌機，經 Compose network 呼叫 nginx。A 使用 k6，B 使用專案 API image 內的 Python writer 與 SSE client，各情境獨立建立活動。[Runner](loadtest/run.sh#L103)
 
 ## 2. Scenario A
 
 準備腳本經 API 建立、匯入並發布活動，在 PostgreSQL 預建買家 session。k6 以 `constant-vus` 產壓，每次抽 1–4 張，約 70% 指定席、30% 區域配位。成功鎖位後約 80% 嘗試付款、10% 取消、10% 保留到期，另抽約 2% 以原請求與 Idempotency-Key 驗證重放。觸及限購後，確認已持有 4 張的 VU 改查訂單。[準備腳本](loadtest/prepare_a.py) · [A 腳本](loadtest/scenario_a.js)
 
-| HTTP 結果 | 請求數 | 證據 |
-| --- | ---: | --- |
-| 2xx | 6,944 | [nginx][a-nginx] |
-| 409 | 9,010 | [nginx][a-nginx] |
-| 503 `server-busy` | 118,817（88.1%） | [nginx][a-nginx] · [k6][a-k6] |
-| 499 | 63（0.047%），建單 `POST /api/v1/events/{id}/orders` 55 筆、付款 8 筆 | [nginx][a-nginx] |
-| 502／500 | 0／0 | [nginx][a-nginx] |
+| nginx HTTP 結果 | 6 副本（建議） | 3 副本（基準） |
+| --- | --- | --- |
+| 2xx | 44,829 [nginx][a-nginx6] | 6,944 [nginx][a-nginx3] |
+| 409 | 29,205 [nginx][a-nginx6] | 9,010 [nginx][a-nginx3] |
+| 503 | 40,853（35.4%）[nginx][a-nginx6] | 118,817（88.1%）[nginx][a-nginx3] |
+| 499 | 598，`POST /api/v1/orders/{id}/payments` 548 筆、`POST /pay/:id` 50 筆 [nginx][a-nginx6] | 63，`POST /api/v1/events/{id}/orders` 55 筆、`POST /api/v1/orders/{id}/payments` 8 筆 [nginx][a-nginx3] |
+| 502／500 | 0／0 [nginx][a-nginx6] | 0／0 [nginx][a-nginx3] |
+| k6 成功鎖位 | 5,293 [k6][a-k66] | 3,940 [k6][a-k63] |
 
-k6 的 63 筆 `unexpected_errors` 對應 client 等滿 5 秒後斷線的 nginx 499。k6 記錄 3,940 筆成功鎖位，含重放在內的建單 201 共 3,986 筆。每秒請求、錯誤與延遲可跟鎖位、付款、取消等業務指標對照。[k6][a-k6] · [請求 timeout](loadtest/scenario_a.js#L77) · [nginx][a-nginx] · [秒級 HTTP][a-metrics] · [秒級業務][a-business]
+6 副本的 k6 共記錄 620 筆 `unexpected_errors`，對照 nginx 有 598 筆付款路徑 client timeout（499）。3 副本的 `unexpected_errors` 和 nginx 499 同為 63 筆。k6 與 nginx 各自計數，付款摘要含模擬器路徑。[6 副本 k6][a-k66] · [6 副本 nginx][a-nginx6] · [3 副本 k6][a-k63] · [3 副本 nginx][a-nginx3] · [請求 timeout](loadtest/scenario_a.js#L77-L98)
 
-排空 90 秒後的資料庫快照。[執行紀錄][run] · [最終狀態][a-state]
+每秒請求、錯誤與延遲可跟鎖位、付款、取消等業務指標對照。[6 副本秒級 HTTP][a-metrics6] · [6 副本秒級業務][a-business6] · [3 副本秒級 HTTP][a-metrics3] · [3 副本秒級業務][a-business3]
 
-| 訂單狀態 | 訂單 | 票 |
-| --- | ---: | ---: |
-| `pending_payment` | 3,652 | 7,640 |
-| `paid` | 237 | 438 |
-| `cancelled` | 52 | 95 |
+兩輪各排空 90 秒後讀取資料庫快照。[6 副本執行紀錄][run6] · [3 副本執行紀錄][run3]
 
-| 座位狀態 | 席 |
-| --- | ---: |
-| `available` | 1,922 |
-| `held` | 7,640 |
-| `sold` | 438 |
+| 訂單狀態（訂單／票） | 6 副本（建議） | 3 副本（基準） |
+| --- | --- | --- |
+| `pending_payment` | 3,959／7,976 [庫存][a-state6] | 3,652／7,640 [庫存][a-state3] |
+| `paid` | 1,082／2,024 [庫存][a-state6] | 237／438 [庫存][a-state3] |
+| `cancelled` | 253／499 [庫存][a-state6] | 52／95 [庫存][a-state3] |
 
-`held` 等於待付款票數，`sold` 等於已付款票數，座位合計 10,000 席。[最終狀態][a-state]
+| 座位狀態（席） | 6 副本（建議） | 3 副本（基準） |
+| --- | --- | --- |
+| `available` | 0 [庫存][a-state6] | 1,922 [庫存][a-state3] |
+| `held` | 7,976 [庫存][a-state6] | 7,640 [庫存][a-state3] |
+| `sold` | 2,024 [庫存][a-state6] | 438 [庫存][a-state3] |
+
+兩輪 `held` 都等於待付款票數，`sold` 都等於已付款票數，座位各合計 10,000 席。6 副本的快照只列 `held` 與 `sold`，合計即為全部席位。[6 副本庫存][a-state6] · [3 副本庫存][a-state3]
 
 ## 3. Scenario B
 
-Client 預建獨立 session，分 8 個程序取得快照後訂閱，連線在前 10 秒逐步啟動。達同時連線目標後，writer 切換座位狀態與版本，走正式 transactional outbox。Delta 延遲從 frame 內最早的 outbox `created_at` 算到 client 套用，含提交前剩餘時間。[環境][env] · [SSE client][b-sse] · [Runner](loadtest/run.sh#L147) · [Writer](loadtest/scenario_b_writer.py) · [Client 量測](loadtest/sse_client.py)
+Client 預建獨立 session，分 8 個程序取得快照後訂閱，連線在前 10 秒逐步啟動。達同時連線目標後，writer 切換座位狀態與版本，走正式 transactional outbox。Delta 延遲從 frame 內最早的 outbox `created_at` 算到 client 套用，含提交前剩餘時間。[環境][env6] · [SSE client][b-sse6] · [Runner](loadtest/run.sh#L147) · [Writer](loadtest/scenario_b_writer.py) · [Client 量測](loadtest/sse_client.py)
 
-| 指標 | 結果 | 證據 |
+| 指標 | 6 副本（建議） | 3 副本（基準） |
 | --- | --- | --- |
-| 已建立連線／目標 | 2,000／2,000 | [SSE client][b-sse] |
-| 寫入期間同時在線峰值 | 2,000 | [SSE client][b-sse] |
-| Writer 寫入／實測速率 | 5,504 次／99.5 changes/s | [Writer][b-writer] |
-| 建連 p50／p95／p99（ms） | 687／2,360／4,170 | [SSE client][b-sse] |
-| 快照 p50／p95／p99（ms） | 3,420／8,240／8,640 | [SSE client][b-sse] |
-| Delta 套用 p50／p95／p99（ms） | 216／3,070／7,750（789,776 筆樣本） | [SSE client][b-sse] |
-| `stream_attempts`／`stream_request_errors` | 21,279／17（0.08%，分母含重連） | [SSE client][b-sse] |
-| `resyncs`／`stalled_progress`／`gaps` | 33／19,229／19,229 | [SSE client][b-sse] |
-| `matching_clients` | 2,000 | [SSE client][b-sse] |
-| `outbox_pending`／`archive_mismatches` | 0／0 | [SSE client][b-sse] |
+| 已建立連線／目標 | 2,000／2,000 [SSE][b-sse6] | 2,000／2,000 [SSE][b-sse3] |
+| 寫入期間同時在線峰值 | 2,000 [SSE][b-sse6] | 2,000 [SSE][b-sse3] |
+| Writer 寫入／實測速率 | 5,504 次／99.7 changes/s [Writer][b-writer6] | 5,504 次／99.5 changes/s [Writer][b-writer3] |
+| 建連 p50／p95／p99（ms） | 317／2,820／3,600 [SSE][b-sse6] | 687／2,360／4,170 [SSE][b-sse3] |
+| 快照 p50／p95／p99（ms） | 193／247／247 [SSE][b-sse6] | 3,420／8,240／8,640 [SSE][b-sse3] |
+| Delta 套用 p50／p95／p99（ms） | 175／2,750／9,450（821,925 筆樣本）[SSE][b-sse6] | 216／3,070／7,750（789,776 筆樣本）[SSE][b-sse3] |
+| `stream_attempts`／`stream_request_errors` | 18,555／29（0.16%，分母含重連）[SSE][b-sse6] | 21,279／17（0.08%，分母含重連）[SSE][b-sse3] |
+| `resyncs`／`stalled_progress`／`gaps` | 0／16,526／16,526 [SSE][b-sse6] | 33／19,229／19,229 [SSE][b-sse3] |
+| `matching_clients` | 2,000 [SSE][b-sse6] | 2,000 [SSE][b-sse3] |
+| `outbox_pending`／`archive_mismatches` | 0／0 [SSE][b-sse6] | 0／0 [SSE][b-sse3] |
 
 ## 4. 座位匯入
 
 | 項目 | 結果 | 量測起訖 |
 |---|---|---|
-| 10,000 列 CSV | **1.6 秒**（最終 run 的 Scenario A 準備階段） | 從上傳到讀取 job 成功終態。[執行紀錄][run] · [準備腳本](loadtest/prepare_a.py#L96) |
-| 100,000 列 CSV | 完整服務閒置 **11.6–15.6 秒**；同時跑完整測試套件 21.0 秒；整合測試（隔離資料庫）15.14 秒（門檻 60 秒） | 先產檔才開始計時。完整服務經 nginx 上傳，整合測試直接呼叫 API；兩者都計到 worker 完成、讀到終態。 |
-| 100,000 列 JSON | 完整服務閒置 **17.0–22.2 秒**；同時跑完整測試套件 47.8 秒；整合測試（隔離資料庫）15.35 秒（門檻 60 秒） | 同上，各格式獨立執行。 |
+| 10,000 列 CSV | **1.1 秒**（6 副本）／**1.6 秒**（3 副本） | 從上傳到讀取 job 成功終態。[6 副本執行紀錄](docs/evidence/loadtest-final-6replicas-20261122/run-log.txt#L497) · [3 副本執行紀錄](docs/evidence/loadtest-final-20261122/run-log.txt#L479) · [準備腳本](loadtest/prepare_a.py#L96) |
+| 100,000 列 CSV | 完整服務閒置 **11.6–15.6 秒**，同時跑完整測試套件 21.0 秒，整合測試（隔離資料庫）15.14 秒（門檻 60 秒） | 先產檔才開始計時。完整服務經 nginx 上傳，整合測試直接呼叫 API，兩者都計到 worker 完成、讀到終態。 |
+| 100,000 列 JSON | 完整服務閒置 **17.0–22.2 秒**，同時跑完整測試套件 47.8 秒，整合測試（隔離資料庫）15.35 秒（門檻 60 秒） | 同上，各格式獨立執行。 |
 
 2026-11-22 以目前程式在開發筆電量測：完整服務的閒置與資源競爭兩種情境，以及隔離資料庫的整合測試，量測紀錄見 [10 萬列匯入實測](docs/evidence/import-100k.md)。兩種量測都確認 job 回報及 PostgreSQL 實際座位數都為 100,000。見 [test_import_100k_under_60s](backend/tests/imports/test_import_perf.py)（`backend/tests/imports/test_import_perf.py:17–36`）。可在已備妥 PostgreSQL 整合測試環境執行 `uv run pytest -s backend/tests/imports/test_import_perf.py`，或透過 `make test` 跑 Compose 測試。檔案上限及列數預設見 `backend/src/ticketing/core/settings.py:89–90`。
 
@@ -150,9 +156,9 @@ Client 預建獨立 session，分 8 個程序取得快照後訂閱，連線在�
 
 ## 6. 一致性檢查
 
-Scenario A 排空 90 秒後，對該活動執行 `loadtest/consistency.sql`。輸出為空，代表 0 列違規。預設 hold TTL 是 600 秒，當時仍可有有效鎖位。SQL 核對活動與庫存、座位唯一占用、訂單明細與金額、買家配額、鎖位期限、付款及退款帳本、滯留工作、冪等重放紀錄、outbox 序號與封存。[執行紀錄][run] · [一致性 SQL 輸出][a-sql] · [SQL](loadtest/consistency.sql) · [Hold TTL](compose.yaml#L22)
+兩輪 Scenario A 各排空 90 秒後，對該活動執行 `loadtest/consistency.sql`。輸出為空，代表 0 列違規。預設 hold TTL 是 600 秒，當時仍可有有效鎖位。SQL 核對活動與庫存、座位唯一占用、訂單明細與金額、買家配額、鎖位期限、付款及退款帳本、滯留工作、冪等重放紀錄、outbox 序號與封存。[6 副本執行紀錄][run6] · [3 副本執行紀錄][run3] · [6 副本 SQL][a-sql6] · [3 副本 SQL][a-sql3] · [SQL](loadtest/consistency.sql) · [Hold TTL](compose.yaml#L22)
 
-Scenario B 將每條連線的游標、版面版本、座位索引、狀態與版本和同一份 PostgreSQL 快照比對，另查待推送事件與封存差異。[SSE client][b-sse] · [稽核實作](loadtest/sse_client.py)
+Scenario B 將每條連線的游標、版面版本、座位索引、狀態與版本和同一份 PostgreSQL 快照比對，另查待推送事件與封存差異。[6 副本 SSE][b-sse6] · [3 副本 SSE][b-sse3] · [稽核實作](loadtest/sse_client.py)
 
 A 排空後可重跑 SQL。將 `EVENT_ID` 設為 `a/event.json` 的活動 ID，`SEATS` 設為該輪預期庫存。
 
@@ -164,19 +170,19 @@ docker compose exec -T postgres psql -XAt -U ticketing -d ticketing \
 
 ## 7. 瓶頸分析
 
-- **A。** k6 p50 為 1.05 秒，與 DB pool 預設 1 秒的取用預算相近。受保護請求驗證 session 時也需取用 DB 連線，逾時會回 `503 server-busy`。本輪觀察到連線池壓力，秒級 HTTP 與業務資料可定位拒絕及交易進度，尚無本輪 CPU 取樣可確認 API 或 PostgreSQL 的 CPU 飽和程度。[k6 終端摘要][run] · [秒級 HTTP][a-metrics] · [秒級業務][a-business] · [Session 讀取](backend/src/ticketing/api/security.py#L104) · [DB pool](backend/src/ticketing/core/db.py#L39)
-- **服務日誌。** Runner 記錄 63 行 warning／error。依[服務日誌原始輸出](docs/evidence/loadtest-final-20261122/logs/)分類，包含 28 行 `telemetry.watchdog_failed`、26 行 `telemetry.registry_failed`、8 行 `auth.refresh_failed` 及 1 行 `telemetry.collector_job_failed`。前兩類在尖峰以 `ProblemError` 回報，telemetry 的 DB 工作也受同一 pool 取用上限約束。留存的執行紀錄只列總數。[執行紀錄][run] · [Watchdog](backend/src/ticketing/telemetry/alerts.py#L235) · [Registry](backend/src/ticketing/telemetry/api_setup.py#L58)
-- **B。** Client 偵測進度停滯後會主動重連。Delta p99 為 7.75 秒，最後全部收斂；待推送事件與封存差異皆為 0。[SSE client][b-sse] · [重連邏輯](loadtest/sse_client.py#L232)
+- **A。** 副本由 3 增至 6 後，nginx 503 由 88.1% 降至 35.4%，10,000 席全數占用。後續瓶頸量測聚焦付款路徑與 PostgreSQL。598 筆 nginx 499 都在付款路徑，付款模擬器以單一程序執行。兩輪 k6 p50 為 1.06／1.05 秒，接近 DB pool 取用上限 1 秒。受保護請求驗證 session 時也要取用連線。兩輪都缺少逐元件的 CPU 與等待時間取樣。[6 副本 nginx][a-nginx6] · [3 副本 nginx][a-nginx3] · [6 副本庫存][a-state6] · [6 副本 k6][a-k66] · [3 副本 k6][a-k63] · [付款模擬器](paymock/src/paymock/main.py#L334-L346) · [Session 讀取](backend/src/ticketing/api/security.py#L104) · [DB pool 設定](backend/src/ticketing/core/settings.py#L34)
+- **服務日誌。** 6 副本有 67 行（66 行 warning、1 行 error）。API 有 31 行 `telemetry.watchdog_failed`、20 行 `telemetry.registry_failed`、1 行 `auth.refresh_failed`，collector 有 4 行 `telemetry.collector_job_failed`，relay 有 1 行 `service.tick_failed`，worker 有 2 行 `payment.reconcile_phase_failed`（`TimeoutError`）與 8 行 `payment.attempt_retry`。3 副本有 63 行 warning。API 依上述順序為 28／26／8 行，collector 1 行。[6 副本執行紀錄][run6] · [6 副本 API][log-api6] · [Collector][log-collector6] · [Relay][log-relay6] · [Worker][log-worker6] · [3 副本執行紀錄][run3] · [3 副本 API][log-api3] · [Collector][log-collector3]
+- **B。** Client 偵測進度停滯後會主動重連。6 副本的快照 p50 與 delta p50 都較短，delta p99 為 9.45 秒，基準為 7.75 秒。兩輪最終全部收斂，待推送事件與封存差異皆為 0。[6 副本 SSE][b-sse6] · [3 副本 SSE][b-sse3] · [重連邏輯](loadtest/sse_client.py#L232)
 - **匯入與 Excel。** 匯入計時涵蓋 worker 作業及終態回報。Excel 的 `memory.current` 峰值接近上限，包含可回收的 page cache。[匯入實測](docs/evidence/import-100k.md) · [Excel 實測](docs/evidence/cp4-excel-500k.md)
 
 ## 8. 重現指令與產物
 
-使用可拋棄的 Compose 堆疊，於 repo root 執行。Runner 會檢查既有服務；若服務未就緒則以 Compose 建置並啟動。以下正式指令依本輪參數指定副本數與規模，`a`、`b` 亦可獨立執行。[Runner](loadtest/run.sh) · [環境][env]
+使用可拋棄的 Compose 堆疊，於 repo root 執行。Runner 會檢查既有服務，若服務未就緒則以 Compose 建置並啟動。以下指令使用 Runner 的預設情境規模，依序列出建議配置與基準，`a`、`b` 亦可獨立執行。[Runner 預設值](loadtest/run.sh#L29-L31) · [6 副本環境][env6] · [3 副本環境][env3]
 
 ```bash
 loadtest/run.sh smoke
-REBUILD=1 API_REPLICAS=3 VUS=3000 DURATION=60s SEATS=10000 \
-  CONNECTIONS=2000 B_DURATION=80 B_RATE=100 SSE_RAMP=10 loadtest/run.sh all
+API_REPLICAS=6 loadtest/run.sh all
+API_REPLICAS=3 loadtest/run.sh all
 ```
 
 `SSE_PROCESSES` 可覆寫 client 程序數，`K6_CPUS` 可限制 A 的產壓容器 CPU。資源配額、連接埠、輸出路徑與其他設定見[壓測工具包](loadtest/README.md)。
@@ -189,21 +195,21 @@ REBUILD=1 API_REPLICAS=3 VUS=3000 DURATION=60s SEATS=10000 \
 | `a/consistency.txt`、`a/final-state.txt` | 排空後 SQL 異常列與訂單／座位統計。 |
 | `b/seed.txt`、`b/writer.txt`、`b/sse-client.txt` | 活動、寫入、連線與最終稽核。 |
 
-產物寫入 `loadtest/out/<timestamp>/`；進入打包步驟時會移除 `sessions.json`。Runner 會彙整門檻與稽核失敗，在終端與 `run.log` 列出失敗項目並以非零狀態結束。本輪留存輸出見[最終 run 證據](docs/evidence/loadtest-final-20261122/)。
+產物寫入 `loadtest/out/<timestamp>/`，進入打包步驟時會移除 `sessions.json`。Runner 會彙整門檻與稽核失敗，在終端與 `run.log` 列出失敗項目並以非零狀態結束。留存輸出見 [6 副本最終 run](docs/evidence/loadtest-final-6replicas-20261122/) · [3 副本基準](docs/evidence/loadtest-final-20261122/)。
 
 ## 附錄：改進歷程
 
 | 輪次 | 發現 | 修正 | 驗證 |
 | --- | --- | --- | --- |
-| 第 1 輪 | nginx 在過載時把 3 個 API 副本暫時移出 upstream，出現 104,136 筆 502（commit `f089de4`） | `max_fails=0`，對齊 upstream keepalive | 第 2 輪 502 為 0。[第 1 輪 k6][r1-k6] · [第 2 輪 nginx][r2-nginx] |
+| 第 1 輪 | nginx 在過載時把 3 個 API 副本暫時移出 upstream，歷史摘要記錄 104,136 筆 502 | `max_fails=0`，對齊 upstream keepalive（修正 commit `f089de4`） | 第 2 輪 502 為 0。第 1 輪的 502 數取自 Git 紀錄 `4d48a2c:LOADTEST.md:43`。[第 1 輪 k6][r1-k6] · [第 2 輪 nginx][r2-nginx] |
 | 第 1 輪 | 付款輪詢落後，排空後一致性 SQL 有 205 列 | 提高對帳預算與並行度 | 第 2 輪 SQL 回傳 0 列。[第 1 輪 SQL](docs/evidence/loadtest-run1-20261121/a/consistency.txt) · [第 2 輪 SQL](docs/evidence/loadtest-run2-20261121/a/consistency.txt) |
-| 第 1 輪 | SSE 大量重連，只有 1,326／2,000 個 client 收斂 | 放寬 session 撤銷檢查預算，client 分 8 程序；寫入目標由 300 調至 100 changes/s | 第 2 輪 2,000／2,000 收斂。[第 1 輪 SSE](docs/evidence/loadtest-run1-20261121/b/sse-client.txt) · [第 2 輪 SSE][r2-sse] · [寫入設定](docs/evidence/loadtest-run1-20261121/environment.txt) |
-| 第 2 輪 | 3 個副本時約 84% 的請求回 503 | 增至 6 個 API 副本 | 503 降至約 40%，10,000 席全占用，SQL 仍為 0 列。[第 2 輪 k6][r2-k6] · [6 副本 k6][r3-k6] · [庫存][r3-state] · [SQL][r3-sql] |
-| 第 2 輪至最終 run | 以相同測試路徑追蹤過載和 SSE 表現 | 後續修正包含新增逐請求的 `request.completed` 日誌 | 503 比例約 84% → 88%，499 為 6 → 63；B delta p99 為 16.6 → 7.75 秒，快照 p50 為 0.98 → 3.42 秒。逐請求日誌可能影響負載，本次未單獨量測其影響。[第 2 輪 k6][r2-k6] · [第 2 輪 nginx][r2-nginx] · [最終 nginx][a-nginx] · [第 2 輪 SSE][r2-sse] · [最終 SSE][b-sse] · [日誌實作](backend/src/ticketing/api/middleware.py#L91) |
+| 第 1 輪 | SSE 大量重連，只有 1,326／2,000 個 client 收斂 | 放寬 session 撤銷檢查預算，client 分 8 程序，寫入目標由 300 調至 100 changes/s | 第 2 輪 2,000／2,000 收斂。[第 1 輪 SSE](docs/evidence/loadtest-run1-20261121/b/sse-client.txt) · [第 2 輪 SSE][r2-sse] · [寫入設定](docs/evidence/loadtest-run1-20261121/environment.txt) |
+| 第 2 輪 | 3 個副本時約 84% 的請求回 503 | 以當時的 commit 增至 6 個 API 副本 | 503 降至約 40%，10,000 席全占用，SQL 仍為 0 列。[第 2 輪 k6][r2-k6] · [早期 6 副本 k6][r3-k6] · [庫存][r3-state] · [SQL][r3-sql] |
+| 第 2 輪至 3 副本最終基準 | 以相同測試路徑追蹤過載和 SSE 表現 | 後續修正包含新增逐請求的 `request.completed` 日誌 | 503 比例約 84% → 88%，499 為 6 → 63，B delta p99 為 16.6 → 7.75 秒，快照 p50 為 0.98 → 3.42 秒。逐請求日誌可能影響負載，本次未單獨量測其影響。[第 2 輪 k6][r2-k6] · [第 2 輪 nginx][r2-nginx] · [最終基準 nginx][a-nginx3] · [第 2 輪 SSE][r2-sse] · [最終基準 SSE][b-sse3] · [日誌實作](backend/src/ticketing/api/middleware.py#L91) |
 
-**6 副本擴充。** 同一台桌機以第 2 輪 commit `5be8721` 重跑 A，付款完成訂單由 263 增至 1,127。單一時點 CPU 截圖可用來追蹤壓力是否轉向 PostgreSQL；付款路徑也仍有 499，兩者都待獨立量測。[第 2 輪庫存](docs/evidence/loadtest-run2-20261121/a/final-state.txt) · [6 副本環境](docs/evidence/loadtest-run3-6replicas-20261121/environment.txt) · [庫存][r3-state] · [nginx](docs/evidence/loadtest-run3-6replicas-20261121/a/nginx-summary.txt) · [CPU 擷圖](docs/evidence/loadtest-run3-6replicas-20261121/docker-stats-during-a.png) · [監控畫面](docs/evidence/loadtest-run3-6replicas-20261121/monitoring-during-a.png)
+**歷史量測：早期 6 副本。** 同一台桌機以第 2 輪 commit `5be8721` 重跑 A，付款完成訂單由 263 增至 1,127。單一時點 CPU 截圖可用來追蹤壓力是否轉向 PostgreSQL，付款路徑也仍有 499，兩者都待獨立量測。[第 2 輪庫存](docs/evidence/loadtest-run2-20261121/a/final-state.txt) · [6 副本環境](docs/evidence/loadtest-run3-6replicas-20261121/environment.txt) · [庫存][r3-state] · [nginx](docs/evidence/loadtest-run3-6replicas-20261121/a/nginx-summary.txt) · [CPU 擷圖](docs/evidence/loadtest-run3-6replicas-20261121/docker-stats-during-a.png) · [監控畫面](docs/evidence/loadtest-run3-6replicas-20261121/monitoring-during-a.png)
 
-原始輸出見[第 1 輪](docs/evidence/loadtest-run1-20261121/) · [第 2 輪](docs/evidence/loadtest-run2-20261121/) · [6 副本](docs/evidence/loadtest-run3-6replicas-20261121/)。
+原始輸出見[第 1 輪](docs/evidence/loadtest-run1-20261121/) · [第 2 輪](docs/evidence/loadtest-run2-20261121/) · [早期 6 副本](docs/evidence/loadtest-run3-6replicas-20261121/)。
 
 ### 對照圖
 
@@ -215,20 +221,36 @@ REBUILD=1 API_REPLICAS=3 VUS=3000 DURATION=60s SEATS=10000 \
 
 ![Scenario A 秒級指標](docs/evidence/charts/a-per-second.png)
 
-只取 nginx 每秒超過 100 個請求的秒數，並從各輪第一個符合條件的秒數起算。[最終秒級 HTTP][a-metrics] · [6 副本秒級 HTTP](docs/evidence/loadtest-run3-6replicas-20261121/a/metrics_1s.csv)
+兩次最終 run 只取 nginx 每秒超過 100 個請求的秒數，從各輪第一個符合條件的秒數起算。每秒 p95 為直方圖估計值。[6 副本秒級 HTTP][a-metrics6] · [3 副本秒級 HTTP][a-metrics3] · [估計方式](backend/src/ticketing/telemetry/metrics.py#L23-L25)
 
 ![Scenario B SSE 收斂與延遲](docs/evidence/charts/b-sse.png)
 
-[env]: docs/evidence/loadtest-final-20261122/environment.txt
-[run]: docs/evidence/loadtest-final-20261122/run-log.txt
-[a-k6]: docs/evidence/loadtest-final-20261122/a/k6-summary.json
-[a-nginx]: docs/evidence/loadtest-final-20261122/a/nginx-summary.txt
-[a-sql]: docs/evidence/loadtest-final-20261122/a/consistency.txt
-[a-state]: docs/evidence/loadtest-final-20261122/a/final-state.txt
-[a-metrics]: docs/evidence/loadtest-final-20261122/a/metrics_1s.csv
-[a-business]: docs/evidence/loadtest-final-20261122/a/business_1s.csv
-[b-sse]: docs/evidence/loadtest-final-20261122/b/sse-client.txt
-[b-writer]: docs/evidence/loadtest-final-20261122/b/writer.txt
+[env6]: docs/evidence/loadtest-final-6replicas-20261122/environment.txt
+[env3]: docs/evidence/loadtest-final-20261122/environment.txt
+[run6]: docs/evidence/loadtest-final-6replicas-20261122/run-log.txt
+[run3]: docs/evidence/loadtest-final-20261122/run-log.txt
+[a-k66]: docs/evidence/loadtest-final-6replicas-20261122/a/k6-summary.json
+[a-k63]: docs/evidence/loadtest-final-20261122/a/k6-summary.json
+[a-nginx6]: docs/evidence/loadtest-final-6replicas-20261122/a/nginx-summary.txt#L1-L20
+[a-nginx3]: docs/evidence/loadtest-final-20261122/a/nginx-summary.txt#L1-L20
+[a-sql6]: docs/evidence/loadtest-final-6replicas-20261122/a/consistency.txt
+[a-sql3]: docs/evidence/loadtest-final-20261122/a/consistency.txt
+[a-state6]: docs/evidence/loadtest-final-6replicas-20261122/a/final-state.txt#L3-L12
+[a-state3]: docs/evidence/loadtest-final-20261122/a/final-state.txt#L3-L12
+[a-metrics6]: docs/evidence/loadtest-final-6replicas-20261122/a/metrics_1s.csv
+[a-metrics3]: docs/evidence/loadtest-final-20261122/a/metrics_1s.csv
+[a-business6]: docs/evidence/loadtest-final-6replicas-20261122/a/business_1s.csv
+[a-business3]: docs/evidence/loadtest-final-20261122/a/business_1s.csv
+[b-sse6]: docs/evidence/loadtest-final-6replicas-20261122/b/sse-client.txt#L3
+[b-sse3]: docs/evidence/loadtest-final-20261122/b/sse-client.txt#L3
+[b-writer6]: docs/evidence/loadtest-final-6replicas-20261122/b/writer.txt#L1
+[b-writer3]: docs/evidence/loadtest-final-20261122/b/writer.txt#L1
+[log-api6]: docs/evidence/loadtest-final-6replicas-20261122/logs/api-problems.txt
+[log-api3]: docs/evidence/loadtest-final-20261122/logs/api-problems.txt
+[log-collector6]: docs/evidence/loadtest-final-6replicas-20261122/logs/collector-problems.txt
+[log-collector3]: docs/evidence/loadtest-final-20261122/logs/collector-problems.txt
+[log-relay6]: docs/evidence/loadtest-final-6replicas-20261122/logs/relay-problems.txt
+[log-worker6]: docs/evidence/loadtest-final-6replicas-20261122/logs/worker-problems.txt
 [r1-k6]: docs/evidence/loadtest-run1-20261121/a/k6-summary.json
 [r2-k6]: docs/evidence/loadtest-run2-20261121/a/k6-summary.json
 [r2-nginx]: docs/evidence/loadtest-run2-20261121/a/nginx-summary.txt

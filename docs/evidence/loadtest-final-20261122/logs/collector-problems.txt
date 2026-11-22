@@ -1,0 +1,1 @@
+collector-1  | {"job":"_intervals","error_type":"LockNotAvailableError","event":"telemetry.collector_job_failed","level":"warning","ts":"2026-11-22T03:12:57.668141Z","service":"collector","boot_uuid":"a4721823755b4f60997d035cb6ce12ae","local_seq":2}

@@ -1,0 +1,4 @@
+collector-1  | {"job":"_intervals","error_type":"LockNotAvailableError","event":"telemetry.collector_job_failed","level":"warning","ts":"2026-11-22T03:27:17.086855Z","service":"collector","boot_uuid":"522fbd55e73f4820b4fb1a4be3ba1f00","local_seq":2}
+collector-1  | {"job":"_intervals","error_type":"LockNotAvailableError","event":"telemetry.collector_job_failed","level":"warning","ts":"2026-11-22T03:27:18.709141Z","service":"collector","boot_uuid":"522fbd55e73f4820b4fb1a4be3ba1f00","local_seq":3}
+collector-1  | {"job":"_logs","error_type":"ProblemError","event":"telemetry.collector_job_failed","level":"warning","ts":"2026-11-22T03:27:24.109480Z","service":"collector","boot_uuid":"522fbd55e73f4820b4fb1a4be3ba1f00","local_seq":4}
+collector-1  | {"job":"_intervals","error_type":"ProblemError","event":"telemetry.collector_job_failed","level":"warning","ts":"2026-11-22T03:27:24.116395Z","service":"collector","boot_uuid":"522fbd55e73f4820b4fb1a4be3ba1f00","local_seq":5}
