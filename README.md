@@ -139,6 +139,8 @@ uv run python scripts/gen_seats.py 100000 /tmp/seats_100k.json --zone A
 
 `make test` 一行指令在 Docker 內執行單元、整合、併發、前端單元與預設的瀏覽器測試。2026-11-22 的 `make test` 紀錄為後端 pytest 244 項通過、1 項略過，前端 Vitest 58 項通過，預設 Playwright 9 項通過。經 nginx 的端到端流程與 nginx 版 Playwright 需先啟動整套服務，另行執行（CI 會在 smoke 後執行端到端流程）。逐條驗收條件與對應測試見 [驗收條件](docs/ACCEPTANCE.md)。
 
+> **執行環境**：`make test` 使用獨立的 Compose 專案 `ticketing-test`（自己的 PostgreSQL 與 Redis），不會動到 `docker compose up` 啟動的服務與資料；結束時（成功或失敗）自動執行 `down -v` 清除測試容器。若上次執行被中斷，先執行 `docker compose -p ticketing-test -f compose.test.yaml down -v --remove-orphans` 清掉殘留再跑。核心數較少的機器上，可先 `docker compose down`（不加 `-v`，資料保留）停掉主服務，避免瀏覽器測試因 CPU 競爭而逾時。請勿同時執行兩個 `make test`，兩者共用同一個測試專案名稱。
+
 
 正確性標準、最終 run 結果與擴充紀錄見 [壓測結論與結果總表](LOADTEST.md#一結論先看這裡)。
 
